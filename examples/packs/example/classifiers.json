@@ -1,0 +1,9 @@
+{
+  "non_song": [
+    "^setbreak$",
+    "^tuning$",
+    { "pattern": "soundcheck",
+      "why": "The band getting levels, not a performance. Free-floating so it also catches 'Soundcheck Jam' and 'quick soundcheck'.",
+      "must_not_match": ["Sound Asleep"] }
+  ]
+}

@@ -9,10 +9,14 @@ is checked for a rendered caret, because a pack error that can't point at the pr
 thing this whole subsystem exists to avoid.
 """
 
+from pathlib import Path
+
 import pytest
 
 from setlistkit.catalog.pack import Pack, load_pack
 from setlistkit.diagnostics import DiagnosticError, render
+
+EXAMPLE_PACK = Path(__file__).resolve().parents[2] / "examples" / "packs" / "example"
 
 
 def _pack(tmp_path, **files):
@@ -166,6 +170,22 @@ def test_anchored_bare_string_needs_no_justification(tmp_path):
 
 
 # --- regex compilation --------------------------------------------------------------------
+
+def test_shipped_example_pack_loads_and_behaves(tmp_path):
+    """the example pack we ship as a template must itself load clean and demonstrate the hooks."""
+    pack = load_pack(EXAMPLE_PACK)
+    assert pack.name == "example"
+    # alias resolves a normalized-away key ("The Long One" -> "long one")
+    assert pack.normalizer.canonicalize("Long One")[0] == "The Long One"
+    # anchored bare rule and the free-floating object rule both classify
+    assert pack.normalizer.is_non_song("Setbreak") is True
+    assert pack.normalizer.is_non_song("Soundcheck Jam") is True
+    # the object rule's must_not_match holds: "soundcheck" leaves "Sound Asleep" alone
+    assert pack.normalizer.is_non_song("Sound Asleep") is False
+    # a real song is a real song, and the protected title survives
+    assert pack.normalizer.is_non_song("Aurora") is False
+    assert pack.normalizer.is_non_song("Jamboree") is False
+
 
 def test_bad_regex_points_inside_the_pattern(tmp_path):
     with pytest.raises(DiagnosticError) as excinfo:

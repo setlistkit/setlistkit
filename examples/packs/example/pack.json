@@ -1,0 +1,6 @@
+{
+  "name": "example",
+  "version": "1.0.0",
+  "description": "A tiny example pack. Copy this directory, point [catalog] pack at it, and edit.",
+  "sources": ["hand-authored"]
+}
