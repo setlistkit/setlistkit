@@ -20,11 +20,19 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio",
 ]
-# Core runtime carries no third-party dependencies: config is stdlib tomllib, state is
-# stdlib sqlite3, and ingest uses the standard library. Presentational deps live under the
-# report extra so a headless install stays headless. Add to this list only when a core
-# layer genuinely needs it, with the reason recorded.
-dependencies = []
+# Core runtime is near-dependency-free: config is stdlib tomllib, state is stdlib sqlite3,
+# and ingest uses the standard library. Presentational deps live under the report extra so a
+# headless install stays headless. Add to this list only when a core layer really needs it,
+# with the reason recorded.
+#   jsonschema: structural validation of band packs. The pack's shape (required fields that
+#   scale with risk, the "bare string OR {pattern, why, must_not_match}" union for non-song
+#   rules, additionalProperties:false to catch typos) is exactly what a JSON Schema states
+#   cleanly and a hand-rolled validator gets subtly wrong. jsonschema reports a JSON Pointer
+#   with no source position, so catalog/jsonpos.py maps that pointer to a line:col for the
+#   caret; the domain rules a schema cannot express stay hand-rolled on top.
+dependencies = [
+    "jsonschema>=4.0",
+]
 
 [project.optional-dependencies]
 # Reporting: the report subpackage always ships in the wheel, but its presentational

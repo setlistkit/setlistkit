@@ -8,5 +8,6 @@ graph and normalizer that stands on its own. It therefore imports nothing from `
 """
 
 from .normalizer import Normalizer
+from .pack import Pack, load_pack
 
-__all__ = ["Normalizer"]
+__all__ = ["Normalizer", "Pack", "load_pack"]
