@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Build the same pyenv/ venv the Makefile and local development use, so CI runs the
+      # exact same commands a developer runs.
+      - name: Bootstrap venv
+        run: |
+          python -m venv pyenv
+          make dev
+
+      - name: Lint, test, security
+        run: make check

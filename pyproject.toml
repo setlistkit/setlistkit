@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "setlistkit"
+dynamic = ["version"]
+description = "A generic, open-source setlist prediction toolkit: multi-source ingest, a data-driven catalog, and a prediction model."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+authors = [
+    { name = "Tim Case", email = "tim@lnx.cx" }
+]
+keywords = ["setlist", "prediction", "music", "catalog", "moe"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+# Core runtime carries no third-party dependencies: config is stdlib tomllib, state is
+# stdlib sqlite3, and ingest uses the standard library. Presentational deps live under the
+# report extra so a headless install stays headless. Add to this list only when a core
+# layer genuinely needs it, with the reason recorded.
+dependencies = []
+
+[project.optional-dependencies]
+# Reporting: the report subpackage always ships in the wheel, but its presentational
+# dependencies are optional, so core stays dependency-free.
+report = [
+    "jinja2>=3.1",
+]
+# Everything needed to CHECK the toolkit; none of it is needed to run it.
+#   ./pyenv/bin/pip install -e '.[dev]'
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pylint",
+    "pycodestyle",
+    "bandit",
+    "pip-audit",
+]
+
+[project.scripts]
+slkit = "setlistkit.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/timlnx/setlistkit"
+Repository = "https://github.com/timlnx/setlistkit"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = '(?P<version>.+)'
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/setlistkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["setlistkit"]
+branch = true
+
+[tool.pylint.main]
+py-version = "3.11"
+# Only tracked source is linted; the virtualenv is not.
+ignore-paths = ["^pyenv/.*$"]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.design]
+# Diagnostic is a flat data record (severity, summary, path, line, col, length, caption,
+# detail, source). Nine fields is the shape of the data, not a design smell, so lift the
+# default cap rather than contort the record into nested objects at every call site.
+max-attributes = 10
+
+[tool.pylint.messages_control]
+# Starts empty on purpose. Entries get added back one at a time, each with the reason it
+# cannot reasonably be fixed in code. Fix-first is the rule.
+disable = []

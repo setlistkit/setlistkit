@@ -1,0 +1,35 @@
+# setlistkit configuration — copy to slkit.toml and edit.
+#
+# This file never holds a credential and is safe to commit in a deployment repo. The
+# setlist.fm API key lives in its own file, referenced by path below. Config resolution
+# order (first match wins): --config flag, SLKIT_CONFIG env var, ./slkit.toml,
+# $XDG_CONFIG_HOME/setlistkit/config.toml.
+
+# Where all mutable state lives — deliberately outside the repository. Raw source snapshots
+# go under <data_root>/raw/; everything derived goes into <data_root>/setlistkit.sqlite.
+# A relative path is resolved against this config file's directory.
+data_root = "~/setlistkit-data"
+
+# Identifies THIS deployment to every upstream API, and gives them a contact. The program
+# refuses to make any network call while this is still the placeholder: identify yourself,
+# or do not run. Do not impersonate a browser, and do not claim to be setlistkit itself —
+# the identity belongs to whoever runs this deployment.
+user_agent = "CHANGE-ME (setlistkit; you@example.com)"
+
+[catalog]
+# The band pack: identity, vocabulary, aliases, and classifier rules — data, not code.
+pack = "packs/moe"
+
+[sources.archive_org]
+collection = "moe"
+
+[sources.setlistfm]
+mbid = "..."
+# A path to a file containing only the key. It is perm-checked before use: world-readable
+# is a hard failure. Never inline the key here, and never put it in an env var.
+api_key_file = "~/.config/setlistkit/setlistfm.api_key"
+
+[report]
+# Only used when setlistkit[report] is installed.
+out_dir = "../site"
+templates = "../templates"
