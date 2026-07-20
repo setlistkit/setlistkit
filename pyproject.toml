@@ -79,6 +79,10 @@ max-line-length = 120
 # detail, source). Nine fields is the shape of the data, not a design smell, so lift the
 # default cap rather than contort the record into nested objects at every call site.
 max-attributes = 10
+# RawCache.put takes the payload plus the HTTP metadata worth caching (url, content_type,
+# etag, last_modified, fetched_at). Explicit keyword args read better here than a wrapper
+# object every caller has to build.
+max-args = 8
 
 [tool.pylint.messages_control]
 # Starts empty on purpose. Entries get added back one at a time, each with the reason it

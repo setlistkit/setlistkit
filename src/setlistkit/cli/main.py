@@ -17,6 +17,7 @@ import sys
 from .. import __version__
 from ..config import load_config, require_network_identity
 from ..diagnostics import DiagnosticError, render
+from ..store import Store
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
@@ -41,6 +42,13 @@ def _build_parser() -> argparse.ArgumentParser:
     config_sub.add_parser("show", help="print the resolved configuration")
     config_sub.add_parser("check", help="validate the config, including network identity")
 
+    store_cmd = sub.add_parser("store", help="create and inspect the state store")
+    store_sub = store_cmd.add_subparsers(dest="store_action")
+    store_sub.add_parser("init", help="create data_root and apply schema migrations")
+    store_sub.add_parser("status", help="show schema version and table counts")
+
+    sub.add_parser("dump", help="print a plain-text view of derived state")
+
     return parser
 
 
@@ -59,6 +67,52 @@ def _cmd_config_check(config) -> int:
     return EXIT_OK
 
 
+def _cmd_store_init(config) -> int:
+    with Store(config.data_root) as store:
+        applied = store.init()
+        if applied:
+            print(f"applied migrations: {', '.join(str(v) for v in applied)}")
+        else:
+            print("already current, nothing to apply")
+        print(f"schema version {store.schema_version()} at {store.db_path}")
+    return EXIT_OK
+
+
+def _cmd_store_status(config) -> int:
+    store = Store(config.data_root)
+    print(f"db          : {store.db_path}")
+    print(f"raw cache   : {store.raw.root}")
+    # Don't open (and thereby create) the DB just to report it doesn't exist yet.
+    if not store.db_path.is_file():
+        print("schema      : not initialized — run `slkit store init`")
+        return EXIT_OK
+    with store:
+        print(f"schema      : version {store.schema_version()}")
+        for table, count in store.table_counts().items():
+            print(f"  {table}: {count} rows")
+    return EXIT_OK
+
+
+def _cmd_dump(config) -> int:
+    with Store(config.data_root) as store:
+        print(store.dump(), end="")
+    return EXIT_OK
+
+
+def _run(args) -> int:
+    """Dispatch a parsed command. Assumes a command is present."""
+    config = load_config(args.config)
+    if args.command == "config":
+        if args.config_action == "check":
+            return _cmd_config_check(config)
+        return _cmd_config_show(config)          # `slkit config` defaults to show
+    if args.command == "store":
+        if args.store_action == "status":
+            return _cmd_store_status(config)
+        return _cmd_store_init(config)           # `slkit store` defaults to init
+    return _cmd_dump(config)                      # the only command left is dump
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit code; never raises past this boundary."""
     parser = _build_parser()
@@ -69,18 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
 
     try:
-        if args.command == "config":
-            config = load_config(args.config)
-            if args.config_action == "check":
-                return _cmd_config_check(config)
-            # default action for `slkit config` is to show
-            return _cmd_config_show(config)
+        return _run(args)
     except DiagnosticError as exc:
         print(render(exc.diagnostic), file=sys.stderr)
         return EXIT_DIAGNOSTIC
-
-    parser.print_help()
-    return EXIT_OK
 
 
 if __name__ == "__main__":  # pragma: no cover
