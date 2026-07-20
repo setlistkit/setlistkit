@@ -92,9 +92,9 @@ GUEST_NOTE = re.compile(r"^\(?\s*=?\s*w(?:ith|/)\b", re.I)
 # annotation the description parser promoted to a song. Left alone it is also a collision
 # hazard, because a two-letter "song" sits inside half the vocabulary.
 #
-# The parentheses are load-bearing. An earlier version matched any 1-3 letter all-caps entry and
-# promptly deleted ATL, TLH and NYC -- all real moe. songs. Junk with n=1 is survivable; a real
-# song silently vanishing from the vocabulary is not.
+# The parentheses are doing the real work here. An earlier version matched any 1-3 letter all-caps
+# entry and promptly deleted ATL, TLH and NYC -- all real moe. songs. Junk with n=1 is survivable;
+# a real song silently vanishing from the vocabulary is not.
 BARE_NOTE = re.compile(r"^\([^A-Za-z]*[A-Za-z]{1,3}[^A-Za-z]*\)$")
 
 
