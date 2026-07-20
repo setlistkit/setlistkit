@@ -1,0 +1,62 @@
+# setlistkit keeps its history clean of AI-tooling state. The ONLY AI-adjacent file that
+# belongs in git is the root CLAUDE.md. Everything an assistant or its harness writes is
+# session state, not source, and stays out of the tree.
+#
+# --- AI planning/design artifacts (generated, never source) ---
+# Assistant-authored specs, architecture docs, and plans. Pages of these get
+# generated per session; they are working notes, not the public project.
+docs/specs/
+docs/plans/
+docs/design/
+
+# --- AI / assistant harness state (never source) ---
+.claude/
+.omc/
+.remember/
+.superpowers/
+.plans/
+AGENTS.md
+GEMINI.md
+.aider*
+.cursor/
+.mcp.json
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.egg-info/
+.eggs/
+# Local virtualenvs. Rebuildable from pyproject; never in-repo.
+.venv/
+venv/
+pyenv/
+env/
+
+# --- Test / coverage artifacts (make test) ---
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+
+# --- State lives OUTSIDE the repo (data_root, see the design spec) ---
+# A local dev data_root should never be committed even if a user points it inside the tree.
+/data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# --- Secrets: the setlist.fm API key file is referenced by path from config, never committed ---
+*.api_key
+.secrets/
+
+# --- OS / editor junk ---
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
