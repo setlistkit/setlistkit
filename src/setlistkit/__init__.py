@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """setlistkit: a generic, open-source setlist prediction toolkit.
 
 The package is layered, and the layering is enforced by a test rather than by convention:

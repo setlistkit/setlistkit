@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """The dependency rule, enforced by a test rather than by convention.
 
 Goal 4 (the catalog is useful standalone) lives or dies on the first rule below: someone

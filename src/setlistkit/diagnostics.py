@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """One Diagnostic type, one renderer, used everywhere.
 
 The design spec makes diagnostics a first-class requirement, not a polish item: every

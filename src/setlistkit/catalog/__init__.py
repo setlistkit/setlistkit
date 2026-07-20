@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Catalog: songs, vocabulary, segues, families, and durations.
 
 This layer is useful standalone to someone who never touches prediction: a jam-band song

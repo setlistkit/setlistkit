@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Report: optional themeable dashboards and feeds, installed via ``setlistkit[report]``.
 
 May import ``catalog``, ``model``, and ``picks``; nothing imports ``report``. The subpackage

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """``slkit`` command dispatch.
 
 The one job of this module is to be the single place that catches a

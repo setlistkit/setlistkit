@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """State store: the SQLite schema, migrations, and the raw file cache.
 
 Raw source snapshots stay as files under ``<data_root>/raw/`` (cacheable, editor-openable

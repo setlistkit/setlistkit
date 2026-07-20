@@ -44,9 +44,9 @@ slkit config check   # validate it, including network identity
 
 ## License
 
-**AGPL-3.0-or-later** (the full `LICENSE` text lands with the first release). This project
-is made possible by the people who transcribe setlists and tape shows, and a network
--reaching copyleft keeps it available to them: nobody gets to take a hosted fork private.
+[AGPL-3.0-or-later](./LICENSE), © Tim Case. This project is made possible by the people who
+transcribe setlists and tape shows, and a network-reaching copyleft keeps it available to
+them: nobody gets to take a hosted fork private.
 
 A setlist — the songs played, their order, segues, and encore — is a human-entered fact
 about a public performance, and setlistkit stores those. It deliberately does **not** depend

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Tests for the slkit CLI: the one place diagnostics become exit codes."""
 
 import pytest

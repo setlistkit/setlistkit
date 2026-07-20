@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """The config contract: locate a TOML file, parse it, and resolve ``data_root``.
 
 Resolution order for the file itself, first match wins:
