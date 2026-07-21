@@ -102,7 +102,16 @@ class CachedItems:
     absent: tuple[str, ...] = ()           # listed identifiers with no cached metadata
     pages: int = 0                         # listing pages read; 0 means nothing is cached
     expected: int | None = None            # numFound, when the cached listing gave one
+    # Cached listing docs carrying no identifier. Counted for the same reason PullResult counts
+    # them, and here for a second one: without it they surface only as items != expected, which
+    # reads as "the pull did not finish" when the pull finished perfectly well.
+    unidentified: int = 0
     truncated: bool = False
+
+    @property
+    def listed(self) -> int:
+        """How many identified items the cached listing named, readable or not."""
+        return len(self.items) + len(self.absent)
 
 
 @dataclass(frozen=True)
@@ -350,7 +359,8 @@ class ArchiveOrgClient:
                 continue
             items.append(_item_record(doc, payload))
         return CachedItems(items=items, absent=tuple(absent), pages=listing.pages,
-                           expected=listing.expected, truncated=listing.truncated)
+                           expected=listing.expected, unidentified=listing.unidentified,
+                           truncated=listing.truncated)
 
     def _cached_json(self, key: str):
         """The cached payload for ``key``, JSON-decoded, or ``None`` when it is not cached.

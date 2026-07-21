@@ -43,6 +43,40 @@ data you own.
 
   A fragment here is never anchored — it is folded into an alternation and bounded by non-word
   edges — so unlike a classifier there is no bare-string form. Write the object, say the why.
+- **`overrides.json`** — whole nights someone confirmed by ear, for when every parser was wrong
+  at once. Optional, and not in this example because a made-up one would teach the wrong habit:
+  an entry here goes in only after you have listened.
+
+  ```json
+  {
+    "overrides": {
+      "2025-06-14": {
+        "reason": "Confirmed by ear against the soundboard. The taper merged tracks 4 and 5 into
+                   one file, so the second song had no token to parse and vanished; the setlist
+                   service carried the PRINTED list, which includes a song the weather cut.",
+        "sets": [["Aurora", "The Long One >", "Wormhole"]],
+        "encore": ["Jamboree"]
+      }
+    }
+  }
+  ```
+
+  Three things worth knowing before you write one:
+
+  - It is a **whole show**, not a patch. "Insert after the fourth song" cannot be read on its
+    own — what it produces depends on which record currently wins, and that changes the day a
+    new tape lands.
+  - It **always wins**, and it never has to argue: an eight-song override beats a
+    fourteen-token parse, because it was written by someone who listened.
+  - Because it always wins, nothing will ever tell you it went stale. So `slkit ingest` prints
+    an **override review** whenever a source turns up carrying a real song your override lacks.
+    That is the one signal there is; read it.
+
+  Song names run through the same normalizer as every other source, so aliases resolve and a
+  trailing `>` sets the segue. They do **not** go through the parser's shape gates — an override
+  is a person saying what was played, which includes the case where the song is new and nothing
+  has ever named it. `reason` is mandatory, and there is no way around it: to refuse a night
+  outright, use `drop_dates`, not an empty override.
 
 ## Check it
 

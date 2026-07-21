@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from pathlib import Path
 
 from .. import __version__
 from ..catalog.lint import lint
@@ -25,6 +23,8 @@ from ..sources.archive_org import ArchiveOrgClient
 from ..sources.client import SourceError
 from ..store import Store
 from ..store.raw_cache import RawCache
+from .common import min_year, required_setting, resolve_pack_dir
+from .ingest import ingest
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
@@ -76,6 +76,23 @@ def _build_parser() -> argparse.ArgumentParser:
     pull_cmd.add_argument(
         "--min-year", type=int, metavar="YEAR",
         help="ignore shows played before YEAR (overrides min_year in config)",
+    )
+
+    ingest_cmd = sub.add_parser(
+        "ingest", help="parse the cached raw data and publish the merged corpus")
+    ingest_cmd.add_argument("source", choices=_SOURCES, nargs="?", default=_SOURCES[0],
+                            help="which cached source to parse (default: %(default)s)")
+    ingest_cmd.add_argument("--pack", metavar="PATH",
+                            help="pack directory to parse with (overrides [catalog] pack)")
+    ingest_cmd.add_argument("--min-year", type=int, metavar="YEAR",
+                            help="the min_year the cache was pulled under, if not the configured "
+                                 "one (a listing is cached per collection and min_year)")
+    ingest_cmd.add_argument("--dry-run", action="store_true",
+                            help="parse, merge and report, but write nothing to the database")
+    ingest_cmd.add_argument(
+        "--force", action="store_true",
+        help="publish even when the merge produced far fewer shows than are stored (see the "
+             "no-shrink guard)",
     )
 
     pack_cmd = sub.add_parser("pack", help="work with band packs")
@@ -154,44 +171,6 @@ def _cmd_dump(config, _args) -> int:
     return EXIT_OK
 
 
-def _required_setting(config, section: tuple[str, ...], key: str, what: str) -> str:
-    """A non-empty string setting, or a diagnostic naming the table it was missing from."""
-    value = str(config.section(*section).get(key) or "").strip()
-    if not value:
-        table = ".".join(section)
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary=f"[{table}] {key} is not set",
-            path=str(config.source_path),
-            detail=f"{what}\n\nAdd it to your config:\n\n    [{table}]\n    {key} = \"...\"",
-        ))
-    return value
-
-
-def _min_year(config, source: str, flag: int | None) -> int | None:
-    """The play-year floor: the ``--min-year`` flag, else ``min_year`` in the source's table.
-
-    A floor keeps a late-uploaded decades-old recording from drifting into the vocabulary. It
-    is optional, and absent means no floor at all rather than a default year -- guessing one
-    would silently discard shows nobody asked us to discard.
-    """
-    if flag is not None:
-        return flag
-    configured = config.section("sources", source).get("min_year")
-    if configured is None:
-        return None
-    # A quoted year in TOML is the easy typo, and int("2020") would paper over it here while
-    # the same value went into a cache key as a string somewhere else. One shape, checked once.
-    if not isinstance(configured, int) or isinstance(configured, bool):
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary=f"[sources.{source}] min_year must be a number, got {configured!r}",
-            path=str(config.source_path),
-            detail=f"Write it unquoted:\n\n    [sources.{source}]\n    min_year = 2020",
-        ))
-    return configured
-
-
 def _cmd_pull(config, args) -> int:
     """Fetch a source into the raw cache. Writes nothing to the database.
 
@@ -204,17 +183,17 @@ def _cmd_pull(config, args) -> int:
     quietly read the archive.org table and pull archive.org.
     """
     require_network_identity(config)
-    collection = _required_setting(
+    collection = required_setting(
         config, ("sources", args.source), "collection",
         f"A pull needs to know which {args.source} collection holds this band's tapes.")
-    min_year = _min_year(config, args.source, args.min_year)
+    floor = min_year(config, args.source, args.min_year)
 
     def progress(done: int, total: int) -> None:
         if done % _PROGRESS_EVERY == 0 or done == total:
             print(f"  {done}/{total}")
 
     client = ArchiveOrgClient(config, RawCache(config.data_root))
-    result = client.pull(collection, min_year=min_year,
+    result = client.pull(collection, min_year=floor,
                          force_rescan=args.force_rescan, progress=progress)
     print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
           f"{result.cached} already cached")
@@ -234,32 +213,9 @@ def _cmd_pull(config, args) -> int:
     return EXIT_OK
 
 
-def _resolve_pack_dir(pack_arg, config_arg) -> Path:
-    """The pack directory to work on: the ``--pack`` flag, else ``[catalog] pack`` in config.
-
-    A relative configured path is anchored at the config file's directory, so a committed
-    downstream config points at the same pack no matter where ``slkit`` runs from.
-    """
-    if pack_arg:
-        return Path(pack_arg).expanduser().resolve()
-    config = load_config(config_arg)
-    configured = config.section("catalog").get("pack")
-    if not configured:
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary="no pack to lint",
-            path=str(config.source_path),
-            detail="Pass --pack PATH, or set [catalog] pack in your config to a pack directory.",
-        ))
-    path = Path(os.path.expanduser(str(configured)))
-    if not path.is_absolute():
-        path = config.source_path.parent / path
-    return path.resolve()
-
-
 def _cmd_pack_lint(args) -> int:
     """Lint the resolved pack, reporting findings as human text or JSON with an honest code."""
-    pack_dir = _resolve_pack_dir(getattr(args, "pack", None), args.config)
+    pack_dir = resolve_pack_dir(getattr(args, "pack", None), args.config)
     try:
         diagnostics = lint(pack_dir)
     except DiagnosticError as exc:
@@ -283,6 +239,7 @@ _COMMANDS = {
     "config": _cmd_config,
     "store": _cmd_store,
     "pull": _cmd_pull,
+    "ingest": ingest,
     "dump": _cmd_dump,
 }
 

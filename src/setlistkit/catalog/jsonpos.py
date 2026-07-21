@@ -19,10 +19,14 @@ brace, not a rule under the whole block.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
 
-from ..diagnostics import Diagnostic
+import jsonschema
+
+from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 
 _WS = " \t\n\r"
 _NUMBER_CHARS = "0123456789+-.eE"          # a number's body; _NUMBER_RE does the real validating
@@ -44,21 +48,21 @@ class Pos(NamedTuple):
     length: int
 
 
-def diagnostic_at(severity: str, summary: str, *, file: Path, source: str | None,
+def diagnostic_at(severity: str, summary: str, *, file: Path | None, source: str | None,
                   pos: Pos | None, detail: str | None = None,
                   caption: str = "") -> Diagnostic:
     """A :class:`~setlistkit.diagnostics.Diagnostic` anchored at ``pos`` in ``file``.
 
-    One place rather than one per caller, and the reason is the ``pos is None`` branch: a
-    finding whose position could not be recovered still has to name its file and render
-    without a caret. That fallback is easy to get subtly wrong, and a copy that gets it wrong
-    reports a pack error pointing at nothing -- which is the failure this whole module exists
-    to prevent.
+    One place rather than one per caller, and the reason is the degrading: a finding whose
+    position could not be recovered still has to name its file and render without a caret, and
+    one whose file is not known either still has to render at all. Those fallbacks are easy to
+    get subtly wrong, and a copy that gets one wrong reports an error pointing at nothing --
+    which is the failure this whole module exists to prevent.
     """
     return Diagnostic(
         severity=severity,
         summary=summary,
-        path=str(file),
+        path=str(file) if file is not None else None,
         line=pos.line if pos else None,
         col=pos.col if pos else None,
         length=pos.length if pos else 1,
@@ -66,6 +70,91 @@ def diagnostic_at(severity: str, summary: str, *, file: Path, source: str | None
         detail=detail,
         source=source,
     )
+
+
+def position_for(path: tuple, positions: Mapping[tuple, Pos]) -> Pos | None:
+    """The recorded position for ``path``, walking up to the nearest recorded ancestor.
+
+    A ``required``/``additionalProperties`` error names a key the scanner never recorded a
+    value for, so we fall back to the containing object's brace rather than losing the caret.
+    """
+    while path and path not in positions:
+        path = path[:-1]
+    return positions.get(path) or positions.get(())
+
+
+@dataclass(frozen=True)
+class JSONSource:
+    """A JSON file, its text, and where every value in it came from.
+
+    The three travel together because they are only useful together: a position with no text
+    renders no code frame, and text with no positions renders no caret. Passing them as three
+    parameters is how one of them ends up missing at one call site and the error there quietly
+    degrades to a filename, which reads like the position simply was not recoverable.
+
+    Every field is optional, and an empty ``JSONSource()`` is a legitimate value meaning "this
+    data did not come from a file I can point at" -- a caller holding a parsed dict rather than
+    a path. That is the same code path, degraded, rather than a second one.
+    """
+
+    file: Path | None = None
+    text: str | None = None
+    positions: Mapping[tuple, Pos] = field(default_factory=dict)
+
+    def fail(self, summary: str, *, detail: str | None = None, caption: str = "",
+             at: tuple = ()) -> NoReturn:
+        """Raise a :class:`DiagnosticError` anchored at the value ``at`` in this file."""
+        raise DiagnosticError(self.diagnostic(summary, detail=detail, caption=caption, at=at))
+
+    def diagnostic(self, summary: str, *, severity: str = ERROR, detail: str | None = None,
+                   caption: str = "", at: tuple = ()) -> Diagnostic:
+        """A diagnostic anchored at the value ``at`` in this file."""
+        return diagnostic_at(severity, summary, file=self.file, source=self.text,
+                             pos=position_for(at, self.positions), detail=detail,
+                             caption=caption)
+
+
+def load_json(file: Path, schema: dict) -> tuple[Any, JSONSource]:
+    """Read, position-scan, and schema-validate one JSON file against ``schema``.
+
+    Lives here rather than in the pack loader because it is not about packs: it is the three
+    steps that turn a file on disk into data plus somewhere to point a caret, and every JSON
+    file setlistkit reads wants all three. The alternative was a second copy of the
+    schema-error-to-caret mapping for the override file, which is the shape this catalog was
+    rebuilt to remove.
+
+    Raises :class:`DiagnosticError` for unreadable JSON or a schema violation, in both cases
+    with a caret on the offending value.
+    """
+    text = file.read_text(encoding="utf-8")
+    try:
+        data, positions = parse(text)
+    except JSONPosError as err:
+        # Strip the "(line N, column M)" tail: it is already in the location line and the caret.
+        JSONSource(file, text, {(): Pos(err.line, err.col, 1)}).fail(
+            str(err).split(" (line", maxsplit=1)[0], detail="the file is not valid JSON.")
+    source = JSONSource(file, text, positions)
+    error = _best_error(list(jsonschema.Draft202012Validator(schema).iter_errors(data)))
+    if error is not None:
+        source.fail(error.message, detail="the file does not match the schema.",
+                    at=tuple(error.absolute_path))
+    return data, source
+
+
+def _best_error(errors: list):
+    """The one schema error worth showing, preferring the one that names the actual mistake.
+
+    ``best_match`` is a general heuristic and it gets the commonest case here backwards. A typo'd
+    key raises TWO errors at the same path -- ``additionalProperties`` ("'resaon' was unexpected")
+    and ``required`` ("'reason' is a required property") -- and ``best_match`` picks the second.
+    That one describes the CONSEQUENCE: it tells an author their file is missing a reason while
+    the reason sits three characters away, spelled wrong, which reads like the tool cannot see it.
+    The unexpected-key error names the mistake itself, so it wins whenever there is one.
+    """
+    if not errors:
+        return None
+    unexpected = [err for err in errors if err.validator == "additionalProperties"]
+    return unexpected[0] if unexpected else jsonschema.exceptions.best_match(errors)
 
 
 class JSONPosError(ValueError):

@@ -192,6 +192,36 @@ VENUE_WORDS = re.compile(
 BAND_IN_TITLE = re.compile(r"^\s*(.{0,60}?)\s+Live\s+at\b", re.I)
 
 
+# Why an item did not become a show. Three rules can refuse one, and from downstream all three
+# look identical: the date is simply not in the corpus. A night that was deliberately dropped and
+# a night nobody taped are very different facts about a band, so the parser says which.
+NOT_THIS_BAND = "not_this_band"      # the title names a different act; a side project's tape
+NO_DATE = "no_date"                  # no date we can believe, so nothing can be joined to it
+DROPPED_DATE = "dropped_date"        # the pack refuses this night, and says why in corpus.json
+
+
+@dataclass(frozen=True)
+class Skipped:
+    """One item the parser refused, and which rule refused it.
+
+    ``date`` is filled in only for :data:`DROPPED_DATE`, because that is the only case where a
+    date was successfully read before the item was turned away -- and it is the one the caller
+    needs, to look the reason up in the pack that asked for the drop.
+    """
+
+    identifier: str
+    reason: str
+    date: str = ""
+
+
+@dataclass(frozen=True)
+class ParseResult:
+    """Every show a source yielded, and every item it refused."""
+
+    shows: list[dict] = field(default_factory=list)
+    skipped: tuple[Skipped, ...] = ()
+
+
 @dataclass(frozen=True)
 class ArchivePolicy:
     """The band-specific inputs the mechanism refuses to invent for itself.
@@ -636,13 +666,16 @@ def count_songs(sets: Iterable[Iterable[Mapping[str, Any]]],
 
 
 def _parse_item(item: Mapping[str, Any], rules: _Rules,
-                policy: ArchivePolicy) -> dict | None:
-    """One item into a show record, or None when it is not a show we can use."""
+                policy: ArchivePolicy) -> dict | Skipped:
+    """One item into a show record, or a :class:`Skipped` saying which rule refused it."""
+    identifier = str(item.get("identifier") or "")
     if policy.band_filter is not None and not policy.band_filter(item):
-        return None
+        return Skipped(identifier, NOT_THIS_BAND)
     date = _show_date(item, policy.date_overrides)
-    if not date or date in policy.drop_dates:
-        return None
+    if not date:
+        return Skipped(identifier, NO_DATE)
+    if date in policy.drop_dates:
+        return Skipped(identifier, DROPPED_DATE, date)
     sets, encore = _parse_description(item.get("description", ""), rules,
                                       places=_place_terms(item, rules.normalizer))
     source = "description"
@@ -657,27 +690,47 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules,
 
 def parse_archive_item(item: Mapping[str, Any], *, normalizer: Normalizer,
                        policy: ArchivePolicy | None = None) -> dict | None:
-    """Parse a single archive item. None when the policy rules it out or it carries no date."""
+    """Parse a single archive item. None when the policy rules it out or it carries no date.
+
+    Use :func:`parse_archive_items` when you need to know WHY an item was refused; this one
+    collapses all three reasons back to a bare ``None``.
+    """
     policy = policy or ArchivePolicy()
-    return _parse_item(item, _rules_for(normalizer, policy), policy)
+    record = _parse_item(item, _rules_for(normalizer, policy), policy)
+    return None if isinstance(record, Skipped) else record
 
 
 def parse_archive_items(items: Iterable[Mapping[str, Any]], *, normalizer: Normalizer,
-                        policy: ArchivePolicy | None = None) -> list[dict]:
-    """Parse every item and keep the richest parse per date.
+                        policy: ArchivePolicy | None = None) -> ParseResult:
+    """Parse every item this source has, and report every item it refused.
 
-    A show can be taped four times over. Sorted by identifier first so the tie-break between two
-    parses of equal length is reproducible -- otherwise the answer depends on the order the
-    source happened to return the items, and so does everything computed from it downstream.
+    A show can be taped four times over, and ALL FOUR come back. This used to keep only the
+    richest parse per date, which was a second answer to a question
+    :func:`~setlistkit.catalog.merge.pick_show` already owns -- and the two answered it
+    differently, breaking a tie toward the lowest identifier here and the highest there. Worse,
+    the tapes discarded here never reached the merge, so ``override_disagreements`` could not see
+    them: a losing tape carrying a song an override lacks is exactly the signal that review
+    exists to raise, and it was being thrown away one layer too early.
+
+    Sorted by (date, identifier) so two runs over the same items agree whatever order the source
+    returned them in, and so does everything computed downstream.
+
+    ``skipped`` is why this returns a result object rather than a list. An item that is refused
+    leaves no trace anywhere downstream: the date is simply not in the corpus, and a night that
+    is missing looks exactly like a night nobody taped. Three different rules can do that -- the
+    band filter, an unreadable date, and a date the pack refuses -- and being able to say which
+    one, for which identifier, is the difference between "this show is absent" and "this show is
+    absent BECAUSE".
     """
     policy = policy or ArchivePolicy()
     rules = _rules_for(normalizer, policy)
-    best: dict[str, dict] = {}
-    for item in sorted(items, key=lambda it: str(it.get("identifier") or "")):
+    shows: list[dict] = []
+    skipped: list[Skipped] = []
+    for item in items:
         record = _parse_item(item, rules, policy)
-        if record is None:
-            continue
-        current = best.get(record["date"])
-        if current is None or record["n_songs"] > current["n_songs"]:
-            best[record["date"]] = record
-    return sorted(best.values(), key=lambda record: record["date"])
+        if isinstance(record, Skipped):
+            skipped.append(record)
+        else:
+            shows.append(record)
+    return ParseResult(shows=sorted(shows, key=lambda rec: (rec["date"], rec["identifier"])),
+                       skipped=tuple(sorted(skipped, key=lambda s: s.identifier)))

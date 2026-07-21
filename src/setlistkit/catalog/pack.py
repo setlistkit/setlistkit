@@ -27,6 +27,14 @@ its tapers write -- runs the same three layers with one extra domain rule of its
 entry states why it is there. A drop date with no reason is indistinguishable from a typo, and
 the reason is the only thing a later reader can check the call against.
 
+``overrides.json`` is the same species of fact one step further: not "this item is mis-dated"
+but "here is the whole night, and here is how I know". It lives in the pack for that reason, next
+to ``corpus.json``'s ``date_overrides``, so a correction someone did the listening for travels
+with the band data rather than staying in one deployment's config. Its schema is the loosest here
+on purpose -- see ``_OVERRIDES_SCHEMA`` -- because
+:func:`~setlistkit.catalog.merge.overrides_from_mapping` already checks the contents and says it
+better, naming the set and the entry that is wrong.
+
 Corpus-aware checks (a rule that matches nothing, an alias target missing from the
 vocabulary) live in ``slkit pack lint``, not here: they need the cached corpus, and a pack
 is structurally valid without them.
@@ -40,11 +48,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
 
-import jsonschema
-
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
-from .jsonpos import JSONPosError, Pos, diagnostic_at, parse
-from .merge import COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy
+from .jsonpos import JSONSource, Pos, diagnostic_at, load_json
+from .merge import COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy, overrides_from_mapping
 from .normalizer import Normalizer, normalize
 from .parse import ArchivePolicy, fragment_pattern, title_band_filter
 
@@ -54,6 +60,7 @@ ALIASES_FILE = "aliases.json"
 CLASSIFIERS_FILE = "classifiers.json"
 PROTECTED_FILE = "protected.json"
 CORPUS_FILE = "corpus.json"
+OVERRIDES_FILE = "overrides.json"
 
 # A date the rest of the toolkit will accept. Enforced in the schema because a typo'd date is
 # the silent kind of wrong: "2025-13-01" never equals any show's date, so the drop or the
@@ -179,6 +186,31 @@ _CORPUS_SCHEMA = {
     },
 }
 
+# Manual setlist overrides. Deliberately the loosest schema in this module: it checks the shape
+# of the container and nothing about what is in it, because `overrides_from_mapping` already
+# checks all of that and says it better -- which set, which entry, and what was wrong with it.
+#
+# The one thing worth having a schema for is `additionalProperties: false`. A typo'd key ("resaon")
+# is otherwise invisible: the entry parses, the real key is absent, and the error says the override
+# needs a reason while a reason sits right there in the file spelled wrong.
+_OVERRIDES_SCHEMA = {
+    "type": "object",
+    "required": ["overrides"],
+    "additionalProperties": False,
+    "properties": {
+        "overrides": {
+            "type": "object",
+            "propertyNames": {"pattern": _DATE},
+            "additionalProperties": {
+                "type": "object",
+                "required": ["reason"],
+                "additionalProperties": False,
+                "properties": {"reason": {}, "sets": {}, "encore": {}},
+            },
+        },
+    },
+}
+
 
 def _matches(pattern: re.Pattern[str], text: str) -> bool:
     """``pattern.search(text)``, as a bool.
@@ -242,6 +274,11 @@ class CorpusPolicy:
 
     ``junk`` and ``gear`` are compiled the way the filters apply them, so what lint holds
     against a vocabulary is what the parser will actually run.
+
+    ``overrides`` comes from a different file and belongs to the same idea: ``date_overrides``
+    says "this item is filed under the wrong night", and ``overrides`` says "here is what was
+    actually played that night, and here is how I know". Both are a person overruling a parser
+    with evidence, so they are read from one place rather than two.
     """
 
     # hash=False, matching ArchivePolicy and MergePolicy: a dict is unhashable and frozen=True
@@ -250,6 +287,9 @@ class CorpusPolicy:
     date_overrides: Mapping[str, Mapping[str, str]] = field(default_factory=dict, hash=False)
     junk: tuple[Rule, ...] = ()
     gear: tuple[Rule, ...] = ()
+    # date -> the whole show someone confirmed by ear, already canonicalized through this pack's
+    # normalizer, so a caller hands them straight to `merge_shows(overrides=...)`.
+    overrides: Mapping[str, Mapping] = field(default_factory=dict, hash=False)
 
 
 @dataclass(frozen=True)
@@ -341,41 +381,19 @@ def _anchored(pattern: str) -> bool:
     return pattern.startswith("^") or pattern.endswith("$")
 
 
-def _position_for(path: tuple, positions: dict[tuple, Pos]) -> Pos | None:
-    """The recorded position for ``path``, walking up to the nearest recorded ancestor.
-
-    A ``required``/``additionalProperties`` error names a key the scanner never recorded a
-    value for, so we fall back to the containing object's brace rather than losing the caret.
-    """
-    while path and path not in positions:
-        path = path[:-1]
-    return positions.get(path) or positions.get(())
-
-
-def _fail(file: Path, summary: str, source: str, pos: Pos | None,
+def _fail(src: JSONSource, summary: str, pos: Pos | None,
           *, detail: str | None = None, caption: str = "") -> NoReturn:
-    """Raise a DiagnosticError anchored at ``pos`` (or path-only when position is unknown)."""
-    raise DiagnosticError(diagnostic_at(ERROR, summary, file=file, source=source, pos=pos,
+    """Raise a DiagnosticError anchored at ``pos`` (or path-only when position is unknown).
+
+    Takes an explicit ``Pos`` rather than a JSON path, unlike :meth:`JSONSource.fail`, because
+    half the failures here are anchored somewhere no path names: a caret INSIDE a pattern
+    string, at the character the regex engine objected to.
+    """
+    raise DiagnosticError(diagnostic_at(ERROR, summary, file=src.file, source=src.text, pos=pos,
                                         detail=detail, caption=caption))
 
 
-def _load_json(file: Path, schema: dict):
-    """Read, position-scan, and schema-validate one pack file. Returns (data, positions, source)."""
-    source = file.read_text(encoding="utf-8")
-    try:
-        data, positions = parse(source)
-    except JSONPosError as err:
-        _fail(file, str(err).split(" (line", maxsplit=1)[0], source, Pos(err.line, err.col, 1),
-              detail="the file is not valid JSON.")
-    validator = jsonschema.Draft202012Validator(schema)
-    error = jsonschema.exceptions.best_match(validator.iter_errors(data))
-    if error is not None:
-        pos = _position_for(tuple(error.absolute_path), positions)
-        _fail(file, error.message, source, pos, detail="the pack does not match the schema.")
-    return data, positions, source
-
-
-def _compile_rules(entries: list, positions: dict[tuple, Pos], file: Path, source: str) -> tuple:
+def _compile_rules(entries: list, src: JSONSource) -> tuple:
     """Turn schema-valid ``non_song`` entries into compiled Rules, enforcing the domain rule.
 
     Two ways a pattern fails to justify itself, one message: a free-floating bare string that
@@ -385,32 +403,32 @@ def _compile_rules(entries: list, positions: dict[tuple, Pos], file: Path, sourc
     for index, entry in enumerate(entries):
         if isinstance(entry, str):
             pattern, why, must_not = entry, None, ()
-            pattern_pos = positions.get(("non_song", index))
+            pattern_pos = src.positions.get(("non_song", index))
             if not _anchored(pattern):
-                _fail(file, "free-floating pattern must justify itself", source, pattern_pos,
+                _fail(src, "free-floating pattern must justify itself", pattern_pos,
                       detail=_justify_detail(pattern), caption="no reason given")
         else:
             pattern = entry["pattern"]
             why = entry["why"]
             must_not = tuple(entry.get("must_not_match", ()))
-            pattern_pos = positions.get(("non_song", index, "pattern"))
+            pattern_pos = src.positions.get(("non_song", index, "pattern"))
             if not why.strip():
-                _fail(file, "free-floating pattern must justify itself", source,
-                      positions.get(("non_song", index, "why")),
+                _fail(src, "free-floating pattern must justify itself",
+                      src.positions.get(("non_song", index, "why")),
                       detail=_justify_detail(pattern), caption="empty")
-        rules.append(_rule(pattern, why, must_not, pattern_pos, file=file, source=source))
+        rules.append(_rule(pattern, why, must_not, pattern_pos, src=src))
     return tuple(rules)
 
 
 def _rule(pattern: str, why: str | None, must_not: tuple[str, ...], pattern_pos: Pos | None,
-          *, file: Path, source: str, wrap: bool = False) -> Rule:
+          *, src: JSONSource, wrap: bool = False) -> Rule:
     """One validated :class:`Rule`. ``wrap`` compiles it the way the corpus filters apply it.
 
     The raw pattern is compiled either way, and first, even when the wrapped form is what gets
     kept: ``re.error.pos`` indexes the pattern the engine was handed, so a caret computed from a
     *wrapped* pattern lands several characters to the right of the character that is wrong.
     """
-    compiled = _compile(pattern, pattern_pos, file, source)
+    compiled = _compile(pattern, pattern_pos, src)
     return Rule(
         pattern=pattern,
         compiled=fragment_pattern(pattern) if wrap else compiled,
@@ -422,8 +440,7 @@ def _rule(pattern: str, why: str | None, must_not: tuple[str, ...], pattern_pos:
     )
 
 
-def _compile_fragments(entries: list, positions: dict[tuple, Pos], file: Path, source: str,
-                       *, key: str) -> tuple[Rule, ...]:
+def _compile_fragments(entries: list, src: JSONSource, *, key: str) -> tuple[Rule, ...]:
     """Turn one corpus pattern list into compiled Rules, each carrying its stated reason.
 
     No bare-string form to allow for: the schema requires an object, because a fragment is
@@ -432,52 +449,62 @@ def _compile_fragments(entries: list, positions: dict[tuple, Pos], file: Path, s
     rules: list[Rule] = []
     for index, entry in enumerate(entries):
         if not entry["why"].strip():
-            _fail(file, f"{key} entry must say what it is", source,
-                  positions.get((key, index, "why")),
+            _fail(src, f"{key} entry must say what it is",
+                  src.positions.get((key, index, "why")),
                   detail=(f'"{entry["pattern"]}" is folded into a filter that DROPS every entry\n'
                           "it matches, without recording that anything was there. Say what it is,\n"
                           "so a later reader can tell junk from a song nobody had written yet."),
                   caption="empty")
         rules.append(_rule(entry["pattern"], entry["why"],
                            tuple(entry.get("must_not_match", ())),
-                           positions.get((key, index, "pattern")),
-                           file=file, source=source, wrap=True))
+                           src.positions.get((key, index, "pattern")),
+                           src=src, wrap=True))
     return tuple(rules)
 
 
-def _load_corpus(pack_dir: Path) -> CorpusPolicy:
-    """Load the optional ``corpus.json``, enforcing that every correction states its evidence."""
+def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
+    """Load ``corpus.json`` and ``overrides.json``, both optional, both stating their evidence.
+
+    Needs the finished normalizer for the overrides half: an override is written in whatever the
+    person listening typed, so it goes through the same aliases and the same segue rules as every
+    other source before it is believed.
+    """
+    overrides = _load_overrides(pack_dir, normalizer)
     file = pack_dir / CORPUS_FILE
     if not file.exists():
-        return CorpusPolicy()
-    data, positions, source = _load_json(file, _CORPUS_SCHEMA)
+        return CorpusPolicy(overrides=overrides)
+    data, src = load_json(file, _CORPUS_SCHEMA)
 
     drops = data.get("drop_dates", {})
     for date, reason in drops.items():
         if not reason.strip():
-            _fail(file, f"drop_dates {date!r} does not say why", source,
-                  positions.get(("drop_dates", date)),
-                  detail="Dropping a date throws away every song played that night, including\n"
-                         "the ordinary ones. Say what makes the show no evidence about the band.",
-                  caption="empty")
+            src.fail(f"drop_dates {date!r} does not say why", at=("drop_dates", date),
+                     detail="Dropping a date throws away every song played that night, including\n"
+                            "the ordinary ones. Say what makes the show no evidence about the band.",
+                     caption="empty")
 
-    overrides = data.get("date_overrides", {})
-    for identifier, entry in overrides.items():
+    # NOT named `overrides`. The two live in one policy and are entirely different things: this
+    # one moves a show to another night, that one says what was played. Sharing a local name here
+    # rebound the setlist overrides to these, and every date correction became a whole "show"
+    # consisting of a date and a paragraph of prose -- which then REPLACED the real record for
+    # that night, because an override always wins. Loud in a test, invisible in a corpus.
+    date_overrides = data.get("date_overrides", {})
+    for identifier, entry in date_overrides.items():
         if not entry["why"].strip():
-            _fail(file, f"date_overrides {identifier!r} does not say why", source,
-                  positions.get(("date_overrides", identifier, "why")),
-                  detail="An override moves a show to a different night on your say-so, and a\n"
-                         "wrong one invents a show that never happened while burying a real one.\n"
-                         "State the evidence: artwork, upload date, the taper's own description.",
-                  caption="empty")
+            src.fail(f"date_overrides {identifier!r} does not say why",
+                     at=("date_overrides", identifier, "why"),
+                     detail="An override moves a show to a different night on your say-so, and a\n"
+                            "wrong one invents a show that never happened while burying a real "
+                            "one.\nState the evidence: artwork, upload date, the taper's own "
+                            "description.",
+                     caption="empty")
 
     return CorpusPolicy(
         drop_dates=dict(drops),
-        date_overrides={ident: dict(entry) for ident, entry in overrides.items()},
-        junk=_compile_fragments(data.get("junk_patterns", []), positions, file, source,
-                                key="junk_patterns"),
-        gear=_compile_fragments(data.get("gear_patterns", []), positions, file, source,
-                                key="gear_patterns"),
+        date_overrides={ident: dict(entry) for ident, entry in date_overrides.items()},
+        junk=_compile_fragments(data.get("junk_patterns", []), src, key="junk_patterns"),
+        gear=_compile_fragments(data.get("gear_patterns", []), src, key="gear_patterns"),
+        overrides=overrides,
     )
 
 
@@ -486,17 +513,16 @@ def _justify_detail(pattern: str) -> str:
             f"Either anchor it (^{pattern}$) or give a reason and a counter-example.")
 
 
-def _compile(pattern: str, pattern_pos: Pos | None, file: Path, source: str) -> re.Pattern:
+def _compile(pattern: str, pattern_pos: Pos | None, src: JSONSource) -> re.Pattern:
     """Compile a pattern, pointing a caret *inside* the string at a bad char on failure."""
     try:
         return re.compile(pattern)
     except re.error as err:
         pos = None
-        if pattern_pos is not None:
+        if pattern_pos is not None and src.text is not None:
             offset = err.pos if err.pos is not None else 0
-            pos = Pos(pattern_pos.line, _decoded_col(source, pattern_pos, offset), 1)
-        _fail(file, f"invalid regex: {err.msg}", source, pos,
-              detail="fix the pattern so it compiles.")
+            pos = Pos(pattern_pos.line, _decoded_col(src.text, pattern_pos, offset), 1)
+        _fail(src, f"invalid regex: {err.msg}", pos, detail="fix the pattern so it compiles.")
 
 
 def _decoded_col(source: str, pattern_pos: Pos, decoded_offset: int) -> int:
@@ -523,27 +549,27 @@ def load_pack(pack_dir) -> Pack:
     """Load and validate the pack in ``pack_dir``, returning a :class:`Pack`.
 
     Requires ``pack.json`` and ``vocabulary.json``; ``aliases.json``, ``classifiers.json``,
-    ``protected.json`` and ``corpus.json`` are optional and default empty, so a minimal pack
-    (a dictionary and nothing else) is legal. Raises :class:`DiagnosticError` on any malformed
-    or invalid file, and a plain diagnostic when a required file is missing.
+    ``protected.json``, ``corpus.json`` and ``overrides.json`` are optional and default empty, so
+    a minimal pack (a dictionary and nothing else) is legal. Raises :class:`DiagnosticError` on
+    any malformed or invalid file, and a plain diagnostic when a required file is missing.
     """
     pack_dir = Path(pack_dir)
-    identity, _, _ = _load_json(_require(pack_dir, PACK_FILE), _PACK_SCHEMA)
-    vocabulary, _, _ = _load_json(_require(pack_dir, VOCABULARY_FILE), _VOCABULARY_SCHEMA)
+    identity, _ = load_json(_require(pack_dir, PACK_FILE), _PACK_SCHEMA)
+    vocabulary, _ = load_json(_require(pack_dir, VOCABULARY_FILE), _VOCABULARY_SCHEMA)
 
     aliases = {}
     if (pack_dir / ALIASES_FILE).exists():
-        aliases, _, _ = _load_json(pack_dir / ALIASES_FILE, _ALIASES_SCHEMA)
+        aliases, _ = load_json(pack_dir / ALIASES_FILE, _ALIASES_SCHEMA)
 
     protected: list = []
     if (pack_dir / PROTECTED_FILE).exists():
-        protected, _, _ = _load_json(pack_dir / PROTECTED_FILE, _PROTECTED_SCHEMA)
+        protected, _ = load_json(pack_dir / PROTECTED_FILE, _PROTECTED_SCHEMA)
 
     rules: tuple = ()
     classifiers_path = pack_dir / CLASSIFIERS_FILE
     if classifiers_path.exists():
-        data, positions, source = _load_json(classifiers_path, _CLASSIFIERS_SCHEMA)
-        rules = _compile_rules(data.get("non_song", []), positions, classifiers_path, source)
+        data, src = load_json(classifiers_path, _CLASSIFIERS_SCHEMA)
+        rules = _compile_rules(data.get("non_song", []), src)
 
     normalizer = _PackNormalizer(
         vocabulary=list(vocabulary),
@@ -562,10 +588,25 @@ def load_pack(pack_dir) -> Pack:
         aliases=dict(aliases),
         protected=tuple(protected),
         rules=rules,
-        corpus=_load_corpus(pack_dir),
+        # Last of the loads, because the overrides half of it needs the finished normalizer.
+        corpus=_load_corpus(pack_dir, normalizer),
         band_name=identity.get("band_name"),
         normalizer=normalizer,
     )
+
+
+def _load_overrides(pack_dir: Path, normalizer: Normalizer) -> dict[str, dict]:
+    """Load the optional ``overrides.json``: whole shows someone confirmed by ear.
+
+    Validated at load like every other pack file, rather than lazily when ingest asks for them.
+    A correction that will not parse is worth knowing about from ``slkit pack lint``, not from a
+    run that has already fetched a collection.
+    """
+    file = pack_dir / OVERRIDES_FILE
+    if not file.exists():
+        return {}
+    data, src = load_json(file, _OVERRIDES_SCHEMA)
+    return overrides_from_mapping(data, normalizer, src=src)
 
 
 def _require(pack_dir: Path, name: str) -> Path:

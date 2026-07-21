@@ -422,23 +422,38 @@ def test_long_or_numeric_unknown_titles_are_dropped():
 
 # --- many items -------------------------------------------------------------------------------
 
-def test_richest_parse_per_date_wins():
+def test_every_tape_of_a_date_comes_back():
+    """Four tapes of one night are four records. Picking between them is the merge's job.
+
+    This layer used to keep only the richest, which was a second answer to a question pick_show
+    already owns -- and the tapes it discarded never reached override_disagreements, which is
+    the one thing that can tell you an override has gone stale.
+    """
     thin = _item(identifier="band2026-01-31.aud",
                  description="Set 1:\n01. Rebubula\n02. Meat\n03. Ophelia\n")
-    records = parse_archive_items([thin, _item()], normalizer=_StubNormalizer())
-    assert len(records) == 1
-    assert records[0]["identifier"] == "band2026-01-31.akg"
-    assert records[0]["n_songs"] == 5
+    records = parse_archive_items([thin, _item()], normalizer=_StubNormalizer()).shows
+    assert [record["identifier"] for record in records] == ["band2026-01-31.akg",
+                                                            "band2026-01-31.aud"]
+    assert [record["n_songs"] for record in records] == [5, 3]
 
 
-def test_tie_break_does_not_depend_on_source_order():
-    """two tapes of the same show, equally complete. The answer has to be reproducible."""
+def test_order_does_not_depend_on_the_order_the_source_returned_items():
     first = _item(identifier="band2026-01-31.aaa")
     second = _item(identifier="band2026-01-31.zzz")
     forward = parse_archive_items([first, second], normalizer=_StubNormalizer())
     backward = parse_archive_items([second, first], normalizer=_StubNormalizer())
-    assert forward == backward
-    assert forward[0]["identifier"] == "band2026-01-31.aaa"
+    assert forward.shows == backward.shows
+    assert forward.skipped == backward.skipped
+
+
+def test_refusals_come_back_in_a_reproducible_order():
+    band = title_band_filter("band.")
+    items = [{"identifier": ident, "date": "2026-01-31",
+              "title": "Other Band Live at The Fillmore on 2026-01-31"}
+             for ident in ("zzz", "aaa", "mmm")]
+    result = parse_archive_items(items, normalizer=_StubNormalizer(),
+                                 policy=ArchivePolicy(band_filter=band))
+    assert [skip.identifier for skip in result.skipped] == ["aaa", "mmm", "zzz"]
 
 
 def test_records_come_back_sorted_by_date():
@@ -446,7 +461,7 @@ def test_records_come_back_sorted_by_date():
     items = [_item(identifier="a", date="2026-03-01"),
              _item(identifier="b", date="2026-01-31"),
              _item(identifier="c", date="2026-02-14")]
-    records = parse_archive_items(items, normalizer=_StubNormalizer())
+    records = parse_archive_items(items, normalizer=_StubNormalizer()).shows
     assert [record["date"] for record in records] == ["2026-01-31", "2026-02-14", "2026-03-01"]
 
 

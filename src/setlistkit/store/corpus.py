@@ -119,3 +119,28 @@ def shows(conn: sqlite3.Connection) -> list[dict]:
 def show_count(conn: sqlite3.Connection) -> int:
     """How many shows are stored. The number the no-shrink guard measures against."""
     return conn.execute("SELECT COUNT(*) FROM shows").fetchone()[0]
+
+
+def song_count(conn: sqlite3.Connection) -> int:
+    """How many actual SONGS are stored, ignoring the tagged non-songs.
+
+    The other number the no-shrink guard measures, and the one that catches the failure counting
+    shows cannot see. ``replace_shows`` replaces the entries whole, so a pack edit that widens a
+    filter can delete a song from every night at once while every date, every source and every
+    show count comes out identical. Songs are what the corpus is FOR; a floor on shows alone
+    guards the index and not the contents.
+
+    Tagged non-songs are excluded for the same reason ``count_songs`` excludes them: tuning and
+    banter are recorded but they are not repertoire, and a run that swapped ten songs for ten
+    tuning notes has not held steady.
+    """
+    return conn.execute("SELECT COUNT(*) FROM show_entries WHERE non_song = 0").fetchone()[0]
+
+
+def show_sources(conn: sqlite3.Connection) -> dict[str, str]:
+    """date -> which source won it. What a run needs to report the dates that changed their mind.
+
+    Its own query rather than a comprehension over :func:`shows`, because that one reads every
+    entry of every setlist to answer a question about neither.
+    """
+    return {row["date"]: row["source"] for row in conn.execute("SELECT date, source FROM shows")}

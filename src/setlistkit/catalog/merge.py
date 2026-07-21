@@ -35,9 +35,8 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import NoReturn
 
-from ..diagnostics import ERROR, Diagnostic, DiagnosticError
+from .jsonpos import JSONSource
 from .normalizer import Normalizer
 from .parse import count_songs
 
@@ -96,6 +95,11 @@ class MergeResult:
     shows: list[dict]
     applied: list[str]                       # dates an override replaced or added
     candidates: dict[str, list[dict]]        # date -> every record that was in the running
+    # Overrides that were NOT applied because the date is in drop_dates. Reported rather than
+    # dropped: an override is the highest-evidence input this system takes, someone sat and
+    # listened to write it, and two files in the same pack disagreeing about one night is a
+    # thing to say out loud rather than resolve in silence.
+    refused: tuple[str, ...] = ()
 
 
 def _entries(record: Mapping) -> list[dict]:
@@ -144,13 +148,45 @@ def pick_show(candidates: Iterable[Mapping], policy: MergePolicy | None = None) 
                                    _n_songs(record), str(record.get("identifier") or "")))
 
 
+# What an override record has to carry to BE a show. Not a re-validation of the override file --
+# `overrides_from_mapping` does that, and says it far better -- but a contract check on the only
+# input to this module that gets to overwrite a real record without arguing for it.
+#
+# It exists because of a bug that shipped this far: a pack holds two unrelated kinds of override,
+# one that moves a show to a different night and one that says what was played, and a single
+# rebound local name fed the first kind in here as the second. The result was a "show" made of a
+# date and a paragraph of prose, which replaced the genuine record for that night and entered the
+# corpus with no setlist, no source and no identifier. Nothing downstream could tell.
+_OVERRIDE_KEYS = ("date", "sets", "encore", "source", "identifier")
+
+
 def apply_overrides(shows: Iterable[Mapping],
                     overrides: Mapping[str, Mapping]) -> tuple[list[dict], list[str]]:
     """Replace (or add) overridden dates in a merged show list. Never looks at a song count.
 
     That it never counts is the point: an override wins because it was written down by someone
-    who listened, not because it argued its way past a threshold.
+    who listened, not because it argued its way past a threshold. Which is exactly why each one
+    is checked for the shape of a show first: this is the one path into the corpus that outranks
+    every parser, so something that is not a setlist must not travel down it quietly.
+
+    Raises :class:`ValueError`, not a diagnostic. A malformed override FILE is a user error and
+    is reported as one by :func:`overrides_from_mapping`; anything malformed by the time it
+    reaches here got past that, which makes it a bug in the caller.
     """
+    for date, record in overrides.items():
+        missing = [key for key in _OVERRIDE_KEYS if key not in record]
+        if missing:
+            raise ValueError(
+                f"override for {date!r} is not a show record: missing {', '.join(missing)}. "
+                f"Overrides come from overrides_from_mapping; corpus.json's date_overrides are a "
+                f"different thing and do not belong here.")
+        # The mapping key is what gets replaced; record["date"] is what gets STORED. Let them
+        # disagree and the override deletes one night and invents another, while `applied`
+        # reports a date that ends up in neither. Same failure as the one above, one field in.
+        if record["date"] != date:
+            raise ValueError(
+                f"override filed under {date!r} says its date is {record['date']!r}. It would "
+                f"delete {date!r} and create {record['date']!r}.")
     by_date = {show["date"]: deepcopy(dict(show)) for show in shows}
     by_date.update({date: deepcopy(dict(record)) for date, record in overrides.items()})
     merged = sorted(by_date.values(),
@@ -181,8 +217,9 @@ def merge_shows(records: Iterable[Mapping], *, overrides: Mapping[str, Mapping] 
     # drop_dates to delete a date is a lie.
     wanted = {date: record for date, record in (overrides or {}).items()
               if date not in policy.drop_dates}
+    refused = tuple(sorted(set(overrides or {}) - set(wanted)))
     merged, applied = apply_overrides(shows, wanted)
-    return MergeResult(shows=merged, applied=applied, candidates=candidates)
+    return MergeResult(shows=merged, applied=applied, candidates=candidates, refused=refused)
 
 
 # ==================================================================================================
@@ -213,35 +250,30 @@ def merge_shows(records: Iterable[Mapping], *, overrides: Mapping[str, Mapping] 
 # ==================================================================================================
 
 
-def _fail(summary: str, detail: str, path: str | None) -> NoReturn:
-    """Raise a fatal diagnostic about the override file."""
-    raise DiagnosticError(Diagnostic(severity=ERROR, summary=summary, path=path, detail=detail))
-
-
 def _canon_entries(raws: object, normalizer: Normalizer, date: str, field_name: str,
-                   path: str | None) -> list[dict]:
+                   *, src: JSONSource, at: tuple) -> list[dict]:
     """One list of raw song strings into canonical entries, or a diagnostic."""
     if not isinstance(raws, list):
-        _fail(f"{date}: {field_name!r} must be a list",
-              f"Got {type(raws).__name__}. Each set is a list of song names, in the order they "
-              f"were played.", path)
+        src.fail(f"{date}: {field_name!r} must be a list", at=at,
+                 detail=f"Got {type(raws).__name__}. Each set is a list of song names, in the "
+                        f"order they were played.")
     entries = []
-    for raw in raws:
+    for index, raw in enumerate(raws):
         if not isinstance(raw, str):
-            _fail(f"{date}: {field_name!r} entries must be strings",
-                  f"Got {raw!r}. A song is written as its name, with a trailing '>' if it segued "
-                  f"into the next one.", path)
+            src.fail(f"{date}: {field_name!r} entries must be strings", at=at + (index,),
+                     detail=f"Got {raw!r}. A song is written as its name, with a trailing '>' if "
+                            f"it segued into the next one.")
         song, segue = normalizer.canonicalize(raw)
         if not song:
-            _fail(f"{date}: {field_name!r} contains an empty song name",
-                  f"{raw!r} normalizes to nothing at all.", path)
+            src.fail(f"{date}: {field_name!r} contains an empty song name", at=at + (index,),
+                     detail=f"{raw!r} normalizes to nothing at all.")
         entries.append({"song": song, "segue": segue,
                         "non_song": normalizer.is_non_song(song)})
     return entries
 
 
 def overrides_from_mapping(data: object, normalizer: Normalizer,
-                           *, path: str | None = None) -> dict[str, dict]:
+                           *, src: JSONSource | None = None) -> dict[str, dict]:
     """``{"overrides": {date: entry}}`` into show records, or raise :class:`DiagnosticError`.
 
     Song names run through the same normalizer as every other source, so aliases resolve and a
@@ -253,37 +285,49 @@ def overrides_from_mapping(data: object, normalizer: Normalizer,
     Raises rather than skipping a bad entry. A loader that swallowed its own error would hand the
     date back to whatever the sources say, silently reverting the correction someone just made,
     which is the one outcome worse than refusing to run.
+
+    ``src`` is where the data came from, and every diagnostic is anchored through it. An empty
+    :class:`JSONSource` is legitimate and means "a caller handed me a dict": the errors are the
+    same errors, rendered without a file or a caret. One code path, degraded, rather than two.
     """
+    src = src or JSONSource()
     if not isinstance(data, Mapping) or not isinstance(data.get("overrides"), Mapping):
-        _fail("expected a top-level {\"overrides\": {date: entry}} object",
-              "The file holds one entry per date, keyed by the date the show happened.", path)
+        src.fail("expected a top-level {\"overrides\": {date: entry}} object",
+                 detail="The file holds one entry per date, keyed by the date the show happened.")
     out: dict[str, dict] = {}
     for date, entry in sorted(data["overrides"].items(), key=lambda item: str(item[0])):
+        at = ("overrides", date)
         if not isinstance(date, str) or not date.strip():
-            _fail(f"{date!r} is not a usable date",
-                  "Every override is keyed by the date the show happened.", path)
+            src.fail(f"{date!r} is not a usable date", at=at,
+                     detail="Every override is keyed by the date the show happened.")
         if not isinstance(entry, Mapping):
-            _fail(f"{date}: entry must be an object", "Expected sets, encore and reason.", path)
+            src.fail(f"{date}: entry must be an object", at=at,
+                     detail="Expected sets, encore and reason.")
         reason = entry.get("reason")
         # isinstance first: str(None) is "None", which is not empty, so stringifying before the
         # test lets null, false, 0 and [] all pass for a reason.
         if not isinstance(reason, str) or not reason.strip():
-            _fail(f"{date}: every override needs a non-empty 'reason'",
-                  "Say how the setlist was confirmed. An override outranks every source we have, "
-                  "so the next person to read it has nothing else to go on. Nothing goes in on a "
-                  "hunch.", path)
+            src.fail(f"{date}: every override needs a non-empty 'reason'", at=at + ("reason",),
+                     caption="no reason given",
+                     detail="Say how the setlist was confirmed. An override outranks every source "
+                            "we have, so the next person to read it has nothing else to go on. "
+                            "Nothing goes in on a hunch.")
         raw_sets = entry.get("sets", [])
         if not isinstance(raw_sets, list):
-            _fail(f"{date}: 'sets' must be a list of lists",
-                  "One list per set, even when there was only one set.", path)
-        sets = [_canon_entries(one, normalizer, date, "sets", path) for one in raw_sets]
-        encore = _canon_entries(entry.get("encore", []), normalizer, date, "encore", path)
+            src.fail(f"{date}: 'sets' must be a list of lists", at=at + ("sets",),
+                     detail="One list per set, even when there was only one set.")
+        sets = [_canon_entries(one, normalizer, date, "sets",
+                               src=src, at=at + ("sets", index))
+                for index, one in enumerate(raw_sets)]
+        encore = _canon_entries(entry.get("encore", []), normalizer, date, "encore",
+                                src=src, at=at + ("encore",))
         if count_songs(sets, encore) == 0:
-            _fail(f"{date}: override has no songs",
-                  "Either it lists nothing, or the pack classes everything it lists as a "
-                  "non-song (tuning, banter, a guest note). Such an override would silently "
-                  "hand the date back to the sources it was written to correct. To refuse a "
-                  "date outright, add it to the merge policy's drop_dates instead.", path)
+            src.fail(f"{date}: override has no songs", at=at,
+                     detail="Either it lists nothing, or the pack classes everything it lists as "
+                            "a non-song (tuning, banter, a guest note). Such an override would "
+                            "silently hand the date back to the sources it was written to "
+                            "correct. To refuse a date outright, add it to the merge policy's "
+                            "drop_dates instead.")
         out[date] = {"date": date, "year": date[:4], "sets": sets, "encore": encore,
                      "n_songs": count_songs(sets, encore), "source": "override",
                      "identifier": f"override-{date}", "reason": reason.strip()}

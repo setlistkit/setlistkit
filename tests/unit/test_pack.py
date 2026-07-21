@@ -265,6 +265,46 @@ def test_corpus_file_loads_every_key(tmp_path):
     assert [rule.pattern for rule in pack.corpus.gear] == [r"zoomf\d"]
 
 
+def test_date_overrides_are_not_setlist_overrides(tmp_path):
+    """Two unrelated kinds of correction share one policy object and must never share a value.
+
+    date_overrides moves a show to a different night; overrides says what was played. Fed in as
+    each other, a date correction becomes a "show" made of a date and a paragraph of prose --
+    and since an override always wins, it REPLACES the genuine record for that night and enters
+    the corpus with no setlist, no source and no identifier. Nothing downstream can tell.
+    """
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB, "corpus.json": CORPUS})
+    assert pack.corpus.date_overrides                # the file does carry one
+    assert pack.corpus.overrides == {}               # and it is NOT a setlist override
+
+
+def test_a_setlist_override_loads_from_its_own_file(tmp_path):
+    override = json.dumps({"overrides": {"2025-06-14": {
+        "reason": "confirmed by ear against the soundboard",
+        "sets": [["Wormwood"]], "encore": []}}})
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB, "overrides.json": override})
+    record = pack.corpus.overrides["2025-06-14"]
+    assert record["source"] == "override"
+    assert [entry["song"] for entry in record["sets"][0]] == ["Wormwood"]
+    assert record["reason"] == "confirmed by ear against the soundboard"
+
+
+def test_a_typod_key_in_an_override_is_caught_rather_than_read_as_a_missing_reason(tmp_path):
+    """additionalProperties: false is the one thing the schema is here for.
+
+    Without it the entry parses, the real key is absent, and the error says the override needs a
+    reason while a reason sits in the file spelled wrong.
+    """
+    override = json.dumps({"overrides": {"2025-06-14": {
+        "resaon": "confirmed by ear", "sets": [["Wormwood"]]}}})
+    with pytest.raises(AssertionError) as caught:
+        _load_or_render(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB,
+                                     "overrides.json": override})
+    assert "'resaon' was unexpected" in str(caught.value)
+
+
 def test_a_corpus_fragment_is_compiled_the_way_the_filter_applies_it(tmp_path):
     """Rule.compiled is the bounded form, not the bare fragment.
 
@@ -395,7 +435,7 @@ def test_the_example_pack_drives_the_parser_end_to_end():
          "description": ("Set 1:\n01. Aurora\n02. ZoomF8 > MacBook\n"
                          "03. Aurora Borealis Band\n04. Setbreak\n05. Wormhole\n")},
     ]
-    records = parse_archive_items(items, normalizer=pack.normalizer, policy=policy)
+    records = parse_archive_items(items, normalizer=pack.normalizer, policy=policy).shows
 
     assert [record["date"] for record in records] == ["2025-06-14"]
     entries = [(entry["song"], entry["non_song"]) for entry in records[0]["sets"][0]]

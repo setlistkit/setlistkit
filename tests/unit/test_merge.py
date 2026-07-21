@@ -12,7 +12,11 @@ date is refused in every source at once, and an override wins without arguing ab
 
 import re
 
+from pathlib import Path
+
 import pytest
+
+from setlistkit.catalog.jsonpos import JSONSource
 
 from setlistkit.catalog import (COMPLETE_FRAC, MergePolicy, Normalizer, apply_overrides,
                                 count_songs, merge_shows, override_disagreements,
@@ -258,12 +262,41 @@ def test_an_override_for_an_untaped_date_grows_the_corpus():
 
 
 def test_apply_overrides_never_reads_a_song_count():
+    """A two-song override beats a fourteen-song tape, because it was written by someone who
+    listened rather than by something that argued its way past a threshold."""
     shows = [_record("2026-01-31", "description", _named(14))]
-    merged, applied = apply_overrides(shows, {"2026-01-31": {"date": "2026-01-31",
-                                                             "source": "override",
-                                                             "identifier": "override-2026-01-31"}})
+    merged, applied = apply_overrides(shows, {"2026-01-31": {
+        "date": "2026-01-31", "source": "override", "identifier": "override-2026-01-31",
+        "sets": [_named(2)], "encore": []}})
     assert merged[0]["source"] == "override"
     assert applied == ["2026-01-31"]
+
+
+def test_a_date_correction_cannot_be_applied_as_a_setlist_override():
+    """The two kinds of override live in one policy object and are entirely different things.
+
+    corpus.json's date_overrides move a show to another night; overrides.json says what was
+    played. Fed in here as the second, a date correction becomes a "show" made of a date and a
+    paragraph of prose -- and since an override always wins, it replaces the genuine record for
+    that night. This shipped once, from a single rebound local name.
+    """
+    shows = [_record("2026-01-31", "description", _named(14))]
+    date_correction = {"date": "2026-01-31", "why": "the description says January 2026"}
+    with pytest.raises(ValueError, match="is not a show record"):
+        apply_overrides(shows, {"2026-01-31": date_correction})
+
+
+def test_an_override_whose_date_disagrees_with_its_key_is_refused():
+    """The key is what gets REPLACED; record["date"] is what gets STORED.
+
+    Let them disagree and one override deletes a real night and invents another, while `applied`
+    reports a date that ends up in neither. Same failure as the one above, one field further in.
+    """
+    shows = [_record("2026-01-31", "description", _named(14))]
+    misfiled = {"2026-01-31": {"date": "2026-02-02", "sets": [_named(3)], "encore": [],
+                               "source": "override", "identifier": "override-x"}}
+    with pytest.raises(ValueError, match="would delete '2026-01-31' and create '2026-02-02'"):
+        apply_overrides(shows, misfiled)
 
 
 def test_override_songs_run_through_the_normalizer():
@@ -367,7 +400,7 @@ def test_an_unusable_date_key_is_refused(date):
 def test_the_diagnostic_names_the_file_it_came_from():
     with pytest.raises(DiagnosticError) as caught:
         overrides_from_mapping(_override_doc(reason=""), _StubNormalizer(),
-                               path="overrides.json")
+                               src=JSONSource(file=Path("overrides.json")))
     assert caught.value.diagnostic.path == "overrides.json"
     assert caught.value.diagnostic.detail
 

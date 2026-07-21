@@ -150,6 +150,14 @@ class Store:
         """How many shows are stored, without reading their setlists."""
         return corpus.show_count(self.conn)
 
+    def song_count(self) -> int:
+        """How many actual songs are stored, ignoring the tagged non-songs."""
+        return corpus.song_count(self.conn)
+
+    def show_sources(self) -> dict[str, str]:
+        """date -> which source won it, without reading their setlists."""
+        return corpus.show_sources(self.conn)
+
     def table_names(self) -> list[str]:
         """Every non-internal table, alphabetized."""
         rows = self.conn.execute(
