@@ -86,7 +86,11 @@ max-line-length = 120
 # Diagnostic is a flat data record (severity, summary, path, line, col, length, caption,
 # detail, source). Nine fields is the shape of the data, not a design smell, so lift the
 # default cap rather than contort the record into nested objects at every call site.
-max-attributes = 10
+# SongFeature is the same kind of thing at twelve: a song, its play count, six rates, a mean
+# slot, its segue partners and the two dates it spans. Grouping the rates into a nested record
+# to satisfy a counter would make every consumer write feature.rates.opener_rate to say the
+# same thing, which is the contortion this cap exists to avoid.
+max-attributes = 12
 # RawCache.put takes the payload plus the HTTP metadata worth caching (url, content_type,
 # etag, last_modified, fetched_at). Explicit keyword args read better here than a wrapper
 # object every caller has to build.

@@ -7,6 +7,7 @@ graph and normalizer that stands on its own. It therefore imports nothing from `
 ``picks``, or ``report`` — a rule enforced by a test. (Populated in a later phase.)
 """
 
+from .features import SongFeature, song_features
 from .lint import lint
 from .merge import (COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy, MergeResult, apply_overrides,
                     merge_shows, override_disagreements, overrides_from_mapping, pick_show)
@@ -16,6 +17,7 @@ from .parse import (ArchivePolicy, count_songs, parse_archive_item, parse_archiv
                     title_band_filter)
 
 __all__ = ["COMPLETE_FRAC", "DEFAULT_RANKS", "ArchivePolicy", "CorpusPolicy", "MergePolicy",
-           "MergeResult", "Normalizer", "Pack", "apply_overrides", "count_songs", "lint",
-           "load_pack", "merge_shows", "override_disagreements", "overrides_from_mapping",
-           "parse_archive_item", "parse_archive_items", "pick_show", "title_band_filter"]
+           "MergeResult", "Normalizer", "Pack", "SongFeature", "apply_overrides", "count_songs",
+           "lint", "load_pack", "merge_shows", "override_disagreements",
+           "overrides_from_mapping", "parse_archive_item", "parse_archive_items", "pick_show",
+           "song_features", "title_band_filter"]
