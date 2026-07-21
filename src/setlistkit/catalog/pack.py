@@ -22,6 +22,11 @@ Three layers do the validating, in order:
    caught at load with a caret pointing *inside* the pattern string at the offending char,
    not at runtime three phases later.
 
+``corpus.json`` -- what this band's tapes are known to get wrong, plus the filter residue only
+its tapers write -- runs the same three layers with one extra domain rule of its own: every
+entry states why it is there. A drop date with no reason is indistinguishable from a typo, and
+the reason is the only thing a later reader can check the call against.
+
 Corpus-aware checks (a rule that matches nothing, an alias target missing from the
 vocabulary) live in ``slkit pack lint``, not here: they need the cached corpus, and a pack
 is structurally valid without them.
@@ -30,6 +35,7 @@ is structurally valid without them.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
@@ -37,14 +43,32 @@ from typing import NoReturn
 import jsonschema
 
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
-from .jsonpos import JSONPosError, Pos, parse
+from .jsonpos import JSONPosError, Pos, diagnostic_at, parse
+from .merge import COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy
 from .normalizer import Normalizer, normalize
+from .parse import ArchivePolicy, fragment_pattern, title_band_filter
 
 PACK_FILE = "pack.json"
 VOCABULARY_FILE = "vocabulary.json"
 ALIASES_FILE = "aliases.json"
 CLASSIFIERS_FILE = "classifiers.json"
 PROTECTED_FILE = "protected.json"
+CORPUS_FILE = "corpus.json"
+
+# A date the rest of the toolkit will accept. Enforced in the schema because a typo'd date is
+# the silent kind of wrong: "2025-13-01" never equals any show's date, so the drop or the
+# correction it was written for simply never happens and nothing says so.
+#
+# The month and day are range-bounded rather than \d{2}, because the whole point is to reject
+# the example in the sentence above and `^\d{4}-\d{2}-\d{2}$` accepts it. And the tail anchor is
+# \Z, not $: jsonschema matches with Python's re, where `$` also matches just before a trailing
+# newline, so "2025-06-14\n" was a schema-valid date. That one does not merely fail to fire --
+# _show_date accepts it too, so an override carrying it puts a date with a newline in it into
+# the corpus, where it joins to nothing for the rest of time.
+#
+# Day 31 is allowed in every month. Catching 2025-02-31 wants a calendar, not a regex, and the
+# failure it would prevent is the loud kind: a date that matches no show gets noticed.
+_DATE = r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\Z"
 
 # --- schemas (the "shape" layer) ----------------------------------------------------------
 # Deliberately loose where a domain check does the work: the non-song object requires a `why`
@@ -60,6 +84,11 @@ _PACK_SCHEMA = {
         "version": {"type": "string", "minLength": 1},
         "description": {"type": "string"},
         "sources": {"type": "array", "items": {"type": "string"}},
+        # Not the same string as `name`, and the difference is load-bearing. `name` identifies
+        # the pack ("moe"); `band_name` is what the band calls itself ("moe."), which is what
+        # a taper types and what archive.org puts in an item title. Optional: a pack that never
+        # meets a rival band's tape does not need it.
+        "band_name": {"type": "string", "minLength": 1},
     },
 }
 
@@ -106,6 +135,61 @@ _PROTECTED_SCHEMA = {
     "uniqueItems": True,
 }
 
+# A corpus filter fragment. No bare-string form, unlike a classifier: these are folded into an
+# alternation and bounded by lookarounds, so EVERY one of them is free-floating by construction
+# and there is no anchored shape that could earn its way out of explaining itself.
+_FRAGMENTS_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "required": ["pattern", "why"],
+        "additionalProperties": False,
+        "properties": {
+            "pattern": {"type": "string", "minLength": 1},
+            "why": {"type": "string"},
+            "must_not_match": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+}
+
+_CORPUS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "drop_dates": {
+            "type": "object",
+            "propertyNames": {"pattern": _DATE},
+            "additionalProperties": {"type": "string"},
+        },
+        "date_overrides": {
+            "type": "object",
+            "propertyNames": {"minLength": 1},
+            "additionalProperties": {
+                "type": "object",
+                "required": ["date", "why"],
+                "additionalProperties": False,
+                "properties": {
+                    "date": {"type": "string", "pattern": _DATE},
+                    "why": {"type": "string"},
+                },
+            },
+        },
+        "junk_patterns": _FRAGMENTS_SCHEMA,
+        "gear_patterns": _FRAGMENTS_SCHEMA,
+    },
+}
+
+
+def _matches(pattern: re.Pattern[str], text: str) -> bool:
+    """``pattern.search(text)``, as a bool.
+
+    A free function and not an inline call, for one dull reason: pylint cannot resolve
+    ``.search`` on a ``re.Pattern`` reached through ``self``, though it resolves the same call
+    on a parameter perfectly well. The alternative is a suppression, and the rule here is fix
+    in code rather than turn the check off.
+    """
+    return pattern.search(text) is not None
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -114,14 +198,58 @@ class Rule:
     ``why`` is ``None`` for a bare-string (anchored) rule and a non-empty string for an
     object rule. ``anchored`` is what decides whether a bare string was allowed to skip its
     justification. ``pos`` locates the pattern in the source for later diagnostics.
+
+    ``wrapped`` says which of two things ``compiled`` is, and it exists because getting that
+    wrong fails SILENTLY in both directions. A classifier rule compiles bare and is matched
+    against ``squash(title)``; a corpus fragment compiles inside the alternation bounds the
+    filters apply and is matched against the title as written. Feed a corpus rule down the
+    classifier path and its ``\\s+`` can never match, because squash has already removed the
+    space -- no error, just a check that silently never fires. Feed a classifier rule down the
+    corpus path and it gets bounded twice. Both produce a clean run and a wrong answer, so the
+    pairing is recorded rather than remembered.
+
+    ``anchored`` is meaningful only when ``wrapped`` is False. A corpus fragment is folded into
+    an alternation regardless, and the schema demands its ``why`` regardless, so nothing about
+    it turns on whether the author happened to write a ``^``.
     """
 
     pattern: str
-    compiled: re.Pattern
+    compiled: re.Pattern[str]
     anchored: bool
     why: str | None = None
     must_not_match: tuple[str, ...] = ()
     pos: Pos | None = None
+    wrapped: bool = False
+
+    def reaches(self, title: str, squash: Callable[[str], str]) -> bool:
+        """Would this rule match ``title``, in the form the runtime actually hands it?
+
+        The two forms are not interchangeable and the rule is the only thing that knows which
+        one it is, so it decides here rather than at each call site. A caller that got to pick
+        would be picking silently: both wrong pairings run clean and simply never fire.
+        """
+        return _matches(self.compiled, title if self.wrapped else squash(title))
+
+
+@dataclass(frozen=True)
+class CorpusPolicy:
+    """What this band's corpus is known to get wrong, and the residue only its tapers write.
+
+    Everything here is a correction or an exclusion, and every entry states why it earned its
+    place. None of it is derivable: an uploader can type any date they like, and a well-formed
+    lie is indistinguishable from the truth to every parser downstream. The reasons are not
+    decoration -- they are the only thing that lets a later reader check the call.
+
+    ``junk`` and ``gear`` are compiled the way the filters apply them, so what lint holds
+    against a vocabulary is what the parser will actually run.
+    """
+
+    # hash=False, matching ArchivePolicy and MergePolicy: a dict is unhashable and frozen=True
+    # synthesises __hash__ from every compared field. Equality still reads them.
+    drop_dates: Mapping[str, str] = field(default_factory=dict, hash=False)
+    date_overrides: Mapping[str, Mapping[str, str]] = field(default_factory=dict, hash=False)
+    junk: tuple[Rule, ...] = ()
+    gear: tuple[Rule, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,7 +263,48 @@ class Pack:
     aliases: dict[str, str]
     protected: tuple[str, ...]
     rules: tuple[Rule, ...]
+    corpus: CorpusPolicy
+    band_name: str | None
     normalizer: Normalizer = field(compare=False)
+
+    def merge_policy(self, ranks: Mapping[str, int] | None = None,
+                     complete_frac: float = COMPLETE_FRAC) -> MergePolicy:
+        """The merge policy this pack implies.
+
+        Exists because ``drop_dates`` is the one corpus fact TWO layers consume, and the merge
+        needs it for a reason of its own: refusing a date in the archive parser was not enough,
+        because the other sources carry the same night and the merge quietly picked one of those
+        copies up instead. The show came back. A caller who builds :class:`ArchivePolicy` from
+        the pack and then hand-writes a :class:`MergePolicy` has recreated exactly that bug, so
+        both come from here.
+
+        ``ranks`` and ``complete_frac`` are config, not pack data, and are passed through.
+        """
+        return MergePolicy(
+            ranks=dict(ranks) if ranks is not None else dict(DEFAULT_RANKS),
+            complete_frac=complete_frac,
+            drop_dates=frozenset(self.corpus.drop_dates),
+        )
+
+    def archive_policy(self) -> ArchivePolicy:
+        """The archive parser's policy, assembled from this pack.
+
+        The one place these six inputs get put together. Assembling them at each call site is
+        how a toolkit ends up with four answers to one question -- which is the failure this
+        catalog was rebuilt to remove, so it is not a failure worth reintroducing for the sake
+        of a constructor call. See :meth:`merge_policy` for the drop-dates half.
+        """
+        return ArchivePolicy(
+            drop_dates=frozenset(self.corpus.drop_dates),
+            date_overrides={ident: entry["date"]
+                            for ident, entry in self.corpus.date_overrides.items()},
+            # No band name means no band filter. Refusing to guess is the whole point: an
+            # unreadable title is not evidence that a show is fake, and neither is a silent one.
+            band_filter=title_band_filter(self.band_name) if self.band_name else None,
+            junk_patterns=tuple(rule.pattern for rule in self.corpus.junk),
+            gear_patterns=tuple(rule.pattern for rule in self.corpus.gear),
+            band_name=self.band_name,
+        )
 
 
 class _PackNormalizer(Normalizer):
@@ -186,18 +355,8 @@ def _position_for(path: tuple, positions: dict[tuple, Pos]) -> Pos | None:
 def _fail(file: Path, summary: str, source: str, pos: Pos | None,
           *, detail: str | None = None, caption: str = "") -> NoReturn:
     """Raise a DiagnosticError anchored at ``pos`` (or path-only when position is unknown)."""
-    diag = Diagnostic(
-        severity=ERROR,
-        summary=summary,
-        path=str(file),
-        line=pos.line if pos else None,
-        col=pos.col if pos else None,
-        length=pos.length if pos else 1,
-        caret_caption=caption,
-        detail=detail,
-        source=source,
-    )
-    raise DiagnosticError(diag)
+    raise DiagnosticError(diagnostic_at(ERROR, summary, file=file, source=source, pos=pos,
+                                        detail=detail, caption=caption))
 
 
 def _load_json(file: Path, schema: dict):
@@ -239,15 +398,87 @@ def _compile_rules(entries: list, positions: dict[tuple, Pos], file: Path, sourc
                 _fail(file, "free-floating pattern must justify itself", source,
                       positions.get(("non_song", index, "why")),
                       detail=_justify_detail(pattern), caption="empty")
-        rules.append(Rule(
-            pattern=pattern,
-            compiled=_compile(pattern, pattern_pos, file, source),
-            anchored=_anchored(pattern),
-            why=why,
-            must_not_match=must_not,
-            pos=pattern_pos,
-        ))
+        rules.append(_rule(pattern, why, must_not, pattern_pos, file=file, source=source))
     return tuple(rules)
+
+
+def _rule(pattern: str, why: str | None, must_not: tuple[str, ...], pattern_pos: Pos | None,
+          *, file: Path, source: str, wrap: bool = False) -> Rule:
+    """One validated :class:`Rule`. ``wrap`` compiles it the way the corpus filters apply it.
+
+    The raw pattern is compiled either way, and first, even when the wrapped form is what gets
+    kept: ``re.error.pos`` indexes the pattern the engine was handed, so a caret computed from a
+    *wrapped* pattern lands several characters to the right of the character that is wrong.
+    """
+    compiled = _compile(pattern, pattern_pos, file, source)
+    return Rule(
+        pattern=pattern,
+        compiled=fragment_pattern(pattern) if wrap else compiled,
+        anchored=_anchored(pattern),
+        why=why,
+        must_not_match=must_not,
+        pos=pattern_pos,
+        wrapped=wrap,
+    )
+
+
+def _compile_fragments(entries: list, positions: dict[tuple, Pos], file: Path, source: str,
+                       *, key: str) -> tuple[Rule, ...]:
+    """Turn one corpus pattern list into compiled Rules, each carrying its stated reason.
+
+    No bare-string form to allow for: the schema requires an object, because a fragment is
+    free-floating by construction and cannot anchor its way out of explaining itself.
+    """
+    rules: list[Rule] = []
+    for index, entry in enumerate(entries):
+        if not entry["why"].strip():
+            _fail(file, f"{key} entry must say what it is", source,
+                  positions.get((key, index, "why")),
+                  detail=(f'"{entry["pattern"]}" is folded into a filter that DROPS every entry\n'
+                          "it matches, without recording that anything was there. Say what it is,\n"
+                          "so a later reader can tell junk from a song nobody had written yet."),
+                  caption="empty")
+        rules.append(_rule(entry["pattern"], entry["why"],
+                           tuple(entry.get("must_not_match", ())),
+                           positions.get((key, index, "pattern")),
+                           file=file, source=source, wrap=True))
+    return tuple(rules)
+
+
+def _load_corpus(pack_dir: Path) -> CorpusPolicy:
+    """Load the optional ``corpus.json``, enforcing that every correction states its evidence."""
+    file = pack_dir / CORPUS_FILE
+    if not file.exists():
+        return CorpusPolicy()
+    data, positions, source = _load_json(file, _CORPUS_SCHEMA)
+
+    drops = data.get("drop_dates", {})
+    for date, reason in drops.items():
+        if not reason.strip():
+            _fail(file, f"drop_dates {date!r} does not say why", source,
+                  positions.get(("drop_dates", date)),
+                  detail="Dropping a date throws away every song played that night, including\n"
+                         "the ordinary ones. Say what makes the show no evidence about the band.",
+                  caption="empty")
+
+    overrides = data.get("date_overrides", {})
+    for identifier, entry in overrides.items():
+        if not entry["why"].strip():
+            _fail(file, f"date_overrides {identifier!r} does not say why", source,
+                  positions.get(("date_overrides", identifier, "why")),
+                  detail="An override moves a show to a different night on your say-so, and a\n"
+                         "wrong one invents a show that never happened while burying a real one.\n"
+                         "State the evidence: artwork, upload date, the taper's own description.",
+                  caption="empty")
+
+    return CorpusPolicy(
+        drop_dates=dict(drops),
+        date_overrides={ident: dict(entry) for ident, entry in overrides.items()},
+        junk=_compile_fragments(data.get("junk_patterns", []), positions, file, source,
+                                key="junk_patterns"),
+        gear=_compile_fragments(data.get("gear_patterns", []), positions, file, source,
+                                key="gear_patterns"),
+    )
 
 
 def _justify_detail(pattern: str) -> str:
@@ -291,10 +522,10 @@ def _decoded_col(source: str, pattern_pos: Pos, decoded_offset: int) -> int:
 def load_pack(pack_dir) -> Pack:
     """Load and validate the pack in ``pack_dir``, returning a :class:`Pack`.
 
-    Requires ``pack.json`` and ``vocabulary.json``; ``aliases.json``, ``classifiers.json``
-    and ``protected.json`` are optional and default empty, so a minimal pack (a dictionary
-    and nothing else) is legal. Raises :class:`DiagnosticError` on any malformed or invalid
-    file, and a plain diagnostic when a required file is missing.
+    Requires ``pack.json`` and ``vocabulary.json``; ``aliases.json``, ``classifiers.json``,
+    ``protected.json`` and ``corpus.json`` are optional and default empty, so a minimal pack
+    (a dictionary and nothing else) is legal. Raises :class:`DiagnosticError` on any malformed
+    or invalid file, and a plain diagnostic when a required file is missing.
     """
     pack_dir = Path(pack_dir)
     identity, _, _ = _load_json(_require(pack_dir, PACK_FILE), _PACK_SCHEMA)
@@ -331,6 +562,8 @@ def load_pack(pack_dir) -> Pack:
         aliases=dict(aliases),
         protected=tuple(protected),
         rules=rules,
+        corpus=_load_corpus(pack_dir),
+        band_name=identity.get("band_name"),
         normalizer=normalizer,
     )
 

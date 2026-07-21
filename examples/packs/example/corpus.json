@@ -1,0 +1,27 @@
+{
+  "drop_dates": {
+    "2025-10-31": "Halloween covers set. The band played someone else's record front to back, and those titles are not things they might play next week -- left in, they poison the vocabulary for every ordinary show. Dropping the date loses the two real songs in the encore, and that is the right trade."
+  },
+
+  "date_overrides": {
+    "example2024-06-14": {
+      "date": "2025-06-14",
+      "why": "The uploader typed the wrong year. Their own description says 'June 14 2025', the artwork is named for the 2025 run, and it was uploaded three weeks after the 2025 show. Believing the metadata invents a show that never happened AND buries half of a real one, which nothing downstream can detect: a phantom show looks exactly like a real one nobody else taped."
+    }
+  },
+
+  "junk_patterns": [
+    {
+      "pattern": "aurora\\s+borealis\\s+band",
+      "why": "A band this one covers. The taper writes the artist where the song title belongs, so without this the covered ARTIST enters the vocabulary as a song. Note it is a drop, not a tag: nothing was performed under this name, the parser just found a credit.",
+      "must_not_match": ["Aurora"]
+    }
+  ],
+
+  "gear_patterns": [
+    {
+      "pattern": "zoomf\\d",
+      "why": "A recorder this scene uses, written into the lineage preamble. Every taper scene has its own shorthand and setlistkit ships only the gear words everyone writes, so the local dialect goes here."
+    }
+  ]
+}

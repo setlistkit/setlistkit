@@ -19,6 +19,15 @@ Three checks run here, each a hard error:
   pointing at a name that isn't in it is the "Hi & Lo" silent-loss bug, where a real song's
   plays scatter across a name nothing can ever join to.
 
+One warning, which is deliberately not an error:
+
+- **A corpus fragment reaches a title the band actually plays.** Held against the vocabulary,
+  the aliases and the protected titles together, since all three are the pack declaring "this
+  is a song". It cannot delete the title -- ``parse._claimed`` gates every rule that drops --
+  so this is not fatal. It is reported because a fragment wide enough to reach a real title is
+  almost always wider than its author intended, and the guard only protects the titles that are
+  in the pack *today*.
+
 The corpus-aware checks the spec also lists (a rule that matches nothing, a rule subsumed by
 another, a canonicalization that reaches nothing) need the cached corpus, which does not exist
 until ingest. Those are reported as a skipped note rather than silently omitted.
@@ -28,9 +37,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..diagnostics import ERROR, NOTE, Diagnostic
-from .jsonpos import Pos, parse
-from .pack import ALIASES_FILE, CLASSIFIERS_FILE, Pack, Rule, load_pack
+from ..diagnostics import ERROR, NOTE, WARNING, Diagnostic
+from .jsonpos import Pos, diagnostic_at, parse
+from .pack import ALIASES_FILE, CLASSIFIERS_FILE, CORPUS_FILE, Pack, Rule, load_pack
 
 
 def lint(pack_dir) -> list[Diagnostic]:
@@ -45,6 +54,7 @@ def lint(pack_dir) -> list[Diagnostic]:
 
     diagnostics: list[Diagnostic] = []
     diagnostics.extend(_rule_findings(pack, pack_dir))
+    diagnostics.extend(_corpus_findings(pack, pack_dir))
     diagnostics.extend(_alias_findings(pack, pack_dir))
     diagnostics.append(Diagnostic(
         severity=NOTE,
@@ -62,22 +72,67 @@ def _rule_findings(pack: Pack, pack_dir: Path) -> list[Diagnostic]:
     out: list[Diagnostic] = []
     for rule in pack.rules:
         for title in pack.protected:
-            if rule.compiled.search(squash(title)):
+            if rule.reaches(title, squash):
                 out.append(_rule_diag(
-                    pack_dir, rule, source,
+                    pack_dir / CLASSIFIERS_FILE, rule, source,
                     summary=f"rule /{rule.pattern}/ matches protected title {title!r}",
                     caption=f"deletes {title!r}",
                     detail=f"{title!r} is a protected title, always a song. Narrow this rule\n"
                            "so it cannot reach it -- anchor it, or make the pattern more specific.",
                 ))
         for example in rule.must_not_match:
-            if rule.compiled.search(squash(example)):
+            if rule.reaches(example, squash):
                 out.append(_rule_diag(
-                    pack_dir, rule, source,
+                    pack_dir / CLASSIFIERS_FILE, rule, source,
                     summary=f"rule /{rule.pattern}/ matches its own must_not_match {example!r}",
                     caption=f"hits {example!r}",
                     detail=f"The rule was given {example!r} as a song it must NOT match, and it\n"
                            "matches it anyway. Fix the pattern or drop the counter-example.",
+                ))
+    return out
+
+
+def _corpus_findings(pack: Pack, pack_dir: Path) -> list[Diagnostic]:
+    """Every corpus filter fragment held against the titles it should not be reaching.
+
+    The rules are compiled the way the filters apply them -- grouped, bounded by non-word
+    lookarounds -- so what runs here is what will run during a parse, not an approximation of
+    it. Matched against the titles as WRITTEN, because that is the form the parser hands these
+    filters: a taper's token, cleaned but not squashed.
+
+    A vocabulary collision is a WARNING, not an error, and the distinction is honest rather
+    than lenient: ``parse._claimed`` makes it inert. What stays an error is a fragment that
+    contradicts its own ``must_not_match``, because that is the author disagreeing with
+    themselves and no guard can decide which half they meant.
+    """
+    source = _read_optional(pack_dir / CORPUS_FILE)
+    squash = pack.normalizer.squash
+    # dict.fromkeys, not a set: a title listed in two of these files is one song and earns one
+    # finding, and the report stays in the order they were written rather than in whatever
+    # order the hashes came out. All three are the pack declaring "this is a song".
+    claimed = dict.fromkeys((*pack.protected, *pack.vocabulary, *pack.aliases))
+    out: list[Diagnostic] = []
+    for rule in (*pack.corpus.junk, *pack.corpus.gear):
+        for title in claimed:
+            if rule.reaches(title, squash):
+                out.append(_rule_diag(
+                    pack_dir / CORPUS_FILE, rule, source, severity=WARNING,
+                    summary=f"pattern /{rule.pattern}/ matches {title!r}, a song this band plays",
+                    caption=f"reaches {title!r}",
+                    detail=f"Not fatal: the parser asks the vocabulary, the aliases and the\n"
+                           "protected titles before it applies any rule that drops, so this\n"
+                           f"cannot delete {title!r}. It is reported because a fragment that\n"
+                           "reaches a real title is almost always broader than its author meant,\n"
+                           "and the next title added to the vocabulary may not be so lucky.",
+                ))
+        for example in rule.must_not_match:
+            if rule.reaches(example, squash):
+                out.append(_rule_diag(
+                    pack_dir / CORPUS_FILE, rule, source,
+                    summary=f"pattern /{rule.pattern}/ matches its own must_not_match {example!r}",
+                    caption=f"hits {example!r}",
+                    detail=f"The fragment was given {example!r} as a title it must NOT match, and\n"
+                           "it matches it anyway. Fix the pattern or drop the counter-example.",
                 ))
     return out
 
@@ -94,16 +149,10 @@ def _alias_findings(pack: Pack, pack_dir: Path) -> list[Diagnostic]:
     out: list[Diagnostic] = []
     for key, target in pack.aliases.items():
         if target not in vocabulary:
-            pos = positions.get((key,))
-            out.append(Diagnostic(
-                severity=ERROR,
-                summary=f"alias target {target!r} is absent from the vocabulary",
-                path=str(pack_dir / ALIASES_FILE),
-                line=pos.line if pos else None,
-                col=pos.col if pos else None,
-                length=pos.length if pos else 1,
-                caret_caption="not in vocabulary",
-                source=source,
+            out.append(diagnostic_at(
+                ERROR, f"alias target {target!r} is absent from the vocabulary",
+                file=pack_dir / ALIASES_FILE, source=source, pos=positions.get((key,)),
+                caption="not in vocabulary",
                 detail=f"The alias {key!r} -> {target!r} points at a name the vocabulary does\n"
                        "not contain. Plays for the song scatter across a name nothing joins to.\n"
                        "Add the target to vocabulary.json.",
@@ -111,21 +160,11 @@ def _alias_findings(pack: Pack, pack_dir: Path) -> list[Diagnostic]:
     return out
 
 
-def _rule_diag(pack_dir: Path, rule: Rule, source: str | None, *,
-               summary: str, caption: str, detail: str) -> Diagnostic:
-    """A diagnostic anchored at a classifier rule's pattern in classifiers.json."""
-    pos = rule.pos
-    return Diagnostic(
-        severity=ERROR,
-        summary=summary,
-        path=str(pack_dir / CLASSIFIERS_FILE),
-        line=pos.line if pos else None,
-        col=pos.col if pos else None,
-        length=pos.length if pos else 1,
-        caret_caption=caption,
-        source=source,
-        detail=detail,
-    )
+def _rule_diag(file: Path, rule: Rule, source: str | None, *, summary: str, caption: str,
+               detail: str, severity: str = ERROR) -> Diagnostic:
+    """A diagnostic anchored at a rule's pattern in the pack file it was written in."""
+    return diagnostic_at(severity, summary, file=file, source=source, pos=rule.pos,
+                         caption=caption, detail=detail)
 
 
 def _read_optional(path: Path) -> str | None:

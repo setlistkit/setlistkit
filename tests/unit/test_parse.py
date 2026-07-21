@@ -198,7 +198,7 @@ def test_gear_words_written_as_a_track_are_not_songs():
 
 
 def test_a_song_in_the_vocabulary_survives_a_gear_word_collision():
-    """"Wave" is a tape format AND a perfectly ordinary song title. GEAR is the widest filter
+    """"Wave" is a tape format AND a perfectly ordinary song title. Gear is the widest filter
     here and it cannot tell them apart, so anything the pack claims is never deleted on shape."""
     record = parse_archive_item(_item(description="Set 1:\n01. Meat\n02. Wave\n03. Ophelia\n"),
                                 normalizer=_StubNormalizer(extra_vocab=("Wave",)))
@@ -459,3 +459,111 @@ def test_clean_html_unescapes_twice_and_keeps_line_breaks():
 def test_clean_html_joins_a_list_and_survives_none():
     assert clean_html(["one", "two"]) == "one two"
     assert clean_html(None) == ""
+
+
+def test_gear_patterns_from_the_policy_filter_a_local_dialect():
+    """setlistkit ships the gear words every taper writes; the scene's own shorthand is the
+    pack's. `kcy`, `nbob`, `pfa`, `ela` and `cf` came over with the port carrying no recorded
+    explanation, and a three-letter token nobody can read is the shape that deleted ATL."""
+    desc = "Set 1:\n01. Rebubula\n02. AKG CK61 > KCY\n03. Meat\n04. Ophelia\n"
+    kept = _parse(_item(description=desc))
+    assert "KCY" in _titles(kept)                          # nothing generic catches it now
+    filtered = _parse(_item(description=desc), policy=ArchivePolicy(gear_patterns=("kcy",)))
+    assert _titles(filtered) == ["Rebubula", "Meat", "Ophelia"]
+
+
+def test_a_song_survives_a_gear_word_supplied_by_the_pack():
+    """the pack's own gear words are guarded exactly like the built-in ones."""
+    record = parse_archive_item(
+        _item(description="Set 1:\n01. Meat\n02. Reaper\n03. Ophelia\n"),
+        normalizer=_StubNormalizer(extra_vocab=("Reaper",)),
+        policy=ArchivePolicy(gear_patterns=("reaper",)))
+    assert _titles(record) == ["Meat", "Reaper", "Ophelia"]
+
+
+def test_a_greeting_is_tagged_rather_than_dropped():
+    """"Greeting By Al" is Al saying hello: it happened on the stage and it is not music, so
+    it is a TAG. It used to sit in the generic junk filter, which drops -- and a DROP rule is
+    only allowed to answer "is this an entry", never "is this music"."""
+    class _Greets(_StubNormalizer):
+        def non_song_patterns(self):
+            return [*super().non_song_patterns(), re.compile("greeting")]
+
+    record = parse_archive_item(
+        _item(description="Set 1:\n01. Greeting By Al\n02. Meat\n03. Ophelia\n"),
+        normalizer=_Greets())
+    assert _titles(record) == ["Greeting By Al", "Meat", "Ophelia"]
+    assert record["sets"][0][0]["non_song"] is True
+    assert record["n_songs"] == 2          # tagged, so it is recorded but never counted
+
+
+def test_no_drop_rule_can_delete_a_song_the_pack_claims():
+    """The invariant every DROP rule in this module defers to, asserted rule by rule.
+
+    Each of these once deleted a real title. The shape gate and the venue check already asked
+    the pack first; the annotation filter, the credit-line filter and the crew-role filter did
+    not, and ``protected.json`` could not save a title from them because it is consulted before
+    they run. A pack had no way to defend "Notes", "Lighting" or "Total Time".
+
+    The guard is narrow on purpose: it fires only when the whole token normalizes onto a known
+    song, which is why the same filters still drop the credits and cover artists below.
+    """
+    desc = "Set 1:\n01. {}\n02. Meat\n"
+
+    for title, filter_named in [("Plane Crash", "the shape gate, via a gear word"),
+                                ("Notes", "the annotation filter"),
+                                ("Lighting", "the crew-role filter")]:
+        record = parse_archive_item(
+            _item(description=desc.format(title)),
+            normalizer=_StubNormalizer(extra_vocab=(title,)),
+            policy=ArchivePolicy(gear_patterns=("crash",), junk_patterns=("crash",)))
+        assert _titles(record) == [title, "Meat"], f"{title!r} deleted by {filter_named}"
+
+    # ...and protected.json reaches every one of them too, not just the two it used to
+    record = parse_archive_item(_item(description=desc.format("Notes")),
+                                normalizer=_StubNormalizer(protected=("Notes",)))
+    assert _titles(record) == ["Notes", "Meat"]
+
+
+def test_the_claim_guard_is_narrow_enough_to_leave_the_filters_working():
+    """the other half: a token that is not a title is still dropped by all of them."""
+    desc = "Set 1:\n01. {}\n02. Meat\n03. Ophelia\n"
+    for token, policy in [("Notes", None),
+                          ("Al Schnier - guitar, vocals", None),
+                          ("Umphrey's McGee", ArchivePolicy(junk_patterns=("umphrey",))),
+                          ("KCY", ArchivePolicy(gear_patterns=("kcy",)))]:
+        record = _parse(_item(description=desc.format(token)), policy=policy)
+        assert _titles(record) == ["Meat", "Ophelia"], f"{token!r} survived"
+
+
+def test_an_alias_key_is_as_protected_as_a_canonical_title():
+    """an alias is the pack saying "this spelling IS that song", and every DROP rule runs
+    before canonicalize -- so the guard has to resolve aliases itself or the rules never see
+    the claim at all."""
+    class _Aliased(_StubNormalizer):
+        def aliases(self):
+            return {"rebubula ii": "Rebubula"}
+
+    record = parse_archive_item(
+        _item(description="Set 1:\n01. Rebubula II\n02. Meat\n"),
+        normalizer=_Aliased(),
+        policy=ArchivePolicy(junk_patterns=(r"rebubula\s+ii",)))
+    assert _titles(record) == ["Rebubula", "Meat"]
+
+
+def test_an_override_date_that_is_not_a_bare_date_is_refused():
+    """`stated` is sliced to ten characters; an override is not, so it was the way a date with
+    a newline in it got into the corpus and joined to nothing for the rest of time.
+
+    Anchored with \\Z rather than `$`, which in Python also matches before a trailing newline.
+    """
+    for bad in ("2025-06-14\n", "2025-06-14T00:00:00", "2025-06-14 (set two)"):
+        record = parse_archive_item(
+            _item(description="Set 1:\n01. Meat\n02. Ophelia\n"),
+            normalizer=_StubNormalizer(),
+            policy=ArchivePolicy(date_overrides={"band2026-01-31.akg": bad}))
+        assert record is None, f"{bad!r} was accepted as a date"
+
+    good = _parse(_item(), policy=ArchivePolicy(
+        date_overrides={"band2026-01-31.akg": "2025-06-14"}))
+    assert good["date"] == "2025-06-14" and good["year"] == "2025"

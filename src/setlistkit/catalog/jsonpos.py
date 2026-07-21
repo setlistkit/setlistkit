@@ -19,7 +19,10 @@ brace, not a rule under the whole block.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
+
+from ..diagnostics import Diagnostic
 
 _WS = " \t\n\r"
 _NUMBER_CHARS = "0123456789+-.eE"          # a number's body; _NUMBER_RE does the real validating
@@ -39,6 +42,30 @@ class Pos(NamedTuple):
     line: int
     col: int
     length: int
+
+
+def diagnostic_at(severity: str, summary: str, *, file: Path, source: str | None,
+                  pos: Pos | None, detail: str | None = None,
+                  caption: str = "") -> Diagnostic:
+    """A :class:`~setlistkit.diagnostics.Diagnostic` anchored at ``pos`` in ``file``.
+
+    One place rather than one per caller, and the reason is the ``pos is None`` branch: a
+    finding whose position could not be recovered still has to name its file and render
+    without a caret. That fallback is easy to get subtly wrong, and a copy that gets it wrong
+    reports a pack error pointing at nothing -- which is the failure this whole module exists
+    to prevent.
+    """
+    return Diagnostic(
+        severity=severity,
+        summary=summary,
+        path=str(file),
+        line=pos.line if pos else None,
+        col=pos.col if pos else None,
+        length=pos.length if pos else 1,
+        caret_caption=caption,
+        detail=detail,
+        source=source,
+    )
 
 
 class JSONPosError(ValueError):

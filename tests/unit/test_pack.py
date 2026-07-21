@@ -9,11 +9,13 @@ is checked for a rendered caret, because a pack error that can't point at the pr
 thing this whole subsystem exists to avoid.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 
 from setlistkit.catalog.pack import Pack, load_pack
+from setlistkit.catalog.parse import parse_archive_items
 from setlistkit.diagnostics import DiagnosticError, render
 
 EXAMPLE_PACK = Path(__file__).resolve().parents[2] / "examples" / "packs" / "example"
@@ -233,3 +235,235 @@ def test_alias_key_is_normalized_on_load(tmp_path):
     assert pack.normalizer.canonicalize("The Rec Chem")[0] == "Recreational Chemistry"
     # the raw authored key is preserved on the Pack for diff-review and lint
     assert pack.aliases == {"The Rec Chem": "Recreational Chemistry"}
+
+
+# --- corpus.json: the corrections and the residue -------------------------------------------
+
+CORPUS = """{
+  "drop_dates": {"2025-10-31": "costume show, the songs were bits"},
+  "date_overrides": {"band2024-06-14": {"date": "2025-06-14",
+                                        "why": "the description says June 2025"}},
+  "junk_patterns": [{"pattern": "umphrey", "why": "a band they cover"}],
+  "gear_patterns": [{"pattern": "zoomf\\\\d", "why": "a recorder this scene writes"}]
+}"""
+
+
+def test_corpus_file_is_optional(tmp_path):
+    pack = _load_or_render(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    assert pack.corpus.drop_dates == {}
+    assert pack.corpus.date_overrides == {}
+    assert pack.corpus.junk == () and pack.corpus.gear == ()
+    assert pack.band_name is None
+
+
+def test_corpus_file_loads_every_key(tmp_path):
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB, "corpus.json": CORPUS})
+    assert pack.corpus.drop_dates == {"2025-10-31": "costume show, the songs were bits"}
+    assert pack.corpus.date_overrides["band2024-06-14"]["date"] == "2025-06-14"
+    assert [rule.pattern for rule in pack.corpus.junk] == ["umphrey"]
+    assert [rule.pattern for rule in pack.corpus.gear] == [r"zoomf\d"]
+
+
+def test_a_corpus_fragment_is_compiled_the_way_the_filter_applies_it(tmp_path):
+    """Rule.compiled is the bounded form, not the bare fragment.
+
+    This is what makes a lint check believable: a check that approximated the filter could
+    report a collision the parser will never have, or miss one it will.
+    """
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "corpus.json": '{"junk_patterns": [{"pattern": "home", "why": "x"}]}'})
+    compiled = pack.corpus.junk[0].compiled
+    assert compiled.search("Home Team")            # bounded on both sides, so a word matches
+    assert not compiled.search("Homeward Bound")   # ...and a longer word does not
+
+
+def test_band_name_is_read_from_pack_json(tmp_path):
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": '{"name": "moe", "version": "1", "band_name": "moe."}',
+        "vocabulary.json": VOCAB})
+    assert pack.band_name == "moe."
+
+
+# --- corpus.json: every entry has to say why ------------------------------------------------
+
+def _corpus_failure(tmp_path, corpus: str):
+    """Load a pack with the given corpus.json, returning the diagnostic it raised."""
+    with pytest.raises(DiagnosticError) as excinfo:
+        load_pack(_pack(tmp_path, **{
+            "pack.json": IDENTITY, "vocabulary.json": VOCAB, "corpus.json": corpus}))
+    return excinfo.value.diagnostic
+
+
+def test_a_drop_date_with_no_reason_is_rejected(tmp_path):
+    diag = _corpus_failure(tmp_path, '{"drop_dates": {"2025-10-31": "  "}}')
+    assert diag.summary == "drop_dates '2025-10-31' does not say why"
+    assert "^" in render(diag)
+
+
+def test_a_date_override_with_no_evidence_is_rejected(tmp_path):
+    diag = _corpus_failure(
+        tmp_path, '{"date_overrides": {"x1": {"date": "2025-06-14", "why": ""}}}')
+    assert diag.summary == "date_overrides 'x1' does not say why"
+    assert "^" in render(diag)
+
+
+def test_a_junk_fragment_with_no_reason_is_rejected(tmp_path):
+    diag = _corpus_failure(tmp_path, '{"junk_patterns": [{"pattern": "team", "why": ""}]}')
+    assert diag.summary == "junk_patterns entry must say what it is"
+
+
+def test_a_gear_fragment_with_no_reason_is_rejected(tmp_path):
+    diag = _corpus_failure(tmp_path, '{"gear_patterns": [{"pattern": "kcy", "why": ""}]}')
+    assert diag.summary == "gear_patterns entry must say what it is"
+
+
+def test_a_corpus_fragment_has_no_bare_string_form(tmp_path):
+    """unlike a classifier: every fragment is free-floating, so none can anchor its way out."""
+    diag = _corpus_failure(tmp_path, '{"junk_patterns": ["^umphrey$"]}')
+    assert "not of type 'object'" in diag.summary
+
+
+def test_a_malformed_drop_date_is_rejected_at_the_schema(tmp_path):
+    """a typo'd date is the silent kind of wrong: it simply never equals any show's date."""
+    diag = _corpus_failure(tmp_path, '{"drop_dates": {"2025-13-01x": "typo"}}')
+    assert "does not match" in diag.summary
+
+
+def test_a_malformed_override_date_is_rejected_at_the_schema(tmp_path):
+    diag = _corpus_failure(
+        tmp_path, '{"date_overrides": {"x1": {"date": "June 14 2025", "why": "evidence"}}}')
+    assert "does not match" in diag.summary
+
+
+def test_a_broken_corpus_regex_points_inside_the_pattern(tmp_path):
+    text = '{"junk_patterns": [{"pattern": "reb(", "why": "x"}]}'
+    diag = _corpus_failure(tmp_path, text)
+    assert diag.summary.startswith("invalid regex")
+    assert text.splitlines()[diag.line - 1][diag.col - 1] == "("
+
+
+# --- the policy the pack implies ------------------------------------------------------------
+
+def test_archive_policy_is_assembled_from_the_pack(tmp_path):
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": '{"name": "moe", "version": "1", "band_name": "moe."}',
+        "vocabulary.json": VOCAB, "corpus.json": CORPUS})
+    policy = pack.archive_policy()
+    assert policy.drop_dates == frozenset({"2025-10-31"})
+    # the override flattens to identifier -> date; the evidence stays on the pack
+    assert policy.date_overrides == {"band2024-06-14": "2025-06-14"}
+    assert policy.junk_patterns == ("umphrey",)
+    assert policy.gear_patterns == (r"zoomf\d",)
+    assert policy.band_name == "moe."
+    assert policy.band_filter({"title": "moe. Live at Northlands on 2026-06-14"}) is True
+    assert policy.band_filter({"title": "bob. Live at Ophelia's on 2024-11-07"}) is False
+
+
+def test_a_pack_with_no_band_name_runs_no_band_filter(tmp_path):
+    """refusing to guess: an unreadable title is not evidence that a show is fake, and an
+    absent band name is not evidence about anything at all."""
+    pack = _load_or_render(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    assert pack.archive_policy().band_filter is None
+
+
+def test_the_example_pack_drives_the_parser_end_to_end():
+    """The whole seam on the pack that ships: every corpus key doing its job at once.
+
+    Each of these is a separate mechanism, and each one used to be a hardcoded fact inside the
+    parser. Together they are the answer to "what does a pack actually buy you" -- so they are
+    asserted against the real shipped files rather than a fixture, which also means the example
+    pack cannot rot without a test noticing.
+    """
+    pack = load_pack(EXAMPLE_PACK)
+    policy = pack.archive_policy()
+    items = [
+        # a side project's tape, in the same collection: rejected on the title alone
+        {"identifier": "other2025-01-01", "date": "2025-01-01",
+         "title": "Some Other Band Live at The Fillmore on 2025-01-01",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
+        # a dropped date: the costume show, refused outright
+        {"identifier": "example2025-10-31", "date": "2025-10-31",
+         "title": "The Example Live at The Fillmore on 2025-10-31",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
+        # the mis-dated item, moved to the night it actually happened
+        {"identifier": "example2024-06-14", "date": "2024-06-14",
+         "title": "The Example Live at Northlands on 2024-06-14",
+         # a lineage line split across a segue marker: the pack's gear word catches the left
+         # half, setlistkit's own catches the right, which is the split working as intended
+         "description": ("Set 1:\n01. Aurora\n02. ZoomF8 > MacBook\n"
+                         "03. Aurora Borealis Band\n04. Setbreak\n05. Wormhole\n")},
+    ]
+    records = parse_archive_items(items, normalizer=pack.normalizer, policy=policy)
+
+    assert [record["date"] for record in records] == ["2025-06-14"]
+    entries = [(entry["song"], entry["non_song"]) for entry in records[0]["sets"][0]]
+    assert entries == [("Aurora", False),      # the vocabulary keeps it
+                       ("Setbreak", True),     # a classifier TAGS it -- recorded, not counted
+                       ("Wormhole", False)]    # gear and the cover artist are gone without trace
+    assert records[0]["n_songs"] == 2
+
+
+# --- the date shape: a typo'd date is the silent kind of wrong -------------------------------
+
+@pytest.mark.parametrize("bad", [
+    "2025-13-01",      # the example the comment on _DATE cites, which \d{2} accepted
+    "2025-00-01",
+    "2025-06-32",
+    "0000-00-00",
+    "2025-06-14\n",    # `$` matches before a trailing newline in Python's re
+])
+def test_a_malformed_drop_date_is_rejected(tmp_path, bad):
+    diag = _corpus_failure(tmp_path, json.dumps({"drop_dates": {bad: "a typo"}}))
+    assert "does not match" in diag.summary
+
+
+@pytest.mark.parametrize("bad", ["2025-13-01", "2025-06-14\n", "June 14 2025", "2025-06-14T00:00"])
+def test_a_malformed_override_date_is_rejected(tmp_path, bad):
+    diag = _corpus_failure(
+        tmp_path, json.dumps({"date_overrides": {"x1": {"date": bad, "why": "evidence"}}}))
+    assert "does not match" in diag.summary
+
+
+def test_a_real_date_still_loads(tmp_path):
+    """the bound is on the shape, not on the calendar: day 31 is legal in every month, because
+    catching 2025-02-31 wants a calendar and the date that matches no show gets noticed."""
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "corpus.json": '{"drop_dates": {"2025-01-31": "x", "2025-12-01": "y"}}'})
+    assert sorted(pack.corpus.drop_dates) == ["2025-01-31", "2025-12-01"]
+
+
+# --- the merge half of drop_dates ------------------------------------------------------------
+
+def test_merge_policy_carries_the_drop_dates_too(tmp_path):
+    """refusing a date in the archive parser alone was not enough: the other sources carry the
+    same night, and the merge picked one of those copies up instead."""
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB, "corpus.json": CORPUS})
+    assert pack.merge_policy().drop_dates == pack.archive_policy().drop_dates
+    assert pack.merge_policy().drop_dates == frozenset({"2025-10-31"})
+    # ranks and completeness are config, not pack data, and pass straight through
+    assert pack.merge_policy(ranks={"description": 9}, complete_frac=0.5).ranks == {
+        "description": 9}
+
+
+# --- Rule.compiled means two things, so Rule decides which -----------------------------------
+
+def test_a_rule_matches_against_the_form_the_runtime_hands_it(tmp_path):
+    """crossing the two forms fails silently in both directions, so the rule picks, not the
+    caller. A corpus fragment's `\\s+` can never match squashed text -- the space is gone."""
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": [{"pattern": "drum solo", "why": "x"}]}',
+        "corpus.json": '{"junk_patterns": [{"pattern": "home\\\\s+team", "why": "y"}]}'})
+    squash = pack.normalizer.squash
+    corpus_rule, classifier_rule = pack.corpus.junk[0], pack.rules[0]
+
+    assert corpus_rule.wrapped is True and classifier_rule.wrapped is False
+    assert corpus_rule.reaches("Home Team", squash)          # sees the title as written
+    assert not corpus_rule.reaches("Homeward Bound", squash)
+    # the classifier is matched against squashed text, which is why its pattern has no space
+    assert classifier_rule.reaches("Drum Solo", squash) is False
+    assert pack.normalizer.is_non_song("Drumsolo") is False

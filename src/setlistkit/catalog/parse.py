@@ -49,17 +49,29 @@ from .normalizer import Normalizer, squash
 # ask the tracklist for a second opinion.
 _WEAK_PARSE = 4
 
+# The shape a show date has to have to be believed. Shape only -- the pack schema is where a
+# month of 13 gets rejected -- but anchored at both ends, which is the half that matters here.
+_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
 # Recording gear, in every spelling tapers use for it. The preamble to a description is a
 # lineage -- the mics, the deck, the software it passed through on the way to a file -- and
 # none of those words belong to a song title. This is the single widest filter in the module.
-GEAR = re.compile(r"\b(mic|mics|flac|wav|wave|sbd|aud|akg|schoeps|neumann|mk4|km1|matrix|khz|"
-                  r"recorded|transfer|transferred|taped|taper|dac|nbox|mixpre|sound\s*devices|"
-                  r"24bit|16bit|32bit|cd\s*wave|cdwav|processed|audacity|kcy|fob|loc|hypers|cardioid|"
-                  r"lineage|source|edit|edited|normalize|mastered|sector|samplitude|"
-                  r"macbook|xact|telefunken|tagging|pcm|ela|amadeus|nbob|pfa|aes|ebu|cf|"
-                  r"xlrs?|firewire|k?ables|preamp|phantom\s*power|gain|sd\s*card|"
-                  # the lineage line names the machines it passed through
-                  r"imac|reaper|foobar|checksums?|shntool|ffp|md5|tlh|render\w*)\b", re.I)
+#
+# What is here is gear any taper writes. What is NOT here any more is `kcy`, `nbob`, `pfa`,
+# `ela` and `cf`, which came over with the port carrying no explanation in the source they came
+# from and none anywhere else. Each is a two-or-three letter token, which is exactly the shape
+# that deleted ATL and NYC, and a token I cannot read is a token I cannot say is safe for a band
+# I have never heard of. They live in the pack now, via ``ArchivePolicy.gear_patterns``, where
+# an author who knows their own taper scene writes down what each one is and lint holds it
+# against their vocabulary.
+_GEAR_BASE = (r"mic|mics|flac|wav|wave|sbd|aud|akg|schoeps|neumann|mk4|km1|matrix|khz|"
+              r"recorded|transfer|transferred|taped|taper|dac|nbox|mixpre|sound\s*devices|"
+              r"24bit|16bit|32bit|cd\s*wave|cdwav|processed|audacity|fob|loc|hypers|cardioid|"
+              r"lineage|source|edit|edited|normalize|mastered|sector|samplitude|"
+              r"macbook|xact|telefunken|tagging|pcm|amadeus|aes|ebu|"
+              r"xlrs?|firewire|k?ables|preamp|phantom\s*power|gain|sd\s*card|"
+              # the lineage line names the machines it passed through
+              r"imac|reaper|foobar|checksums?|shntool|ffp|md5|tlh|render\w*")
 
 # A band-member credit LINE: "Al Schnier - guitar, vocals", "Rob Derhak: bass". A name, a
 # separator, then the instruments.
@@ -139,14 +151,21 @@ CREW_ROLE = re.compile(r"\b(foh|lds?|monitors?|lighting|poster\s+artist|tour\s+m
                        r"stage\s+manager|production\s+manager|front\s+of\s+house|"
                        r"total\s+time)\b", re.I)
 
-# Recurring non-song track titles that slip past GEAR and the digit/length gates: spoken intros
-# ("Greeting By Al"), taper notes, acknowledgements, support-act annotations. A guest or an
-# opener is an annotation on a performance, never a song. Kept tight to avoid nuking real
-# titles. Anything band-specific -- the cover artists a taper names in place of the song, the
-# members' surnames they write beside a sit-in -- comes from the pack via
+# Recurring track titles that are annotations rather than entries: taper notes,
+# acknowledgements, support-act and guest-roster credits. An opener or a list of who else was
+# on the bill is a note about the performance, never a thing that was performed. Kept tight to
+# avoid nuking real titles. Anything band-specific -- the cover artists a taper names in place
+# of the song, the members' surnames they write beside a sit-in -- comes from the pack via
 # ``ArchivePolicy.junk_patterns``.
-_JUNK_BASE = (r"greeting|seeded|assistant|a\s+team|home\s+team|notes|footnotes|"
-              r"all\s+members|acknowledg\w*|opened\s+for|opened$|website|inverted\s+version")
+#
+# Everything here answers "is this an entry", which is the only question a DROP rule is allowed
+# to ask. `greeting` used to be in this list and does not belong: "Greeting By Al" is Al
+# greeting the crowd, which HAPPENED, and a thing that happened on stage and is not music is a
+# TAG. It moved to the pack's classifiers, where the one owner of "is this music" can answer it.
+# `a\s+team`, `home\s+team` and `inverted\s+version` moved to ``junk_patterns``: they are drops,
+# but they read as one corpus's artifacts and nothing generic justifies them.
+_JUNK_BASE = (r"seeded|assistant|notes|footnotes|"
+              r"all\s+members|acknowledg\w*|opened\s+for|opened$|website")
 
 # leading "BAND DATE Venue City, ST" header. re.S so it spans the newlines clean_html leaves
 # between the venue line and the gear block.
@@ -195,6 +214,9 @@ class ArchivePolicy:
         Extra regex fragments for the credit/annotation filter -- cover artists, member
         surnames. Each is grouped and bounded by non-word lookarounds, so a fragment may
         contain its own alternation and may begin or end with punctuation.
+    ``gear_patterns``
+        Extra regex fragments for the lineage filter, in the same shape -- the tape-utility
+        shorthand one scene uses and the next has never heard of.
     ``band_name``
         Used to recognise the press-bio and credit block the band's own name introduces
         ("About moe", "thanks to moe", "moe.:").
@@ -206,6 +228,7 @@ class ArchivePolicy:
     date_overrides: Mapping[str, str] = field(default_factory=dict, hash=False)
     band_filter: Callable[[Mapping[str, Any]], bool] | None = None
     junk_patterns: tuple[str, ...] = ()
+    gear_patterns: tuple[str, ...] = ()
     band_name: str | None = None
 
 
@@ -220,21 +243,47 @@ class _Rules:
 
     normalizer: Normalizer
     vocab: Mapping[str, str]
+    # The pack's normalized-spelling -> canonical map, read for membership only. An alias key
+    # is the pack declaring "this taper spelling IS that song", which makes it exactly as much
+    # a real title as a vocabulary entry -- and it has to be resolved here rather than left to
+    # canonicalize(), because every DROP rule runs BEFORE canonicalization.
+    aliases: Mapping[str, str]
     junk: re.Pattern
+    gear: re.Pattern
     credit_tail: re.Pattern
 
 
-@functools.lru_cache(maxsize=32)
-def _junk_pattern(extra: tuple[str, ...]) -> re.Pattern:
-    r"""The credit/annotation filter, with the pack's fragments folded into the alternation.
+def fragment_pattern(*fragments: str) -> re.Pattern:
+    r"""One or more filter fragments as the filter actually applies them.
 
     Each fragment is grouped on its own, and the edges are lookarounds rather than ``\b``. A
     ``\b`` demands a word character on the INSIDE of the match, so a perfectly reasonable pack
     fragment like ``\(cover\)`` compiles clean and then matches nothing at all -- which is the
     worst way for a pack to be wrong, because there is nothing to see.
+
+    Public because the pack loader compiles each fragment through it too. A lint check that
+    approximates the filter instead of running it can be wrong in both directions, and the
+    check exists to be believed.
     """
-    body = "|".join(f"(?:{fragment})" for fragment in (_JUNK_BASE, *extra))
+    body = "|".join(f"(?:{fragment})" for fragment in fragments)
     return re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.I)
+
+
+@functools.lru_cache(maxsize=32)
+def _junk_pattern(extra: tuple[str, ...]) -> re.Pattern:
+    """The credit/annotation filter, with the pack's fragments folded into the alternation."""
+    return fragment_pattern(_JUNK_BASE, *extra)
+
+
+@functools.lru_cache(maxsize=32)
+def _gear_pattern(extra: tuple[str, ...]) -> re.Pattern:
+    """The lineage filter, with the pack's gear shorthand folded into the alternation.
+
+    ``_gear_pattern(())`` -- no pack, the gear every taper writes and nothing else -- is a
+    legal and useful call, but it is not kept as a module constant. One built filter per run,
+    reached the same way whether or not a pack had anything to add to it.
+    """
+    return fragment_pattern(_GEAR_BASE, *extra)
 
 
 @functools.lru_cache(maxsize=32)
@@ -262,7 +311,9 @@ def _rules_for(normalizer: Normalizer, policy: ArchivePolicy) -> _Rules:
     _, norm_to_canon = normalizer.build_vocab()
     return _Rules(normalizer=normalizer,
                   vocab=norm_to_canon,
+                  aliases=normalizer.aliases(),
                   junk=_junk_pattern(tuple(policy.junk_patterns)),
+                  gear=_gear_pattern(tuple(policy.gear_patterns)),
                   credit_tail=_credit_tail_pattern(policy.band_name))
 
 
@@ -304,23 +355,46 @@ def clean_html(value: object) -> str:
     return re.sub(r"<[^>]+>", " ", text)
 
 
+def _claimed(token: str, rules: _Rules) -> bool:
+    """Does the pack say this token IS a song? The one guard every DROP rule defers to.
+
+    A whole cleaned token that the vocabulary or ``protected_titles`` recognises is a song the
+    band is known to play, and no rule in this module is allowed to delete one. That principle
+    was already stated twice -- on shape, and on venue words -- and applied in only those two
+    places, so the annotation, credit and crew-role filters could each still delete a real
+    title. "Notes", "Lighting" and "Total Time" are all plausible song names, and a pack had no
+    way to defend one: ``protected.json`` is consulted here and in ``is_non_song``, and both ran
+    BEFORE the filters that did the deleting.
+
+    Note how narrow this is. It fires only when the ENTIRE token normalizes onto a known song,
+    so it cannot rescue "Al Schnier - guitar, vocals" or "Umphrey's McGee" -- neither of which
+    is a title. It costs a false keep (a taper's literal "Notes", for a band that plays a song
+    called Notes) and buys back a class of silent, untraceable song loss. That trade is the one
+    this catalog was rebuilt to make.
+
+    The aliases are read here and not left to ``canonicalize``, which runs later: an alias key
+    is the pack saying "this spelling IS that song", so a rule that deletes one deletes the song
+    just as surely as if it had matched the canonical name.
+    """
+    norm = rules.normalizer.normalize(token)
+    return norm in rules.vocab or norm in rules.aliases or rules.normalizer.is_protected(token)
+
+
 def _looks_songlike(token: str, rules: _Rules) -> bool:
     """Shape gate: right length, no gear vocabulary, mostly letters.
 
-    The pack gets asked first, for the same reason ``_is_place`` asks it: GEAR is the widest
-    filter in this module and it cannot tell a song from a tape utility. "Wave", "Matrix",
-    "Source", "Edit", "Gain" and "Reaper" are all gear words, and every one of them is a
-    perfectly plausible song title. Nothing the pack claims gets deleted on shape.
+    The gear filter is the widest in this module and it cannot tell a song from a tape utility.
+    "Wave", "Matrix", "Source", "Edit", "Gain" and "Reaper" are all gear words, and every one of
+    them is a perfectly plausible song title -- so callers ask :func:`_claimed` first, which is
+    what keeps the pack's own gear words from deleting the pack's own songs.
 
     Deliberately does NOT ask whether the token is banter or a guest credit. That question has
     exactly one answer and it lives in ``Normalizer.is_non_song`` -- see the module docstring.
     """
-    if rules.normalizer.normalize(token) in rules.vocab or rules.normalizer.is_protected(token):
-        return True
     words = token.split()
     if not 1 <= len(words) <= 8:
         return False
-    if GEAR.search(token):
+    if rules.gear.search(token):
         return False
     letters = sum(char.isalpha() for char in token)
     return letters >= max(2, 0.5 * len(token.replace(" ", "")))
@@ -342,12 +416,19 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
         # "& Someone" sit-in note survives this and goes on to be tagged: it is the same
         # annotation as "w/ Someone", so it gets the same answer from the same place.
         piece = re.sub(r"\s*&+\s*$", "", piece).strip(" .,-:")
-        if not piece or not _looks_songlike(piece, rules):
+        if not piece:
             continue
-        if CREDIT.search(piece) or CREW_ROLE.search(piece):
-            continue
-        if rules.junk.search(piece) or URLISH.search(piece):
-            continue
+        # One guard, ahead of every rule that DROPS. Asked once and reused, so a title the pack
+        # claims cannot be deleted by the shape gate, the gear words, the annotation filter, a
+        # credit line or a crew role -- previously only the first two deferred to it.
+        claimed = _claimed(piece, rules)
+        if not claimed:
+            if not _looks_songlike(piece, rules):
+                continue
+            if CREDIT.search(piece) or CREW_ROLE.search(piece):
+                continue
+            if rules.junk.search(piece) or URLISH.search(piece):
+                continue
         canon, canon_seg = rules.normalizer.canonicalize(piece)
         if not canon:
             continue
@@ -409,7 +490,7 @@ def _is_place(song: str, places: set[str], rules: _Rules) -> bool:
     like an address.
     """
     norm = rules.normalizer.normalize(song)
-    if not norm or norm in rules.vocab:
+    if not norm or _claimed(song, rules):
         return False
     if norm in places:
         return True
@@ -537,7 +618,10 @@ def _show_date(item: Mapping[str, Any], overrides: Mapping[str, str]) -> str:
     """
     stated = str(item.get("meta_date") or item.get("date") or "")[:10]
     date = overrides.get(str(item.get("identifier") or ""), stated)
-    return date if re.match(r"\d{4}-\d{2}-\d{2}", date) else ""
+    # \Z, not the default re.match prefix behaviour and not $. An override is not sliced to ten
+    # characters the way `stated` is, so a trailing newline or a time component would otherwise
+    # sail through and become the show's date -- and `$` would have let the newline through too.
+    return date if _DATE_SHAPE.match(date) else ""
 
 
 def count_songs(sets: Iterable[Iterable[Mapping[str, Any]]],

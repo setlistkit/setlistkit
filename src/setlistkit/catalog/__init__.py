@@ -11,11 +11,11 @@ from .lint import lint
 from .merge import (COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy, MergeResult, apply_overrides,
                     merge_shows, override_disagreements, overrides_from_mapping, pick_show)
 from .normalizer import Normalizer
-from .pack import Pack, load_pack
+from .pack import CorpusPolicy, Pack, load_pack
 from .parse import (ArchivePolicy, count_songs, parse_archive_item, parse_archive_items,
                     title_band_filter)
 
-__all__ = ["COMPLETE_FRAC", "DEFAULT_RANKS", "ArchivePolicy", "MergePolicy", "MergeResult",
-           "Normalizer", "Pack", "apply_overrides", "count_songs", "lint", "load_pack",
-           "merge_shows", "override_disagreements", "overrides_from_mapping",
+__all__ = ["COMPLETE_FRAC", "DEFAULT_RANKS", "ArchivePolicy", "CorpusPolicy", "MergePolicy",
+           "MergeResult", "Normalizer", "Pack", "apply_overrides", "count_songs", "lint",
+           "load_pack", "merge_shows", "override_disagreements", "overrides_from_mapping",
            "parse_archive_item", "parse_archive_items", "pick_show", "title_band_filter"]
