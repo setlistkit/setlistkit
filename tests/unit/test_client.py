@@ -295,6 +295,22 @@ def test_the_batch_is_scoped_and_restores_what_it_replaced(tmp_path):
     assert _agents(transport) == [f"{_UA} (batch aaaaaaaa; item 1/1)", _UA]
 
 
+def test_an_operator_can_send_their_configured_string_unchanged(tmp_path):
+    """The identity belongs to whoever runs the deployment, so they get to keep it exactly.
+
+    Real case: an upstream that keys on a specific registered User-Agent.
+    """
+    config = Config(data_root=tmp_path, user_agent=_UA, source_path=tmp_path / "slkit.toml",
+                    user_agent_batch_progress=False, raw={})
+    transport = FakeTransport(ok(b"{}"))
+    client = PoliteClient(config, RawCache(tmp_path), namespace="archive_org",
+                          transport=transport, sleeper=lambda _s: None)
+    with client.batch(batch_id="3f7a9c21") as batch:
+        batch.begin("item", total=1)
+        client.fetch("a", "https://archive.org/metadata/a")
+    assert _agents(transport) == [_UA]
+
+
 def test_a_generated_batch_id_is_eight_hex_characters(tmp_path):
     client = _client(tmp_path, FakeTransport(), sleeps=[])
     with client.batch() as batch:

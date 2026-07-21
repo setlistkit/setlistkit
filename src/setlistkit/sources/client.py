@@ -196,8 +196,12 @@ class PoliteClient:
             self._batch = previous
 
     def _user_agent(self) -> str:
-        """The configured identity, plus this run's id and progress when inside a batch."""
-        if self._batch is None:
+        """The configured identity, plus this run's id and progress when inside a batch.
+
+        Outside a batch, or with ``user_agent_batch_progress = false``, the operator's string
+        goes out byte-for-byte. They configured it and it stays theirs.
+        """
+        if self._batch is None or not self._config.user_agent_batch_progress:
             return self._config.user_agent
         return f"{self._config.user_agent} ({self._batch})"
 

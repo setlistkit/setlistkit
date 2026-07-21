@@ -188,14 +188,17 @@ def _cmd_pull(config, args) -> int:
         f"A pull needs to know which {args.source} collection holds this band's tapes.")
     floor = min_year(config, args.source, args.min_year)
 
+    # flush=True on both, because a pull of a whole collection runs for hours and Python buffers
+    # stdout whenever it is not a terminal. Redirected to a file or a log, an unflushed progress
+    # line arrives after the job it was reporting on has finished, which is not progress.
     def progress(done: int, total: int) -> None:
         if done % _PROGRESS_EVERY == 0 or done == total:
-            print(f"  {done}/{total}")
+            print(f"  {done}/{total}", flush=True)
 
     def announce(batch_id: str) -> None:
         # Printed so this run is greppable in OUR logs by the same id the source sees in theirs.
         # A batch id only one side of the conversation knows is half a tracking id.
-        print(f"batch {batch_id} (sent in the User-Agent of every request this run)")
+        print(f"batch {batch_id} (sent in the User-Agent of every request this run)", flush=True)
 
     client = ArchiveOrgClient(config, RawCache(config.data_root))
     result = client.pull(collection, min_year=floor, force_rescan=args.force_rescan,

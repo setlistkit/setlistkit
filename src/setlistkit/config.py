@@ -17,6 +17,19 @@ mutable state lives, deliberately outside the repository and behind this pointer
 the program refuses to run against the network until it is changed, so nobody accidentally
 sends anonymous or impersonating traffic. That refusal is enforced here, at
 :func:`require_network_identity`, which the source clients call before any request.
+
+It is a PREFIX, not the whole header. During a bulk run -- a pull of a whole collection, which
+is thousands of requests -- the client appends a second comment naming the run and its position
+in it, so the host can tell one job from twenty and see that it is finite::
+
+    user_agent = "famoe.ly/0.1 (+mailto:you@example.com; AI agent)"
+    on the wire = "famoe.ly/0.1 (+mailto:you@example.com; AI agent) (batch 3f7a9c21; item 100/4514)"
+
+Documented here rather than left as a surprise, because the configured string belongs to the
+operator and finding bytes in it you did not write is not a thing a tool should do quietly. Set
+``user_agent_batch_progress = false`` to send the configured string unchanged; the default is
+true, because being legible to the host you are spending bandwidth on is the better default and
+the cost is nothing.
 """
 
 from __future__ import annotations
@@ -51,6 +64,10 @@ class Config:
     data_root: Path
     user_agent: str
     source_path: Path
+    # Whether a bulk run appends its batch id and progress to user_agent. True by default: the
+    # host whose bandwidth we are spending gets to see what the job is and how big it is. An
+    # operator whose upstream keys on an exact registered User-Agent turns it off.
+    user_agent_batch_progress: bool = True
     raw: dict = field(default_factory=dict, compare=False, repr=False)
 
     def section(self, *names: str) -> dict:
@@ -181,11 +198,25 @@ def load_config(explicit_path=None, *, env=None, cwd=None) -> Config:
                    "writing state next to a committable file. Set an explicit path.",
         ))
 
+    # Checked rather than coerced: bool("false") is True, so a quoted TOML boolean would turn
+    # the setting into its opposite and say nothing. Same lesson as min_year.
+    batch_progress = raw.get("user_agent_batch_progress", True)
+    if not isinstance(batch_progress, bool):
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=f"user_agent_batch_progress must be true or false, got {batch_progress!r}",
+            path=str(source_path),
+            detail="Write it unquoted:\n\n    user_agent_batch_progress = false\n\n"
+                   "It controls whether a bulk run appends its batch id and progress to\n"
+                   "user_agent. Leave it out to keep the default, which is true.",
+        ))
+
     data_root = _resolve_data_root(str(raw["data_root"]), source_path)
     return Config(
         data_root=data_root,
         user_agent=str(raw["user_agent"]),
         source_path=source_path,
+        user_agent_batch_progress=batch_progress,
         raw=raw,
     )
 

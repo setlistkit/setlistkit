@@ -146,6 +146,28 @@ def test_sentinel_detection():
     assert cfg.user_agent_is_sentinel is True
 
 
+def test_batch_progress_defaults_to_on(tmp_path):
+    """Being legible to the host whose bandwidth you are spending is the better default."""
+    cfg = load_config(_write(tmp_path / "slkit.toml", GOOD))
+    assert cfg.user_agent_batch_progress is True
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+def test_batch_progress_can_be_turned_off(tmp_path, value, expected):
+    cfg = load_config(_write(tmp_path / "slkit.toml",
+                             GOOD + f"user_agent_batch_progress = {value}\n"))
+    assert cfg.user_agent_batch_progress is expected
+
+
+@pytest.mark.parametrize("value", ['"false"', '"true"', "0", "1"])
+def test_a_quoted_batch_progress_is_refused_rather_than_coerced(tmp_path, value):
+    """bool("false") is True, so coercing would turn the setting into its opposite silently."""
+    with pytest.raises(DiagnosticError) as caught:
+        load_config(_write(tmp_path / "slkit.toml",
+                           GOOD + f"user_agent_batch_progress = {value}\n"))
+    assert "must be true or false" in caught.value.diagnostic.summary
+
+
 def test_require_network_identity_aborts_on_sentinel():
     cfg = Config(data_root=Path("/x"), user_agent=SENTINEL_USER_AGENT,
                  source_path=Path("/x/slkit.toml"))

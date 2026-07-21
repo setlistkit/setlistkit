@@ -14,7 +14,21 @@ data_root = "~/setlistkit-data"
 # refuses to make any network call while this is still the placeholder: identify yourself,
 # or do not run. Do not impersonate a browser, and do not claim to be setlistkit itself —
 # the identity belongs to whoever runs this deployment.
+#
+# This is a PREFIX. A bulk run — a pull of a whole collection is thousands of requests —
+# appends a second comment naming the run and where it has got to:
+#
+#   user_agent  = "famoe.ly/0.1 (+mailto:you@example.com; AI agent)"
+#   on the wire = "famoe.ly/0.1 (+mailto:you@example.com; AI agent) (batch 3f7a9c21; item 100/4514)"
+#
+# so a host can tell one job from twenty, see that it is finite, and grep their logs for it
+# afterwards. The batch id is printed at the start of the run so it is in your logs too.
 user_agent = "CHANGE-ME (setlistkit; you@example.com)"
+
+# Set false to send user_agent exactly as written, with nothing appended. The default is true:
+# being legible to the host whose bandwidth you are spending is the better default and it costs
+# nothing. Turn it off if an upstream keys on an exact registered User-Agent string.
+# user_agent_batch_progress = true
 
 [catalog]
 # The band pack: identity, vocabulary, aliases, and classifier rules — data you own, not
