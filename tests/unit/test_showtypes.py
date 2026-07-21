@@ -73,7 +73,21 @@ def test_alter_ego_outranks_acoustic():
     assert _by_date(show_types(items))["2025-01-01"].kind == ALTEREGO
 
 
-def test_html_in_a_description_does_not_hide_the_evidence():
+def test_the_brand_inside_markup_is_not_evidence_about_the_night():
+    """Descriptions carry HTML, and a link's href is not a claim about the show.
+
+    A taper linking to the acoustic tour's page from an ordinary electric night writes the
+    brand into an attribute, never into the prose. Reading the raw blob would take the night
+    for acoustic on the strength of a URL. Stripping the tags first is what stops that, so
+    this fails if the stripping goes away.
+    """
+    link = '<a href="https://archive.org/details/moe.stlyAcoustic2023">Full Electric Show</a>'
+    rows = _by_date(show_types([_item("t1", "2025-01-01", description=link)]))
+    assert rows["2025-01-01"].kind == ELECTRIC
+
+
+def test_markup_around_the_evidence_does_not_hide_it():
+    """The other direction: tags wrapping the brand must not stop it being read."""
     rows = _by_date(show_types([_item("t1", "2025-01-01",
                                       description="<b>moe.stly</b> Acoustic")]))
     assert rows["2025-01-01"].kind == ACOUSTIC
