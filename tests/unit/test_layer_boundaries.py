@@ -17,7 +17,13 @@ import pytest
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 
 # layer -> the sibling layers it must not import.
+#
+# `sources` is the most upstream layer: it fetches raw snapshots into the store cache and must
+# stay reusable, so it imports none of its siblings. The spec's layer-mapping table puts parse
+# and merge under `catalog`, not `sources`, so is-this-a-song stays in one layer and `sources`
+# never needs to reach up for it — the two meet at the cache, not at an import.
 FORBIDDEN = {
+    "sources": {"catalog", "model", "picks", "report"},
     "catalog": {"model", "picks", "report"},
     "model": {"picks", "report"},
     "picks": {"report"},
