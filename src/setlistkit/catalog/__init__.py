@@ -10,5 +10,8 @@ graph and normalizer that stands on its own. It therefore imports nothing from `
 from .lint import lint
 from .normalizer import Normalizer
 from .pack import Pack, load_pack
+from .parse import (ArchivePolicy, count_songs, parse_archive_item, parse_archive_items,
+                    title_band_filter)
 
-__all__ = ["Normalizer", "Pack", "load_pack", "lint"]
+__all__ = ["ArchivePolicy", "Normalizer", "Pack", "count_songs", "lint", "load_pack",
+           "parse_archive_item", "parse_archive_items", "title_band_filter"]

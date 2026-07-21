@@ -84,15 +84,17 @@ _P_GUEST = re.compile(r"(?:\s*[-#*+^~(]\s*with\b|\s*[-#*+^~(]?\s*w/\s*).*$", re.
 # A leading timestamp from a taper who indexes their listing: "(09:39) Tamborine".
 _P_TIMECODE = re.compile(r"^\s*\(?\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)?\s*")
 
-# "W/ Andy Frasco", "w/ Haley Jane", "(w/ BRONCO)" -- a note about who sat in, standing alone in
-# the setlist as if it were a song.
+# "W/ Andy Frasco", "w/ Haley Jane", "(w/ BRONCO)", "& Emma D" -- a note about who sat in,
+# standing alone in the setlist as if it were a song. The "&" spelling is here because it is the
+# same annotation: with it living in the parser instead, one spelling got tagged and the other
+# got deleted.
 #
 # The word boundary sits INSIDE the alternation, on "with" alone. Written as `w(?:ith|/)\b` it
 # could never fire for the slashed form: "/" and " " are both non-word characters, so there is no
 # boundary between them, and every one of the examples above -- the regex's OWN documented
 # targets -- was read as a song. "with" still needs the boundary or it eats the first word of
 # "Within Your Reach". "w/" needs nothing, because no song title has ever started with it.
-GUEST_NOTE = re.compile(r"^\(?\s*=?\s*w(?:ith\b|/)", re.I)
+GUEST_NOTE = re.compile(r"^\(?\s*=?\s*(?:&\s*|w(?:ith\b|/))", re.I)
 
 # A setlist entry that is nothing but a PARENTHESISED note -- "(NH)", "(UM)" -- is a taper's
 # annotation the description parser promoted to a song. Left alone it is also a collision
@@ -308,16 +310,19 @@ class Normalizer:
         from deleting ATL/TLH/NYC, all real moe. songs.
         """
         entry = entry.strip()
-        if self._is_protected(entry):
+        if self.is_protected(entry):
             return False
         if GUEST_NOTE.match(entry) or BARE_NOTE.match(entry):
             return True
         squashed = squash(entry)
         return any(pattern.search(squashed) for pattern in self.non_song_patterns())
 
-    def _is_protected(self, entry: str) -> bool:
+    def is_protected(self, entry: str) -> bool:
         """True when ``entry`` squashes to a protected title. Compared squashed on both sides so
-        formatting ("A.T.L", "ATL") cannot slip a protected song past the guard."""
+        formatting ("A.T.L", "ATL") cannot slip a protected song past the guard.
+
+        Public because ``is_non_song`` is not the only rule that can delete a real song by
+        accident: any shape gate wants to ask this first."""
         if self._protected_squashed is None:
             self._protected_squashed = {squash(title) for title in self.protected_titles()}
         return bool(self._protected_squashed) and squash(entry) in self._protected_squashed
