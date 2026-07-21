@@ -37,10 +37,10 @@ class FakeClient:
     def __call__(self, config, cache):
         return self
 
-    def pull(self, collection, *, min_year=None, force_rescan=False, progress=None,
-             announce=None):
+    def pull(self, collection, *, min_year=None, force_rescan=False, dry_run=False,
+             progress=None, announce=None):
         self.calls.append({"collection": collection, "min_year": min_year,
-                           "force_rescan": force_rescan})
+                           "force_rescan": force_rescan, "dry_run": dry_run})
         if announce is not None:
             announce("3f7a9c21")
         if progress is not None:
@@ -69,7 +69,8 @@ def test_pull_prints_the_batch_id_the_source_will_also_see(tmp_path, capsys, cli
 
 def test_pull_passes_the_configured_collection(tmp_path, client):
     main(["--config", _cfg(tmp_path), "pull", "archive_org"])
-    assert client.calls == [{"collection": "moe", "min_year": None, "force_rescan": False}]
+    assert client.calls == [{"collection": "moe", "min_year": None, "force_rescan": False,
+                             "dry_run": False}]
 
 
 def test_pull_force_rescan_reaches_the_client(tmp_path, client):
@@ -127,6 +128,26 @@ def test_pull_warns_loudly_when_the_listing_was_truncated(tmp_path, capsys, monk
     out = capsys.readouterr().out
     # An ingest over a truncated listing looks complete and is not, so this cannot be silent.
     assert "PREFIX of the collection" in out
+
+
+@pytest.mark.parametrize("flag", ["-n", "--dry-run", "--noop"])
+def test_every_spelling_of_dry_run_reaches_the_client(tmp_path, client, flag):
+    """Which one is "the" name is pure habit, and getting it wrong on the command whose whole
+    purpose is to be safe to try is a bad first experience."""
+    main(["--config", _cfg(tmp_path), "pull", "archive_org", flag])
+    assert client.calls[0]["dry_run"] is True
+
+
+def test_a_dry_pull_reports_the_cost_of_the_real_one(tmp_path, capsys, monkeypatch):
+    fake = FakeClient(PullResult(listed=4614, cached=392, planned=4222))
+    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    assert main(["--config", _cfg(tmp_path), "pull", "archive_org", "-n"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "4614 listed, 392 already cached, 4222 would be fetched" in out
+    # The number that turns "4222 items" into a decision.
+    assert "about 106 min" in out
+    # Honest about not being a zero-request mode: the listing did go out.
+    assert "No item metadata was requested" in out
 
 
 def test_pull_rejects_an_unknown_source(tmp_path, capsys, client):

@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 
 from ..config import Config, require_network_identity
@@ -73,6 +73,10 @@ class PullResult:
     listed: int = 0                        # DISTINCT identifiers the listing named
     fetched: int = 0
     cached: int = 0
+    # Items this run set out to fetch: everything listed that is not already cached. In a real
+    # run it equals fetched + missing, which a test asserts. In a dry run it is the whole point,
+    # because it is the number that says what the real run would cost the host.
+    planned: int = 0
     missing: tuple[str, ...] = ()          # identifiers archive.org 404'd
     # Listing docs carrying no identifier at all. Unfetchable and unnameable, so they get a count
     # rather than a list -- but a count, because an item in none of these is an item nobody misses.
@@ -297,7 +301,7 @@ class ArchiveOrgClient:
             page += 1
 
     def pull(self, collection: str, *, min_year: int | None = None, force_rescan: bool = False,
-             progress: Callable[[int, int], None] | None = None,
+             dry_run: bool = False, progress: Callable[[int, int], None] | None = None,
              announce: Callable[[str], None] | None = None) -> PullResult:
         """List ``collection`` and fetch the metadata for every item not already cached.
 
@@ -310,6 +314,12 @@ class ArchiveOrgClient:
         A 404 goes in ``missing`` rather than being cached as an empty item: an identifier the
         listing named and the metadata API does not have is worth saying out loud, and caching a
         stub would make the next run believe it already had the show.
+
+        ``dry_run`` stops after the listing and fetches no item metadata, so ``planned`` says what
+        a real run would cost without spending it. It is not a zero-request mode and does not
+        pretend to be: the listing is how this learns what is new, so a handful of search requests
+        still go out. That is the cheap half by three orders of magnitude, and skipping it would
+        mean answering "what would you do" with a guess.
         """
         require_network_identity(self._config)     # before the first byte leaves, not after
         with self._client.batch() as batch:
@@ -322,6 +332,11 @@ class ArchiveOrgClient:
             listing = self._list_pages(collection, min_year, force_rescan)
             todo = [doc for doc in listing.docs
                     if force_rescan or not self._cache.has(NAMESPACE, self._identifier(doc))]
+            result = PullResult(listed=len(listing.docs), planned=len(todo),
+                                cached=len(listing.docs) - len(todo),
+                                unidentified=listing.unidentified, truncated=listing.truncated)
+            if dry_run:
+                return result
             batch.begin("item", total=len(todo))
             fetched, missing = 0, []
             for index, doc in enumerate(todo, start=1):
@@ -331,9 +346,7 @@ class ArchiveOrgClient:
                     fetched += 1
                 if progress is not None:
                     progress(index, len(todo))
-        return PullResult(listed=len(listing.docs), fetched=fetched,
-                          cached=len(listing.docs) - len(todo), missing=tuple(missing),
-                          unidentified=listing.unidentified, truncated=listing.truncated)
+        return replace(result, fetched=fetched, missing=tuple(missing))
 
     def cached_items(self, collection: str, *, min_year: int | None = None) -> CachedItems:
         """Reassemble every cached show item. Never touches the network.

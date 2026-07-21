@@ -34,10 +34,27 @@ EXIT_DIAGNOSTIC = 2
 # silence for that long is indistinguishable from a hang.
 _PROGRESS_EVERY = 25
 
+# Seconds per item, for the estimate a dry run prints. MEASURED against archive.org (94 items in
+# 2m25s, then 4614 more), not computed from the configured delay: the delay is only the half we
+# control, and the round trip is the other half. An estimate, and labelled as one -- but a real
+# one, and the difference between "4222 items" and "about two hours" is the whole decision.
+_SECONDS_PER_ITEM = 1.5
+
 # Sources `slkit pull` knows how to fetch. Named here rather than derived from the config's
 # [sources.*] tables: a typo'd table name would otherwise become a source that silently does
 # nothing, and argparse can reject an unknown name with a usage line instead.
 _SOURCES = ("archive_org",)
+
+
+def _add_dry_run(parser: argparse.ArgumentParser, help_text: str) -> None:
+    """Add the show-me-what-you-would-do flag, under all three names people reach for.
+
+    One flag, three spellings, because which one is "the" name is pure habit and getting it
+    wrong on a command whose whole purpose is to be safe to try is a bad first experience. The
+    dest stays ``dry_run`` whichever they type.
+    """
+    parser.add_argument("-n", "--dry-run", "--noop", dest="dry_run", action="store_true",
+                        help=help_text)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -77,6 +94,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--min-year", type=int, metavar="YEAR",
         help="ignore shows played before YEAR (overrides min_year in config)",
     )
+    _add_dry_run(pull_cmd, "list the collection and report what a real run would fetch, "
+                           "without fetching any of it")
 
     ingest_cmd = sub.add_parser(
         "ingest", help="parse the cached raw data and publish the merged corpus")
@@ -87,8 +106,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest_cmd.add_argument("--min-year", type=int, metavar="YEAR",
                             help="the min_year the cache was pulled under, if not the configured "
                                  "one (a listing is cached per collection and min_year)")
-    ingest_cmd.add_argument("--dry-run", action="store_true",
-                            help="parse, merge and report, but write nothing to the database")
+    _add_dry_run(ingest_cmd, "parse, merge and report in full, but write nothing to the database")
     ingest_cmd.add_argument(
         "--force", action="store_true",
         help="publish even when the merge produced far fewer shows than are stored (see the "
@@ -202,9 +220,17 @@ def _cmd_pull(config, args) -> int:
 
     client = ArchiveOrgClient(config, RawCache(config.data_root))
     result = client.pull(collection, min_year=floor, force_rescan=args.force_rescan,
-                         progress=progress, announce=announce)
-    print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
-          f"{result.cached} already cached")
+                         dry_run=args.dry_run, progress=progress, announce=announce)
+    if args.dry_run:
+        minutes = result.planned * _SECONDS_PER_ITEM / 60
+        print(f"pull {args.source} (dry run): {result.listed} listed, "
+              f"{result.cached} already cached, {result.planned} would be fetched "
+              f"(about {minutes:.0f} min)")
+        print("  No item metadata was requested. The listing itself was, because that is how\n"
+              "  this learns what is new; it is a few requests against thousands.")
+    else:
+        print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
+              f"{result.cached} already cached")
     if result.missing:
         print(f"  {len(result.missing)} listed item(s) the metadata API does not have; "
               f"they are retried on the next pull:")

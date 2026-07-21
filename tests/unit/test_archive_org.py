@@ -206,6 +206,7 @@ def test_every_listed_item_lands_in_exactly_one_counter(tmp_path):
     result = _archive(tmp_path, transport).pull("moe")
     assert result.listed == 3 and result.unidentified == 1
     assert result.fetched + result.cached + len(result.missing) == result.listed
+    assert result.planned == result.fetched + len(result.missing)
 
 
 def test_pull_reports_a_listing_the_paging_backstop_cut_short(tmp_path):
@@ -248,6 +249,31 @@ def test_pull_identifies_its_run_and_its_progress_to_the_host(tmp_path):
     agents = [headers["User-Agent"] for _url, headers in transport.calls]
     assert agents[0] == f"{_UA} (batch {seen[0]}; listing 1)"
     assert agents[1] == f"{_UA} (batch {seen[0]}; item 1/1)"
+
+
+def test_a_dry_pull_lists_and_then_stops(tmp_path):
+    """The listing goes out; not one item request does. That is the expensive half by three
+    orders of magnitude, and it is the half a dry run exists to avoid spending."""
+    RawCache(tmp_path).put("archive_org", "have", json.dumps(_meta()).encode("utf-8"))
+    transport = FakeTransport(_page(3, "have", "new", "newer"))
+    result = _archive(tmp_path, transport).pull("moe", dry_run=True)
+
+    assert (result.listed, result.cached, result.planned) == (3, 1, 2)
+    assert (result.fetched, result.missing) == (0, ())
+    assert transport.urls == [transport.urls[0]]           # the listing, and nothing else
+    assert "advancedsearch" in transport.urls[0]
+    # And nothing was written, so a real run afterwards still has everything to do.
+    assert RawCache(tmp_path).get("archive_org", "new") is None
+
+
+def test_a_dry_pull_and_the_real_one_agree_about_what_is_left_to_do(tmp_path):
+    RawCache(tmp_path).put("archive_org", "have", json.dumps(_meta()).encode("utf-8"))
+    dry = _archive(tmp_path, FakeTransport(_page(3, "have", "new", "newer"))).pull(
+        "moe", dry_run=True)
+    real = _archive(tmp_path, FakeTransport(_page(3, "have", "new", "newer"),
+                                            _json_response(_meta()),
+                                            _json_response(_meta()))).pull("moe")
+    assert dry.planned == real.planned == real.fetched + len(real.missing)
 
 
 def test_pull_reports_progress(tmp_path):

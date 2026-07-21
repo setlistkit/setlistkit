@@ -53,6 +53,11 @@ NO_SHRINK_FRAC = 0.5
 # past. The first sentence says which show it was; the file says the rest.
 _REASON_WIDTH = 96
 
+# How many identifiers a per-item list prints before it summarises the rest. A report nobody can
+# read to the end is a report whose warnings are not read either. Never a silent truncation: the
+# count of what was cut is always printed.
+_MAX_LISTED = 12
+
 _SKIP_LABELS = {
     NOT_THIS_BAND: "title names a different band (a side project's tape)",
     NO_DATE: "no date we can believe",
@@ -219,8 +224,13 @@ def _report_cache(cached, collection: str, source: str) -> None:
     if cached.absent:
         print(f"  {len(cached.absent)} listed item(s) have no readable cached metadata, so their "
               "shows are NOT in this corpus:")
-        for identifier in cached.absent:
+        # Capped, and says what it capped. Run this against a half-finished pull of a real
+        # collection and the uncapped version prints four thousand identifiers, burying the two
+        # lines below that say what to do about them.
+        for identifier in cached.absent[:_MAX_LISTED]:
             print(f"    {identifier}")
+        if len(cached.absent) > _MAX_LISTED:
+            print(f"    ... and {len(cached.absent) - _MAX_LISTED} more")
         print("  An ordinary pull will not re-fetch these: it skips an identifier whose payload\n"
               "  file exists, and a truncated write exists. Use `--force-rescan` to replace them.")
     if cached.truncated:

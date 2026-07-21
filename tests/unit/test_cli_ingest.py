@@ -391,6 +391,22 @@ def test_an_item_with_no_readable_metadata_is_named_not_skipped(tmp_path, capsys
     assert "--force-rescan" in out
 
 
+def test_a_long_absent_list_is_capped_but_says_how_many_it_cut(tmp_path, capsys):
+    """Run this against a half-finished pull of a real collection and the uncapped version
+    prints four thousand identifiers, burying the two lines that say what to do about them."""
+    cache = RawCache(tmp_path / "state")
+    docs = [{"identifier": f"missing{n:04d}", "date": "2025-07-04", "title": "The Example"}
+            for n in range(30)]
+    cache.put("archive_org", "advancedsearch/example/None/p1",
+              json.dumps({"response": {"docs": docs, "numFound": 30}}).encode("utf-8"))
+    main(["--config", _cfg(tmp_path), "ingest", "-n"])
+    out = capsys.readouterr().out
+    assert "30 listed item(s) have no readable cached metadata" in out
+    assert "... and 18 more" in out
+    assert out.count("missing0") == 12
+    assert "--force-rescan" in out                  # the advice survives the cap
+
+
 def test_a_listing_that_promised_more_than_it_named_is_flagged(tmp_path, capsys):
     _cache(tmp_path, num_found=99)
     main(["--config", _cfg(tmp_path), "ingest"])
