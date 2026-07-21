@@ -27,6 +27,8 @@ import json
 import time
 import urllib.error
 import urllib.request
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -77,6 +79,43 @@ class SourceFormatError(SourceError):
     def __init__(self, url: str, detail: str) -> None:
         self.url = url
         super().__init__(f"{url} did not return usable JSON: {detail}")
+
+
+@dataclass
+class Batch:
+    """One bulk run's identity and progress, announced in the User-Agent of every request.
+
+    A pull of a whole collection is thousands of requests, and from the far end an anonymous
+    burst of thousands of identical User-Agents tells a sysadmin nothing: not whether it is one
+    job or twenty, not how far through it is, not whether it is about to stop. So each request
+    says which run it belongs to and where in that run it is::
+
+        famoe.ly/0.1 (+mailto:you@example.com; AI agent) (batch 3f7a9c21; item 100/4514)
+
+    Nobody asked for this. It is here because we are the ones spending someone else's bandwidth,
+    and a host that wants to rate-limit, correlate or complain about this traffic should not have
+    to reverse-engineer it from timestamps first. The batch id makes a run greppable in their
+    logs after the fact; the counter makes it obvious the run is finite and how finite.
+
+    A retry deliberately keeps the number it already had. A sysadmin seeing ``item 100/4514``
+    twice is being told it is one item being re-attempted, not two items being fetched, and that
+    is exactly the distinction a raw request count would destroy.
+    """
+
+    id: str
+    phase: str = "request"
+    total: int | None = None
+    sent: int = 0
+
+    def begin(self, phase: str, total: int | None = None) -> None:
+        """Start counting a new phase of the same run: the listing, then the items."""
+        self.phase, self.total, self.sent = phase, total, 0
+
+    def __str__(self) -> str:
+        # No total during a phase whose size is not yet known -- the listing is what discovers
+        # it. Claiming a denominator we have not computed would be the one dishonest option.
+        progress = f"{self.sent}/{self.total}" if self.total is not None else str(self.sent)
+        return f"batch {self.id}; {self.phase} {progress}"
 
 
 @dataclass(frozen=True)
@@ -137,6 +176,30 @@ class PoliteClient:
         self._delay = delay
         self._max_tries = max_tries
         self._default_max_age = default_max_age
+        self._batch: Batch | None = None
+
+    @contextmanager
+    def batch(self, batch_id: str | None = None):
+        """Scope a bulk run, so every request inside it identifies the run and its progress.
+
+        Outside a batch the User-Agent is exactly what the operator configured, unchanged. This
+        adds a second comment group rather than editing the first, because the configured string
+        belongs to the operator and this code has no business parsing it -- and because a
+        User-Agent is ``product *( RWS ( product / comment ) )``, so a second comment is the
+        syntactically correct place to put it.
+        """
+        previous = self._batch
+        self._batch = Batch(id=batch_id or uuid.uuid4().hex[:8])
+        try:
+            yield self._batch
+        finally:
+            self._batch = previous
+
+    def _user_agent(self) -> str:
+        """The configured identity, plus this run's id and progress when inside a batch."""
+        if self._batch is None:
+            return self._config.user_agent
+        return f"{self._config.user_agent} ({self._batch})"
 
     def fetch(self, key: str, url: str, *, force_rescan: bool = False,
               max_age: timedelta | None = None, accept: str = "application/json") -> bytes | None:
@@ -153,7 +216,12 @@ class PoliteClient:
         if cached is not None and not force_rescan and self._fresh(key, max_age):
             return cached
 
-        headers = {"User-Agent": self._config.user_agent, "Accept": accept}
+        # Counted here, past the cache check, because a cache hit sends nothing and must not
+        # advance a counter that claims to describe traffic. Counted once per item rather than
+        # once per HTTP request, so the retries inside _request all carry this same number.
+        if self._batch is not None:
+            self._batch.sent += 1
+        headers = {"User-Agent": self._user_agent(), "Accept": accept}
         self._add_conditional(key, headers, cached)
         resp = self._request(url, headers)
         if resp is None:

@@ -24,9 +24,11 @@ class FakeTransport:
     def __init__(self, *responses):
         self._queue = list(responses)
         self.urls = []
+        self.calls = []
 
     def __call__(self, url, headers):
         self.urls.append(url)
+        self.calls.append((url, dict(headers)))
         return self._queue.pop(0)
 
 
@@ -228,6 +230,24 @@ def test_pull_counts_a_listing_doc_with_no_identifier_instead_of_dropping_it(tmp
     result = _archive(tmp_path, transport).pull("moe")
     # Unfetchable, so it is not in `listed`; counted, so it is not nowhere.
     assert (result.listed, result.fetched, result.unidentified) == (1, 1, 1)
+
+
+def test_pull_identifies_its_run_and_its_progress_to_the_host(tmp_path):
+    """The listing phase has no denominator; the item phase counts only what will be requested.
+
+    An item already cached costs the host nothing, so it is not in the total. A denominator that
+    counted it would promise more traffic than the run is going to send.
+    """
+    RawCache(tmp_path).put("archive_org", "have", json.dumps(_meta()).encode("utf-8"))
+    transport = FakeTransport(_page(2, "have", "new"), _json_response(_meta()))
+    seen = []
+    archive = _archive(tmp_path, transport)
+    archive.pull("moe", announce=seen.append)
+
+    assert len(seen) == 1 and len(seen[0]) == 8            # the id, announced to our side too
+    agents = [headers["User-Agent"] for _url, headers in transport.calls]
+    assert agents[0] == f"{_UA} (batch {seen[0]}; listing 1)"
+    assert agents[1] == f"{_UA} (batch {seen[0]}; item 1/1)"
 
 
 def test_pull_reports_progress(tmp_path):

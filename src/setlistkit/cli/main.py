@@ -192,9 +192,14 @@ def _cmd_pull(config, args) -> int:
         if done % _PROGRESS_EVERY == 0 or done == total:
             print(f"  {done}/{total}")
 
+    def announce(batch_id: str) -> None:
+        # Printed so this run is greppable in OUR logs by the same id the source sees in theirs.
+        # A batch id only one side of the conversation knows is half a tracking id.
+        print(f"batch {batch_id} (sent in the User-Agent of every request this run)")
+
     client = ArchiveOrgClient(config, RawCache(config.data_root))
-    result = client.pull(collection, min_year=floor,
-                         force_rescan=args.force_rescan, progress=progress)
+    result = client.pull(collection, min_year=floor, force_rescan=args.force_rescan,
+                         progress=progress, announce=announce)
     print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
           f"{result.cached} already cached")
     if result.missing:

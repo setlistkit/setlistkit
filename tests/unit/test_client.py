@@ -226,6 +226,82 @@ def test_fetch_json_decodes_the_body(tmp_path):
     }
 
 
+# --- batch identity in the User-Agent ---------------------------------------------------------
+
+def _agents(transport):
+    """Every User-Agent the transport was asked with, in order."""
+    return [headers["User-Agent"] for _url, headers in transport.calls]
+
+
+def test_no_batch_leaves_the_configured_user_agent_exactly_as_written(tmp_path):
+    transport = FakeTransport(ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[])
+    client.fetch("a", "https://archive.org/metadata/a")
+    assert _agents(transport) == [_UA]
+
+
+def test_a_batch_appends_its_id_and_progress_as_a_second_comment(tmp_path):
+    transport = FakeTransport(ok(b"{}"), ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[])
+    with client.batch(batch_id="3f7a9c21") as batch:
+        batch.begin("item", total=2)
+        client.fetch("a", "https://archive.org/metadata/a")
+        client.fetch("b", "https://archive.org/metadata/b")
+    assert _agents(transport) == [f"{_UA} (batch 3f7a9c21; item 1/2)",
+                                  f"{_UA} (batch 3f7a9c21; item 2/2)"]
+
+
+def test_a_phase_with_no_known_size_claims_no_denominator(tmp_path):
+    """The listing is what discovers how many items there are. Claiming a total we have not
+    computed yet would be the one dishonest option available."""
+    transport = FakeTransport(ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[])
+    with client.batch(batch_id="3f7a9c21") as batch:
+        batch.begin("listing")
+        client.fetch("p1", "https://archive.org/advancedsearch.php?page=1")
+    assert _agents(transport) == [f"{_UA} (batch 3f7a9c21; listing 1)"]
+
+
+def test_a_retry_keeps_the_number_it_already_had(tmp_path):
+    """A host seeing "item 1/2" twice is being told one item was re-attempted, not that two
+    were fetched. A raw request count would destroy exactly that distinction."""
+    transport = FakeTransport(Response(429, {"Retry-After": "1"}, b""), ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[1, 0.75])
+    with client.batch(batch_id="3f7a9c21") as batch:
+        batch.begin("item", total=2)
+        client.fetch("a", "https://archive.org/metadata/a")
+    assert _agents(transport) == [f"{_UA} (batch 3f7a9c21; item 1/2)"] * 2
+
+
+def test_a_cache_hit_does_not_advance_the_counter(tmp_path):
+    """The counter describes traffic. An item served from the cache is not traffic."""
+    RawCache(tmp_path).put("archive_org", "a", b"{}")
+    transport = FakeTransport(ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[])
+    with client.batch(batch_id="3f7a9c21") as batch:
+        batch.begin("item", total=1)
+        client.fetch("a", "https://archive.org/metadata/a")     # cached: no request
+        client.fetch("b", "https://archive.org/metadata/b")
+    assert _agents(transport) == [f"{_UA} (batch 3f7a9c21; item 1/1)"]
+
+
+def test_the_batch_is_scoped_and_restores_what_it_replaced(tmp_path):
+    transport = FakeTransport(ok(b"{}"), ok(b"{}"))
+    client = _client(tmp_path, transport, sleeps=[])
+    with client.batch(batch_id="aaaaaaaa") as batch:
+        batch.begin("item", total=1)
+        client.fetch("a", "https://archive.org/metadata/a")
+    client.fetch("b", "https://archive.org/metadata/b")
+    assert _agents(transport) == [f"{_UA} (batch aaaaaaaa; item 1/1)", _UA]
+
+
+def test_a_generated_batch_id_is_eight_hex_characters(tmp_path):
+    client = _client(tmp_path, FakeTransport(), sleeps=[])
+    with client.batch() as batch:
+        assert len(batch.id) == 8
+        assert all(char in "0123456789abcdef" for char in batch.id)
+
+
 def test_fetch_json_names_a_200_that_is_not_json(tmp_path):
     """A site under maintenance answers 200 with an HTML page and no status says so.
 

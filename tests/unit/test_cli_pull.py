@@ -37,9 +37,12 @@ class FakeClient:
     def __call__(self, config, cache):
         return self
 
-    def pull(self, collection, *, min_year=None, force_rescan=False, progress=None):
+    def pull(self, collection, *, min_year=None, force_rescan=False, progress=None,
+             announce=None):
         self.calls.append({"collection": collection, "min_year": min_year,
                            "force_rescan": force_rescan})
+        if announce is not None:
+            announce("3f7a9c21")
         if progress is not None:
             progress(1, 1)
         return self.result
@@ -56,6 +59,12 @@ def test_pull_reports_what_it_fetched(tmp_path, capsys, client):
     assert main(["--config", _cfg(tmp_path), "pull", "archive_org"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "3 listed, 1 fetched, 2 already cached" in out
+
+
+def test_pull_prints_the_batch_id_the_source_will_also_see(tmp_path, capsys, client):
+    """A tracking id only one side of the conversation knows is half a tracking id."""
+    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    assert "batch 3f7a9c21" in capsys.readouterr().out
 
 
 def test_pull_passes_the_configured_collection(tmp_path, client):

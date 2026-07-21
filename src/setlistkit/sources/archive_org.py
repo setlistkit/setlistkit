@@ -297,7 +297,8 @@ class ArchiveOrgClient:
             page += 1
 
     def pull(self, collection: str, *, min_year: int | None = None, force_rescan: bool = False,
-             progress: Callable[[int, int], None] | None = None) -> PullResult:
+             progress: Callable[[int, int], None] | None = None,
+             announce: Callable[[str], None] | None = None) -> PullResult:
         """List ``collection`` and fetch the metadata for every item not already cached.
 
         The expensive half is one metadata request per item, so an identifier already in the
@@ -311,17 +312,25 @@ class ArchiveOrgClient:
         stub would make the next run believe it already had the show.
         """
         require_network_identity(self._config)     # before the first byte leaves, not after
-        listing = self._list_pages(collection, min_year, force_rescan)
-        todo = [doc for doc in listing.docs
-                if force_rescan or not self._cache.has(NAMESPACE, self._identifier(doc))]
-        fetched, missing = 0, []
-        for index, doc in enumerate(todo, start=1):
-            if self.metadata(self._identifier(doc), force_rescan=force_rescan) is None:
-                missing.append(self._identifier(doc))
-            else:
-                fetched += 1
-            if progress is not None:
-                progress(index, len(todo))
+        with self._client.batch() as batch:
+            if announce is not None:
+                announce(batch.id)
+            # The listing is what discovers how many items there are, so its own phase carries no
+            # denominator. The item phase does, and it counts only what will actually be
+            # requested: an item already cached costs the host nothing and is not in the total.
+            batch.begin("listing")
+            listing = self._list_pages(collection, min_year, force_rescan)
+            todo = [doc for doc in listing.docs
+                    if force_rescan or not self._cache.has(NAMESPACE, self._identifier(doc))]
+            batch.begin("item", total=len(todo))
+            fetched, missing = 0, []
+            for index, doc in enumerate(todo, start=1):
+                if self.metadata(self._identifier(doc), force_rescan=force_rescan) is None:
+                    missing.append(self._identifier(doc))
+                else:
+                    fetched += 1
+                if progress is not None:
+                    progress(index, len(todo))
         return PullResult(listed=len(listing.docs), fetched=fetched,
                           cached=len(listing.docs) - len(todo), missing=tuple(missing),
                           unidentified=listing.unidentified, truncated=listing.truncated)

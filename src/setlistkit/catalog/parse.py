@@ -39,6 +39,7 @@ from __future__ import annotations
 import functools
 import html
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -227,11 +228,37 @@ class Skipped:
 
 
 @dataclass(frozen=True)
+class Census:
+    """Every cleaned token the parser met, and what became of it.
+
+    This is what the corpus-aware checks in ``slkit pack lint`` need, and it is emphatically NOT
+    the stored corpus. A junk or gear rule DROPS what it matches, so by the time a show reaches
+    the database every token those rules ever removed is gone from it. A check that asked "does
+    this pattern match anything in the corpus" against the stored shows would find nothing for
+    every rule, on every pack, forever -- and would report all of them dead while running clean.
+    That is the same shape as a filter test written above the set header: it does not fail, it
+    just never fires.
+
+    So the parser records what it actually saw. Counters rather than lists, so a full collection
+    stays small and a finding can say how many times a rule earned its place rather than only
+    that it did.
+
+    ``seen`` is every token BEFORE canonicalization, which is the form the drop rules and the
+    alias keys are both written against.
+    """
+
+    seen: Counter = field(default_factory=Counter)
+    dropped: Counter = field(default_factory=Counter)     # tokens no rule let through
+    tagged: Counter = field(default_factory=Counter)      # tokens a classifier called not-music
+
+
+@dataclass(frozen=True)
 class ParseResult:
-    """Every show a source yielded, and every item it refused."""
+    """Every show a source yielded, every item it refused, and everything it met on the way."""
 
     shows: list[dict] = field(default_factory=list)
     skipped: tuple[Skipped, ...] = ()
+    census: Census = field(default_factory=Census)
 
 
 @dataclass(frozen=True)
@@ -284,6 +311,11 @@ class _Rules:
     """
 
     normalizer: Normalizer
+    # Filled as the parse runs. On _Rules rather than threaded through four signatures, and
+    # always collected rather than switched on by a flag: a census gathered only in "lint mode"
+    # is a census that is empty exactly when someone forgot, and an empty one reports every rule
+    # in the pack as dead.
+    census: Census
     vocab: Mapping[str, str]
     # The pack's normalized-spelling -> canonical map, read for membership only. An alias key
     # is the pack declaring "this taper spelling IS that song", which makes it exactly as much
@@ -355,6 +387,7 @@ def _rules_for(normalizer: Normalizer, policy: ArchivePolicy) -> _Rules:
     """Compile ``policy`` against ``normalizer`` once."""
     _, norm_to_canon = normalizer.build_vocab()
     return _Rules(normalizer=normalizer,
+                  census=Census(),
                   vocab=norm_to_canon,
                   aliases=normalizer.aliases(),
                   junk=_junk_pattern(tuple(policy.junk_patterns)),
@@ -463,26 +496,38 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
         piece = re.sub(r"\s*&+\s*$", "", piece).strip(" .,-:")
         if not piece:
             continue
+        # Recorded before anything can remove it. This is the only place the raw token exists;
+        # every branch below either drops it or rewrites it into a canonical name.
+        rules.census.seen[piece] += 1
         # One guard, ahead of every rule that DROPS. Asked once and reused, so a title the pack
         # claims cannot be deleted by the shape gate, the gear words, the annotation filter, a
         # credit line or a crew role -- previously only the first two deferred to it.
         claimed = _claimed(piece, rules)
         if not claimed:
             if not _looks_songlike(piece, rules):
+                rules.census.dropped[piece] += 1
                 continue
             if CREDIT.search(piece) or CREW_ROLE.search(piece):
+                rules.census.dropped[piece] += 1
                 continue
             if rules.junk.search(piece) or URLISH.search(piece):
+                rules.census.dropped[piece] += 1
                 continue
         canon, canon_seg = rules.normalizer.canonicalize(piece)
         if not canon:
+            rules.census.dropped[piece] += 1
             continue
         non_song = rules.normalizer.is_non_song(canon)
         # An unknown title we are keeping AS A SONG has to look like one: short, no digits.
         # Non-songs skip this gate because they are already labelled for what they are.
         if not non_song and rules.normalizer.normalize(canon) not in rules.vocab:
             if len(canon.split()) > 5 or re.search(r"\d", canon):
+                rules.census.dropped[piece] += 1
                 continue
+        if non_song:
+            # Against the RAW piece, not the canonical name: a classifier is matched against the
+            # squashed entry, and the census is what lint holds its patterns against.
+            rules.census.tagged[piece] += 1
         songs.append({"song": canon, "segue": bool(seg_after or canon_seg), "non_song": non_song})
 
 
@@ -748,4 +793,5 @@ def parse_archive_items(items: Iterable[Mapping[str, Any]], *, normalizer: Norma
         else:
             shows.append(record)
     return ParseResult(shows=sorted(shows, key=lambda rec: (rec["date"], rec["identifier"])),
-                       skipped=tuple(sorted(skipped, key=lambda s: s.identifier)))
+                       skipped=tuple(sorted(skipped, key=lambda s: s.identifier)),
+                       census=rules.census)
