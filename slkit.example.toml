@@ -17,8 +17,11 @@ data_root = "~/setlistkit-data"
 user_agent = "CHANGE-ME (setlistkit; you@example.com)"
 
 [catalog]
-# The band pack: identity, vocabulary, aliases, and classifier rules — data, not code.
-pack = "packs/moe"
+# The band pack: identity, vocabulary, aliases, and classifier rules — data you own, not
+# code shipped with the tool. Point this at your pack directory; a relative path is anchored
+# at this config file's directory. Copy examples/packs/example to start your own, and run
+# `slkit pack lint` before you trust it.
+pack = "../moe-pack"
 
 [sources.archive_org]
 collection = "moe"

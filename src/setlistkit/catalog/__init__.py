@@ -7,7 +7,8 @@ graph and normalizer that stands on its own. It therefore imports nothing from `
 ``picks``, or ``report`` — a rule enforced by a test. (Populated in a later phase.)
 """
 
+from .lint import lint
 from .normalizer import Normalizer
 from .pack import Pack, load_pack
 
-__all__ = ["Normalizer", "Pack", "load_pack"]
+__all__ = ["Normalizer", "Pack", "load_pack", "lint"]

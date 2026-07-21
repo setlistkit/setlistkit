@@ -12,11 +12,15 @@ which is enough to exercise config resolution and the diagnostic renderer end to
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+from pathlib import Path
 
 from .. import __version__
+from ..catalog.lint import lint
 from ..config import load_config, require_network_identity
-from ..diagnostics import DiagnosticError, render
+from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
 from ..store import Store
 
 EXIT_OK = 0
@@ -48,6 +52,18 @@ def _build_parser() -> argparse.ArgumentParser:
     store_sub.add_parser("status", help="show schema version and table counts")
 
     sub.add_parser("dump", help="print a plain-text view of derived state")
+
+    pack_cmd = sub.add_parser("pack", help="work with band packs")
+    pack_sub = pack_cmd.add_subparsers(dest="pack_action")
+    lint_cmd = pack_sub.add_parser("lint", help="validate a pack and run conformance checks")
+    lint_cmd.add_argument(
+        "--pack", metavar="PATH",
+        help="pack directory to lint (overrides [catalog] pack in config)",
+    )
+    lint_cmd.add_argument(
+        "--format", choices=("human", "json"), default="human",
+        help="output format (default: human)",
+    )
 
     return parser
 
@@ -99,8 +115,53 @@ def _cmd_dump(config) -> int:
     return EXIT_OK
 
 
+def _resolve_pack_dir(pack_arg, config_arg) -> Path:
+    """The pack directory to work on: the ``--pack`` flag, else ``[catalog] pack`` in config.
+
+    A relative configured path is anchored at the config file's directory, so a committed
+    downstream config points at the same pack no matter where ``slkit`` runs from.
+    """
+    if pack_arg:
+        return Path(pack_arg).expanduser().resolve()
+    config = load_config(config_arg)
+    configured = config.section("catalog").get("pack")
+    if not configured:
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary="no pack to lint",
+            path=str(config.source_path),
+            detail="Pass --pack PATH, or set [catalog] pack in your config to a pack directory.",
+        ))
+    path = Path(os.path.expanduser(str(configured)))
+    if not path.is_absolute():
+        path = config.source_path.parent / path
+    return path.resolve()
+
+
+def _cmd_pack_lint(args) -> int:
+    """Lint the resolved pack, reporting findings as human text or JSON with an honest code."""
+    pack_dir = _resolve_pack_dir(getattr(args, "pack", None), args.config)
+    try:
+        diagnostics = lint(pack_dir)
+    except DiagnosticError as exc:
+        diagnostics = [exc.diagnostic]     # a structural failure is itself the one finding
+
+    if getattr(args, "format", "human") == "json":
+        print(json.dumps([diag.to_dict() for diag in diagnostics], indent=2))
+    else:
+        for diag in diagnostics:
+            print(render(diag))
+            print()
+        errors = sum(1 for diag in diagnostics if diag.is_error)
+        print(f"{pack_dir}: {errors} error(s), {len(diagnostics) - errors} other finding(s)")
+
+    return EXIT_DIAGNOSTIC if any(diag.is_error for diag in diagnostics) else EXIT_OK
+
+
 def _run(args) -> int:
     """Dispatch a parsed command. Assumes a command is present."""
+    if args.command == "pack":
+        return _cmd_pack_lint(args)          # resolves config lazily, only if --pack is absent
     config = load_config(args.config)
     if args.command == "config":
         if args.config_action == "check":
