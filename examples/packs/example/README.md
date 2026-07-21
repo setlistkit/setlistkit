@@ -43,6 +43,18 @@ data you own.
 
   A fragment here is never anchored — it is folded into an alternation and bounded by non-word
   edges — so unlike a classifier there is no bare-string form. Write the object, say the why.
+
+  **A rule that cannot say why it exists does not get grandfathered in — delete it.** This is
+  the one place the "say why" requirement has teeth beyond documentation. If you are porting
+  rules from an older tool and you find one nobody can explain, the cautious-looking move is to
+  keep it because removing it is a change without evidence. That reasoning is backwards here.
+  Everything in `corpus.json` **drops** what it matches, removing an entry without recording
+  that anything was there, and the vocabulary guard only defends titles your pack already
+  names — so the only thing an unexplained rule can eat is a song nobody has written down yet,
+  which is exactly the loss nothing downstream can detect or undo. "I'm not sure what this
+  does" and "this silently deletes data" are a bad pair to hold at once. Delete it, and if the
+  problem it was quietly solving ever resurfaces, you will have a real example to write the
+  replacement rule against — which is a better entry than the one you removed.
 - **`overrides.json`** — whole nights someone confirmed by ear, for when every parser was wrong
   at once. Optional, and not in this example because a made-up one would teach the wrong habit:
   an entry here goes in only after you have listened.
