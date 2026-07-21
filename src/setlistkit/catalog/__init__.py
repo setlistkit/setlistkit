@@ -15,9 +15,11 @@ from .normalizer import Normalizer
 from .pack import CorpusPolicy, Pack, load_pack
 from .parse import (ArchivePolicy, count_songs, parse_archive_item, parse_archive_items,
                     title_band_filter)
+from .showtypes import ACOUSTIC, ALTEREGO, ELECTRIC, MIXED, ShowType, show_types
 
-__all__ = ["COMPLETE_FRAC", "DEFAULT_RANKS", "ArchivePolicy", "CorpusPolicy", "MergePolicy",
-           "MergeResult", "Normalizer", "Pack", "SongFeature", "apply_overrides", "count_songs",
-           "lint", "load_pack", "merge_shows", "override_disagreements",
-           "overrides_from_mapping", "parse_archive_item", "parse_archive_items", "pick_show",
+__all__ = ["ACOUSTIC", "ALTEREGO", "COMPLETE_FRAC", "DEFAULT_RANKS", "ELECTRIC", "MIXED",
+           "ArchivePolicy", "CorpusPolicy", "MergePolicy", "MergeResult", "Normalizer", "Pack",
+           "ShowType", "SongFeature", "apply_overrides", "count_songs", "lint", "load_pack",
+           "merge_shows", "override_disagreements", "overrides_from_mapping",
+           "parse_archive_item", "parse_archive_items", "pick_show", "show_types",
            "song_features", "title_band_filter"]
