@@ -41,7 +41,7 @@ import html
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .normalizer import Normalizer, squash
@@ -250,6 +250,21 @@ class Census:
     seen: Counter = field(default_factory=Counter)
     dropped: Counter = field(default_factory=Counter)     # tokens no rule let through
     tagged: Counter = field(default_factory=Counter)      # tokens a classifier called not-music
+    # pattern string -> the tokens that rule actually matched, recorded AS IT HAPPENED.
+    #
+    # Attribution rather than re-derivation, and the difference is not academic. A check that
+    # asks "would this pattern match this token" afterwards has to reconstruct what the runtime
+    # fed it, and that reconstruction was wrong the first time it was written: a classifier is
+    # matched against squash(CANONICAL name), not the raw token, so `^setbreak$` was reported
+    # dead while it was tagging every "Set Break [crowd noise]" in the corpus -- and the finding
+    # said to delete it. Deleting it turns "Set Break" into a song. This records the answer
+    # instead of guessing it, which also makes the gates free: a rule the vocabulary guard or
+    # is_protected prevented from ever firing simply never appears here.
+    fired: dict[str, Counter] = field(default_factory=dict)
+
+    def record(self, pattern: str, token: str) -> None:
+        """Note that ``pattern`` matched ``token``."""
+        self.fired.setdefault(pattern, Counter())[token] += 1
 
 
 @dataclass(frozen=True)
@@ -325,6 +340,11 @@ class _Rules:
     junk: re.Pattern
     gear: re.Pattern
     credit_tail: re.Pattern
+    # The same fragments again, one compiled pattern each, so a match against the combined
+    # alternation above can be attributed to the fragment responsible. Only consulted after the
+    # combined pattern has already fired, so the cost is per drop and not per token.
+    junk_each: tuple[tuple[str, re.Pattern], ...] = ()
+    gear_each: tuple[tuple[str, re.Pattern], ...] = ()
 
 
 def fragment_pattern(*fragments: str) -> re.Pattern:
@@ -392,7 +412,30 @@ def _rules_for(normalizer: Normalizer, policy: ArchivePolicy) -> _Rules:
                   aliases=normalizer.aliases(),
                   junk=_junk_pattern(tuple(policy.junk_patterns)),
                   gear=_gear_pattern(tuple(policy.gear_patterns)),
-                  credit_tail=_credit_tail_pattern(policy.band_name))
+                  credit_tail=_credit_tail_pattern(policy.band_name),
+                  junk_each=_each(policy.junk_patterns),
+                  gear_each=_each(policy.gear_patterns))
+
+
+def _each(fragments: Iterable[str]) -> tuple[tuple[str, re.Pattern], ...]:
+    """Each pack fragment compiled on its own, bounded the way the combined filter bounds it."""
+    return tuple((fragment, fragment_pattern(fragment)) for fragment in fragments)
+
+
+def _merge_census(into: Census, other: Census) -> None:
+    """Fold a scratch census into the run's. Used when a second parse attempt wins its item."""
+    into.seen.update(other.seen)
+    into.dropped.update(other.dropped)
+    into.tagged.update(other.tagged)
+    for pattern, tokens in other.fired.items():
+        into.fired.setdefault(pattern, Counter()).update(tokens)
+
+
+def _attribute(census: Census, each: tuple[tuple[str, re.Pattern], ...], token: str) -> None:
+    """Record which pack fragment(s) matched ``token``. Called only after the filter has fired."""
+    for fragment, compiled in each:
+        if compiled.search(token):
+            census.record(fragment, token)
 
 
 def title_band_filter(band_name: str) -> Callable[[Mapping[str, Any]], bool]:
@@ -473,6 +516,7 @@ def _looks_songlike(token: str, rules: _Rules) -> bool:
     if not 1 <= len(words) <= 8:
         return False
     if rules.gear.search(token):
+        _attribute(rules.census, rules.gear_each, token)
         return False
     letters = sum(char.isalpha() for char in token)
     return letters >= max(2, 0.5 * len(token.replace(" ", "")))
@@ -511,6 +555,7 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
                 rules.census.dropped[piece] += 1
                 continue
             if rules.junk.search(piece) or URLISH.search(piece):
+                _attribute(rules.census, rules.junk_each, piece)
                 rules.census.dropped[piece] += 1
                 continue
         canon, canon_seg = rules.normalizer.canonicalize(piece)
@@ -525,9 +570,13 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
                 rules.census.dropped[piece] += 1
                 continue
         if non_song:
-            # Against the RAW piece, not the canonical name: a classifier is matched against the
-            # squashed entry, and the census is what lint holds its patterns against.
             rules.census.tagged[piece] += 1
+            # Attributed against CANON, because canon is what is_non_song was just asked about --
+            # and the raw piece is a different string, which is exactly how the first version of
+            # this got it wrong. The token recorded is still the raw one, so every census reads
+            # in the same key space.
+            for pattern in rules.normalizer.firing_non_song_patterns(canon):
+                rules.census.record(pattern, piece)
         songs.append({"song": canon, "segue": bool(seg_after or canon_seg), "non_song": non_song})
 
 
@@ -740,9 +789,15 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules,
                                       places=_place_terms(item, rules.normalizer))
     source = "description"
     if count_songs(sets, encore) < _WEAK_PARSE:
-        track_sets, track_encore = _parse_tracks(item.get("tracks"), rules)
+        # The tracklist attempt censuses into a scratch, which is folded in only if it WINS.
+        # Both parses usually cover the same show, so counting both put every token of every
+        # weak-parse item in twice -- which moved titles across the unknown-title reporting
+        # floor and reordered a ranking whose whole job is to say which one to fix first.
+        attempt = replace(rules, census=Census())
+        track_sets, track_encore = _parse_tracks(item.get("tracks"), attempt)
         if count_songs(track_sets, track_encore) > count_songs(sets, encore):
             sets, encore, source = track_sets, track_encore, "tracks"
+            _merge_census(rules.census, attempt.census)
     return {"date": date, "year": date[:4], "sets": sets, "encore": encore,
             "n_songs": count_songs(sets, encore), "source": source,
             "identifier": str(item.get("identifier") or "")}

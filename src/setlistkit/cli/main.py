@@ -124,6 +124,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format", choices=("human", "json"), default="human",
         help="output format (default: human)",
     )
+    lint_cmd.add_argument(
+        "--no-corpus", action="store_true",
+        help="skip the checks that read the cached corpus (dead rules, redundant rules, "
+             "unreachable aliases, unknown titles)",
+    )
 
     return parser
 
@@ -267,11 +272,50 @@ def _cmd_pull(config, args) -> int:
     return EXIT_OK
 
 
+def _lint_corpus(args) -> list:
+    """The cached source items to lint against, or empty when there is no usable cache.
+
+    Best-effort by design. ``pack lint --pack PATH`` has always worked with no config at all, and
+    a pack author checking their own file should not be made to configure a data_root first. When
+    there is no corpus the checks that need one report themselves skipped, which is the honest
+    outcome and not a failure.
+    """
+    if getattr(args, "no_corpus", False):
+        return []
+    # Absence is fine; malformed is not, and only the first is swallowed. No config file at all,
+    # or a config with no source configured, are both ordinary states -- `pack lint --pack PATH`
+    # has always worked with neither, and a pack author checking their own file should not have
+    # to set up a data_root first. A config that EXISTS and is wrong is a different thing: a
+    # quoted min_year or unreadable TOML is a fault `slkit ingest` treats as fatal, and
+    # swallowing it here told the user to run a pull they had already run while hiding the
+    # reason it did not take.
+    try:
+        config = load_config(args.config)
+    except DiagnosticError:
+        return []
+    if not str(config.section("sources", "archive_org").get("collection") or "").strip():
+        return []
+    collection = required_setting(config, ("sources", "archive_org"), "collection", "")
+    cached = ArchiveOrgClient(config, RawCache(config.data_root)).cached_items(
+        collection, min_year=min_year(config, "archive_org", None))
+    if cached.truncated or cached.absent:
+        # The same facts `slkit ingest` refuses to publish over. A lint run against a fragment of
+        # the corpus reports most of a pack dead and ranks its unknown titles against a fraction
+        # of the real play counts -- and every one of those findings recommends deletion.
+        print(f"warning: the cached corpus is incomplete ({len(cached.absent)} listed item(s) "
+              f"unreadable"
+              f"{', listing truncated' if cached.truncated else ''}).\n"
+              "  Corpus-aware findings below are measured against what is cached, not against "
+              "the collection.\n  Finish `slkit pull archive_org` before deleting anything on "
+              "their say-so.", file=sys.stderr)
+    return cached.items
+
+
 def _cmd_pack_lint(args) -> int:
     """Lint the resolved pack, reporting findings as human text or JSON with an honest code."""
     pack_dir = resolve_pack_dir(getattr(args, "pack", None), args.config)
     try:
-        diagnostics = lint(pack_dir)
+        diagnostics = lint(pack_dir, _lint_corpus(args))
     except DiagnosticError as exc:
         diagnostics = [exc.diagnostic]     # a structural failure is itself the one finding
 

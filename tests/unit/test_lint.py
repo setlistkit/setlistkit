@@ -228,3 +228,226 @@ def test_a_title_in_both_protected_and_vocabulary_earns_one_finding(tmp_path):
         "protected.json": '["ATL"]',
         "corpus.json": '{"junk_patterns": [{"pattern": "atl", "why": "a taper note"}]}'})
     assert len(_warnings(lint(pack))) == 1
+
+
+# --- corpus-aware checks --------------------------------------------------------------------
+#
+# These need a corpus, and specifically they need the tokens the PARSER MET rather than the shows
+# that reached the database. A junk or gear rule drops what it matches, so anything held against
+# the stored shows would find nothing for every rule, on every pack, forever -- and report them
+# all dead while running perfectly clean.
+
+VOCAB = '["Aurora", "Wormhole", "Jamboree"]'
+
+
+def _item(description, identifier="t1", date="2025-07-04"):
+    return {"identifier": identifier, "date": date,
+            "title": f"The Band Live at Northlands on {date}",
+            "description": description}
+
+
+def _summaries(diagnostics):
+    return [diag.summary for diag in diagnostics]
+
+
+def test_a_rule_that_matches_nothing_in_the_corpus_is_reported(tmp_path):
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$", "^neveroccurs$"]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Setbreak\n03. Wormhole\n")])
+    assert any("/^neveroccurs$/ matches nothing" in s for s in _summaries(found))
+    # ...and the rule that DID fire is not reported
+    assert not any("/^setbreak$/ matches nothing" in s for s in _summaries(found))
+
+
+def test_a_junk_rule_is_judged_on_what_it_dropped_not_on_what_survived(tmp_path):
+    """The trap this whole design exists to avoid.
+
+    A junk rule DROPS its matches, so they never reach the corpus. Held against the stored shows
+    this rule looks dead; held against what the parser met, it is plainly working.
+    """
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "corpus.json": json.dumps({"junk_patterns": [
+            {"pattern": "bootleg\\s+notice", "why": "a taper's boilerplate"}]})})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Bootleg Notice\n03. Wormhole\n")])
+    assert not any("matches nothing" in s for s in _summaries(found))
+
+
+def test_a_rule_fully_covered_by_a_wider_one_names_the_narrow_one(tmp_path):
+    """`set` also reaches "Sunset", so `^setbreak$` is a strict subset of it and is the redundant
+    one. Direction matters: naming the wider rule would tell an author to delete the useful one."""
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$", {"pattern": "set",'
+                            ' "why": "wider, catches everything the anchored one does"}]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Setbreak\n03. Sunset\n")])
+    covered = [s for s in _summaries(found) if "fully covered by" in s]
+    assert covered == ["rule /^setbreak$/ is fully covered by /set/"]
+
+
+def test_two_rules_matching_exactly_the_same_titles_are_reported_once(tmp_path):
+    """Interchangeable in this corpus, so which one is "redundant" is arbitrary -- but saying it
+    twice describes one problem as two."""
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$", {"pattern": "setbreak",'
+                            ' "why": "the same thing, unanchored"}]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Setbreak\n03. Wormhole\n")])
+    assert len([s for s in _summaries(found) if "fully covered by" in s]) == 1
+
+
+def test_an_alias_nobody_writes_is_reported_and_one_in_use_is_not(tmp_path):
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "aliases.json": '{"the hole": "Wormhole", "nobody writes this": "Aurora"}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. The Hole\n")])
+    assert any("alias 'nobody writes this' matches nothing" in s for s in _summaries(found))
+    assert not any("alias 'the hole'" in s for s in _summaries(found))
+
+
+def test_a_title_the_pack_does_not_know_is_reported_with_its_play_count(tmp_path):
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    items = [_item("Set 1:\n01. Aurora\n02. Mystery Song\n", identifier=f"t{n}",
+                   date=f"2025-07-{n:02d}") for n in range(1, 11)]
+    found = lint(pack, items)
+    unknown = [d for d in found if "not in the vocabulary" in d.summary]
+    assert len(unknown) == 1
+    assert "Mystery Song" in unknown[0].detail
+    assert "Aurora" not in unknown[0].detail            # in the vocabulary, so not a finding
+
+
+def test_spelling_variants_of_one_unknown_title_are_counted_as_one_song(tmp_path):
+    """Counted by normalized key, not by the spelling that reached the corpus.
+
+    An unknown title has no canonical form to collapse onto, so canonicalize falls through to the
+    display text and one song arrives under several names. Counting those separately reports twice
+    as many unknowns as exist and halves the play count of each -- backwards on both axes, since
+    the finding is ranked by frequency precisely to say which one to fix first.
+    """
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    spellings = ["Sticks and Stones", "Sticks & Stones", "sticks and stones"]
+    items = [_item(f"Set 1:\n01. Aurora\n02. {spellings[n % 3]}\n", identifier=f"t{n}",
+                   date=f"2025-07-{n + 1:02d}") for n in range(9)]
+    found = lint(pack, items)
+    detail = next(d for d in found if "not in the vocabulary" in d.summary).detail
+    assert "9  Sticks and Stones (also:" in detail      # one song, nine plays, not three of three
+    assert "1 title(s)" in next(d.summary for d in found if "not in the vocabulary" in d.summary)
+
+
+def test_a_dropped_token_is_not_an_unknown_song(tmp_path):
+    """Something a rule removed is not a song the pack is missing, it is a rule doing its job."""
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "corpus.json": json.dumps({"junk_patterns": [
+            {"pattern": "bootleg\\s+notice", "why": "a taper's boilerplate"}]})})
+    items = [_item("Set 1:\n01. Aurora\n02. Bootleg Notice\n", identifier=f"t{n}",
+                   date=f"2025-07-{n + 1:02d}") for n in range(10)]
+    found = lint(pack, items)
+    assert not any("not in the vocabulary" in d.summary for d in found)
+
+
+def test_a_tagged_non_song_is_not_an_unknown_song(tmp_path):
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$"]}'})
+    items = [_item("Set 1:\n01. Aurora\n02. Setbreak\n", identifier=f"t{n}",
+                   date=f"2025-07-{n + 1:02d}") for n in range(10)]
+    found = lint(pack, items)
+    assert not any("not in the vocabulary" in d.summary for d in found)
+
+
+def test_a_one_off_unknown_title_is_below_the_reporting_floor(tmp_path):
+    """The long tail is mostly typos and unnamed jams. Reporting all of it buries the real ones."""
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Played Once Ever\n")])
+    assert not any("not in the vocabulary" in d.summary for d in found)
+
+
+def test_corpus_checks_report_themselves_skipped_without_a_corpus(tmp_path):
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    assert any("corpus-aware checks skipped" in s for s in _summaries(lint(pack)))
+    assert not any("corpus-aware checks skipped" in s
+                   for s in _summaries(lint(pack, [_item("Set 1:\n01. Aurora\n")])))
+
+
+def test_corpus_findings_are_warnings_not_errors(tmp_path):
+    """None of them is a broken pack, and a lint that fails CI over a dead rule gets ignored."""
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^neveroccurs$"]}',
+        "aliases.json": '{"nobody writes this": "Aurora"}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n")])
+    assert len(_errors(found)) == 0
+    assert len(found) >= 2
+
+
+def test_a_classifier_that_fires_on_an_annotated_title_is_not_reported_dead(tmp_path):
+    """The bug this module was built to prevent, committed by this module.
+
+    A classifier is matched against the squashed CANONICAL name, not the raw token. Re-deriving
+    the question in lint asked it of the wrong string: `^setbreak$` tagged every
+    "Set Break [crowd noise]" in the real corpus and was reported dead, and the finding said to
+    delete it. Deleting it turns "Set Break" into a song.
+    """
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$", "^neveroccurs$"]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Set Break [crowd noise]\n")])
+    assert not any("/^setbreak$/ matches nothing" in s for s in _summaries(found))
+    # ...and the genuinely dead one beside it is still caught, so this is not just "the check
+    # got deleted".
+    assert any("/^neveroccurs$/ matches nothing" in s for s in _summaries(found))
+
+
+def test_a_classifier_shadowed_by_a_protected_title_is_reported_dead(tmp_path):
+    """is_non_song checks is_protected FIRST, so this rule can never fire on anything, ever.
+
+    Re-matching the pattern would report it alive; reading what actually fired reports the truth.
+    """
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "protected.json": '["Aurora"]',
+        "classifiers.json": '{"non_song": ["^aurora$"]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Wormhole\n")])
+    assert any("/^aurora$/ matches nothing" in s for s in _summaries(found))
+
+
+def test_two_identical_patterns_are_reported_as_redundant(tmp_path):
+    """The most literal redundancy a pack can contain, and a lexicographic tie-break could not
+    see it: pattern <= pattern is true in both directions, so both halves skipped."""
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+        "classifiers.json": '{"non_song": ["^setbreak$", "^setbreak$"]}'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Setbreak\n")])
+    assert len([s for s in _summaries(found) if "fully covered by" in s]) == 1
+
+
+def test_the_rule_written_first_is_the_one_kept(tmp_path):
+    """Source order, not pattern spelling. A lexicographic tie-break reads as source order and
+    is not, so which rule an author was told to delete depended on the alphabet."""
+    both = '{"non_song": [{"pattern": "%s", "why": "x"}, {"pattern": "%s", "why": "y"}]}'
+    for first, second in (("setbreak", "setbrea"), ("setbrea", "setbreak")):
+        (tmp_path / first).mkdir()
+        pack = _write_pack(tmp_path / first, **{
+            "pack.json": IDENTITY, "vocabulary.json": VOCAB,
+            "classifiers.json": both % (first, second)})
+        found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Setbreak\n")])
+        covered = [s for s in _summaries(found) if "fully covered by" in s]
+        assert covered == [f"rule /{second}/ is fully covered by /{first}/"], covered
+
+
+def test_a_weak_description_parse_does_not_count_its_tracklist_twice(tmp_path):
+    """The tracklist attempt only runs when the description parse is thin, and its census is
+    folded in only if it WINS. Both usually cover the same show, so counting both put every
+    token of every weak-parse item in twice -- moving titles across the reporting floor and
+    reordering a ranking whose entire job is to say which one to fix first."""
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    items = []
+    for n in range(9):
+        item = _item("Set 1:\n01. Mystery Song\n", identifier=f"t{n}", date=f"2025-07-{n + 1:02d}")
+        item["tracks"] = [{"title": "Mystery Song"}]
+        items.append(item)
+    found = lint(pack, items)
+    detail = next(d for d in found if "not in the vocabulary" in d.summary).detail
+    assert "    9  Mystery Song" in detail            # nine items, nine plays, not eighteen

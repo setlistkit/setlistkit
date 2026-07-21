@@ -324,6 +324,24 @@ class Normalizer:
         squashed = squash(entry)
         return any(pattern.search(squashed) for pattern in self.non_song_patterns())
 
+    def firing_non_song_patterns(self, entry: str) -> list[str]:
+        """Which pack patterns actually mark ``entry`` as not-music, as pattern strings.
+
+        The same question :meth:`is_non_song` answers, asked so the answer can be attributed to
+        a rule. Empty for a protected title, because the guard runs first and no pattern gets to
+        fire -- which is the honest answer and the one a "does this rule ever do anything" check
+        needs: a rule shadowed by ``protected.json`` never fires, however well it matches.
+
+        Empty too when the shape rules did the work: ``GUEST_NOTE`` and ``BARE_NOTE`` belong to
+        this module, not to any pack, so no pack rule earns the credit.
+        """
+        entry = entry.strip()
+        if self.is_protected(entry):
+            return []
+        squashed = squash(entry)
+        return [pattern.pattern for pattern in self.non_song_patterns()
+                if pattern.search(squashed)]
+
     def is_protected(self, entry: str) -> bool:
         """True when ``entry`` squashes to a protected title. Compared squashed on both sides so
         formatting ("A.T.L", "ATL") cannot slip a protected song past the guard.

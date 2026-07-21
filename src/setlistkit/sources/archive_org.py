@@ -349,33 +349,39 @@ class ArchiveOrgClient:
             if dry_run:
                 return result
             batch.begin("item", total=len(todo))
-            fetched, missing, failed, consecutive = 0, [], [], 0
-            for index, doc in enumerate(todo, start=1):
-                identifier = self._identifier(doc)
-                try:
-                    payload = self.metadata(identifier, force_rescan=force_rescan)
-                except SourceError:
-                    # One bad tape must not cost a run that is hours deep. The client has already
-                    # retried this item with backoff; recording it and moving on leaves the other
-                    # four thousand fetchable, and nothing is lost -- it was never cached, so the
-                    # next pull picks it up exactly like a 404.
-                    failed.append(identifier)
-                    consecutive += 1
-                    if consecutive >= _MAX_CONSECUTIVE_FAILURES:
-                        # ...but a run of failures is not a bad tape, it is a bad afternoon for
-                        # the host. Past this point "keep going" stops being resilience and turns
-                        # into thousands of requests at something already answering badly, which
-                        # is the one behaviour the etiquette rules exist to forbid. Stop asking.
-                        raise
-                    continue
-                consecutive = 0
-                if payload is None:
-                    missing.append(identifier)
-                else:
-                    fetched += 1
-                if progress is not None:
-                    progress(index, len(todo))
-        return replace(result, fetched=fetched, missing=tuple(missing), failed=tuple(failed))
+            fetched, missing, failed = self._fetch_each(todo, force_rescan, progress)
+        return replace(result, fetched=fetched, missing=missing, failed=failed)
+
+    def _fetch_each(self, todo: list[dict], force_rescan: bool,
+                    progress: Callable[[int, int], None] | None):
+        """Fetch every item's metadata, tolerating isolated failures. See :meth:`pull`."""
+        fetched, missing, failed, consecutive = 0, [], [], 0
+        for index, doc in enumerate(todo, start=1):
+            identifier = self._identifier(doc)
+            try:
+                payload = self.metadata(identifier, force_rescan=force_rescan)
+            except SourceError:
+                # One bad tape must not cost a run that is hours deep. The client has already
+                # retried this item with backoff; recording it and moving on leaves the other
+                # four thousand fetchable, and nothing is lost -- it was never cached, so the
+                # next pull picks it up exactly like a 404.
+                failed.append(identifier)
+                consecutive += 1
+                if consecutive >= _MAX_CONSECUTIVE_FAILURES:
+                    # ...but a run of failures is not a bad tape, it is a bad afternoon for the
+                    # host. Past this point "keep going" stops being resilience and turns into
+                    # thousands of requests at something already answering badly, which is the
+                    # one behaviour the etiquette rules exist to forbid. Stop asking.
+                    raise
+                continue
+            consecutive = 0
+            if payload is None:
+                missing.append(identifier)
+            else:
+                fetched += 1
+            if progress is not None:
+                progress(index, len(todo))
+        return fetched, tuple(missing), tuple(failed)
 
     def cached_items(self, collection: str, *, min_year: int | None = None) -> CachedItems:
         """Reassemble every cached show item. Never touches the network.
