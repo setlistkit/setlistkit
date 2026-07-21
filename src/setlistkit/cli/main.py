@@ -21,10 +21,23 @@ from .. import __version__
 from ..catalog.lint import lint
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
+from ..sources.archive_org import ArchiveOrgClient
+from ..sources.client import SourceError
 from ..store import Store
+from ..store.raw_cache import RawCache
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
+
+# How often a long pull says it is still going. One metadata request per item at roughly a
+# request a second means a first pull of a large collection runs for a quarter of an hour, and
+# silence for that long is indistinguishable from a hang.
+_PROGRESS_EVERY = 25
+
+# Sources `slkit pull` knows how to fetch. Named here rather than derived from the config's
+# [sources.*] tables: a typo'd table name would otherwise become a source that silently does
+# nothing, and argparse can reject an unknown name with a usage line instead.
+_SOURCES = ("archive_org",)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -53,6 +66,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("dump", help="print a plain-text view of derived state")
 
+    pull_cmd = sub.add_parser("pull", help="fetch raw source data into the cache")
+    pull_cmd.add_argument("source", choices=_SOURCES, help="which source to fetch from")
+    pull_cmd.add_argument(
+        "--force-rescan", action="store_true",
+        help="re-ask for data already cached (still rate-limited, and conditional: an "
+             "unchanged item answers 304 and no bytes move)",
+    )
+    pull_cmd.add_argument(
+        "--min-year", type=int, metavar="YEAR",
+        help="ignore shows played before YEAR (overrides min_year in config)",
+    )
+
     pack_cmd = sub.add_parser("pack", help="work with band packs")
     pack_sub = pack_cmd.add_subparsers(dest="pack_action")
     lint_cmd = pack_sub.add_parser("lint", help="validate a pack and run conformance checks")
@@ -66,6 +91,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _cmd_config(config, args) -> int:
+    """`slkit config [show|check]`, defaulting to show."""
+    if args.config_action == "check":
+        return _cmd_config_check(config)
+    return _cmd_config_show(config)
+
+
+def _cmd_store(config, args) -> int:
+    """`slkit store [init|status]`, defaulting to init."""
+    if args.store_action == "status":
+        return _cmd_store_status(config)
+    return _cmd_store_init(config)
 
 
 def _cmd_config_show(config) -> int:
@@ -109,9 +148,89 @@ def _cmd_store_status(config) -> int:
     return EXIT_OK
 
 
-def _cmd_dump(config) -> int:
+def _cmd_dump(config, _args) -> int:
     with Store(config.data_root) as store:
         print(store.dump(), end="")
+    return EXIT_OK
+
+
+def _required_setting(config, section: tuple[str, ...], key: str, what: str) -> str:
+    """A non-empty string setting, or a diagnostic naming the table it was missing from."""
+    value = str(config.section(*section).get(key) or "").strip()
+    if not value:
+        table = ".".join(section)
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=f"[{table}] {key} is not set",
+            path=str(config.source_path),
+            detail=f"{what}\n\nAdd it to your config:\n\n    [{table}]\n    {key} = \"...\"",
+        ))
+    return value
+
+
+def _min_year(config, source: str, flag: int | None) -> int | None:
+    """The play-year floor: the ``--min-year`` flag, else ``min_year`` in the source's table.
+
+    A floor keeps a late-uploaded decades-old recording from drifting into the vocabulary. It
+    is optional, and absent means no floor at all rather than a default year -- guessing one
+    would silently discard shows nobody asked us to discard.
+    """
+    if flag is not None:
+        return flag
+    configured = config.section("sources", source).get("min_year")
+    if configured is None:
+        return None
+    # A quoted year in TOML is the easy typo, and int("2020") would paper over it here while
+    # the same value went into a cache key as a string somewhere else. One shape, checked once.
+    if not isinstance(configured, int) or isinstance(configured, bool):
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=f"[sources.{source}] min_year must be a number, got {configured!r}",
+            path=str(config.source_path),
+            detail=f"Write it unquoted:\n\n    [sources.{source}]\n    min_year = 2020",
+        ))
+    return configured
+
+
+def _cmd_pull(config, args) -> int:
+    """Fetch a source into the raw cache. Writes nothing to the database.
+
+    The refusal comes first and comes from :func:`require_network_identity`, so a run with the
+    placeholder ``user_agent`` stops here rather than at the first request -- there is no state
+    to half-write, and the message is the same one ``slkit config check`` gives.
+
+    Every setting is looked up under ``args.source``, never under a hard-coded table name. With
+    one source those are the same string; with two, a hard-coded one makes ``slkit pull setlistfm``
+    quietly read the archive.org table and pull archive.org.
+    """
+    require_network_identity(config)
+    collection = _required_setting(
+        config, ("sources", args.source), "collection",
+        f"A pull needs to know which {args.source} collection holds this band's tapes.")
+    min_year = _min_year(config, args.source, args.min_year)
+
+    def progress(done: int, total: int) -> None:
+        if done % _PROGRESS_EVERY == 0 or done == total:
+            print(f"  {done}/{total}")
+
+    client = ArchiveOrgClient(config, RawCache(config.data_root))
+    result = client.pull(collection, min_year=min_year,
+                         force_rescan=args.force_rescan, progress=progress)
+    print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
+          f"{result.cached} already cached")
+    if result.missing:
+        print(f"  {len(result.missing)} listed item(s) the metadata API does not have; "
+              f"they are retried on the next pull:")
+        for identifier in result.missing:
+            print(f"    {identifier}")
+    if result.unidentified:
+        # Counted rather than swallowed. An item in none of the counters is an item nobody
+        # misses, and "listed" not adding up is the only signal anything went past unfetched.
+        print(f"  {result.unidentified} listed item(s) carried no identifier and could not be "
+              "fetched")
+    if result.truncated:
+        print("  warning: hit the paging backstop, so this listing is a PREFIX of the "
+              "collection.\n  Ingest will look complete and will not be. Raise _MAX_PAGES.")
     return EXIT_OK
 
 
@@ -158,20 +277,21 @@ def _cmd_pack_lint(args) -> int:
     return EXIT_DIAGNOSTIC if any(diag.is_error for diag in diagnostics) else EXIT_OK
 
 
+# Command name -> handler. A table rather than an if-chain, so adding a subcommand is one
+# entry here and one parser above, and the dispatcher itself stops growing a branch per phase.
+_COMMANDS = {
+    "config": _cmd_config,
+    "store": _cmd_store,
+    "pull": _cmd_pull,
+    "dump": _cmd_dump,
+}
+
+
 def _run(args) -> int:
-    """Dispatch a parsed command. Assumes a command is present."""
+    """Dispatch a parsed command. Assumes a command argparse already accepted."""
     if args.command == "pack":
         return _cmd_pack_lint(args)          # resolves config lazily, only if --pack is absent
-    config = load_config(args.config)
-    if args.command == "config":
-        if args.config_action == "check":
-            return _cmd_config_check(config)
-        return _cmd_config_show(config)          # `slkit config` defaults to show
-    if args.command == "store":
-        if args.store_action == "status":
-            return _cmd_store_status(config)
-        return _cmd_store_init(config)           # `slkit store` defaults to init
-    return _cmd_dump(config)                      # the only command left is dump
+    return _COMMANDS[args.command](load_config(args.config), args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,6 +307,18 @@ def main(argv: list[str] | None = None) -> int:
         return _run(args)
     except DiagnosticError as exc:
         print(render(exc.diagnostic), file=sys.stderr)
+        return EXIT_DIAGNOSTIC
+    except SourceError as exc:
+        # An upstream having a bad day is an ordinary Tuesday, not a bug in this program, so it
+        # renders like every other failure instead of arriving as a traceback. Nothing is
+        # half-written: payloads are cached one at a time, and the next run resumes from there.
+        print(render(Diagnostic(
+            severity=ERROR,
+            summary=f"the source could not be read: {exc}",
+            detail="Nothing was lost -- whatever was fetched before this is cached, and the\n"
+                   "next pull carries on from there. If it persists, the source is likely down\n"
+                   "or serving an error page; wait rather than retrying in a loop.",
+        )), file=sys.stderr)
         return EXIT_DIAGNOSTIC
 
 

@@ -24,7 +24,19 @@ user_agent = "CHANGE-ME (setlistkit; you@example.com)"
 pack = "../moe-pack"
 
 [sources.archive_org]
+# The archive.org collection holding this band's tapes. `slkit pull archive_org` lists it,
+# then fetches each item's metadata once and caches it, so a re-run costs archive.org nothing.
 collection = "moe"
+# Optional floor on the PLAY year, unquoted. A show taped in 1997 and uploaded last week is
+# still a 1997 show, and a recency-weighted model scores it near zero either way — the floor
+# just keeps its songs out of the vocabulary.
+#
+# CAVEAT, and the reason this ships commented out: the filter is a range query on archive.org's
+# indexed `year` field, and a range query matches only items that HAVE that field. An item whose
+# uploader filled in a date but whose `year` never got indexed is excluded by ANY min_year,
+# whenever the show happened. Set it only if you would rather lose those than keep old shows;
+# leave it out for no floor at all, which is the default.
+# min_year = 2020
 
 [sources.setlistfm]
 mbid = "..."

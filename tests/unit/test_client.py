@@ -13,7 +13,7 @@ import pytest
 from setlistkit.config import SENTINEL_USER_AGENT, Config
 from setlistkit.diagnostics import DiagnosticError
 from setlistkit.sources.client import (
-    PoliteClient, Response, SourceHTTPError, TransportError,
+    PoliteClient, Response, SourceFormatError, SourceHTTPError, TransportError,
 )
 from setlistkit.store.raw_cache import RawCache
 
@@ -224,6 +224,19 @@ def test_fetch_json_decodes_the_body(tmp_path):
     assert client.fetch_json("item1", "https://archive.org/metadata/item1") == {
         "identifier": "moe2026-07-04", "n": 8,
     }
+
+
+def test_fetch_json_names_a_200_that_is_not_json(tmp_path):
+    """A site under maintenance answers 200 with an HTML page and no status says so.
+
+    Without this the failure surfaces as json.JSONDecodeError escaping to the top of the
+    process, which the CLI does not catch and which names neither the source nor the URL.
+    """
+    transport = FakeTransport(ok(b"<html><body>archive.org is down for maintenance</body></html>"))
+    client = _client(tmp_path, transport, sleeps=[])
+    with pytest.raises(SourceFormatError) as caught:
+        client.fetch_json("item1", "https://archive.org/metadata/item1")
+    assert caught.value.url == "https://archive.org/metadata/item1"
 
 
 def test_fetch_json_passes_through_a_404_as_none(tmp_path):

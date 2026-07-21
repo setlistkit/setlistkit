@@ -39,7 +39,16 @@ _BACKOFF_CAP = 60.0           # never sleep more than this on one backoff
 _RETRY_STATUSES = frozenset({429, 503})   # "slow down", not "this failed" -- back off and retry
 
 
-class TransportError(Exception):
+class SourceError(Exception):
+    """Any way an upstream source can fail us: no connection, a bad status, an unusable body.
+
+    One base class so the CLI can catch the lot at its boundary and render a diagnostic. A
+    source failing is an ordinary Tuesday -- archive.org goes down, a proxy returns an error
+    page -- and it should exit with a message, not a traceback.
+    """
+
+
+class TransportError(SourceError):
     """A network-level failure (timeout, refused, reset), distinct from an HTTP status.
 
     These are retried blindly with exponential backoff. An HTTP status like 429 is a deliberate
@@ -47,13 +56,27 @@ class TransportError(Exception):
     """
 
 
-class SourceHTTPError(Exception):
+class SourceHTTPError(SourceError):
     """A definitive, non-retryable bad HTTP status (403, 500, ...) from a source."""
 
     def __init__(self, url: str, status: int) -> None:
         self.url = url
         self.status = status
         super().__init__(f"{url} returned HTTP {status}")
+
+
+class SourceFormatError(SourceError):
+    """A 200 whose body is not what the source promised.
+
+    Its own class because it is the failure a status code cannot describe: a site under
+    maintenance, or behind a captive portal or a proxy, serves an HTML page with status 200.
+    Every layer above expects JSON, so without this the first thing to notice is
+    ``json.JSONDecodeError`` escaping to the top of the process.
+    """
+
+    def __init__(self, url: str, detail: str) -> None:
+        self.url = url
+        super().__init__(f"{url} did not return usable JSON: {detail}")
 
 
 @dataclass(frozen=True)
@@ -150,9 +173,18 @@ class PoliteClient:
 
         Most sources speak JSON, so decoding lives here rather than being repeated at every call
         site. ``replace`` on decode keeps one stray non-UTF-8 byte from sinking a whole response.
+
+        A body that will not decode is a :class:`SourceFormatError`, not a raw
+        ``json.JSONDecodeError``: this is the likeliest real failure of the two, because a site
+        under maintenance answers 200 with an HTML page and nothing in the status says so.
         """
         raw = self.fetch(key, url, **kwargs)
-        return None if raw is None else json.loads(raw.decode("utf-8", "replace"))
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8", "replace"))
+        except json.JSONDecodeError as err:
+            raise SourceFormatError(url, str(err)) from err
 
     def _fresh(self, key: str, max_age: timedelta | None) -> bool:
         """Is the cached entry young enough to skip a request? ``None`` max_age never ages out."""
