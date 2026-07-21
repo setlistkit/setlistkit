@@ -306,6 +306,23 @@ def test_an_alias_nobody_writes_is_reported_and_one_in_use_is_not(tmp_path):
     assert not any("alias 'the hole'" in s for s in _summaries(found))
 
 
+def test_the_unused_alias_caret_lands_on_the_key_not_the_target(tmp_path):
+    """The finding is about the key, so the caret has to be.
+
+    Anchoring it on the value reads as a claim that the TARGET is the unwritten spelling, which
+    is false and is the one word in the line that tapers demonstrably do write. Reported from the
+    real pack: 'tambo' is never written, 'Tambourine' appears 581 times, and the caret sat on
+    'Tambourine' under the caption "never used".
+    """
+    source = '{"the hole": "Wormhole", "nobody writes this": "Aurora"}'
+    pack = _write_pack(tmp_path, **{
+        "pack.json": IDENTITY, "vocabulary.json": VOCAB, "aliases.json": source})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. The Hole\n")])
+    unused = [d for d in found if "matches nothing in the corpus" in d.summary]
+    assert len(unused) == 1
+    assert source[unused[0].col - 1:][:unused[0].length] == '"nobody writes this"'
+
+
 def test_a_title_the_pack_does_not_know_is_reported_with_its_play_count(tmp_path):
     pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
     items = [_item("Set 1:\n01. Aurora\n02. Mystery Song\n", identifier=f"t{n}",

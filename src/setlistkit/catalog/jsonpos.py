@@ -48,6 +48,29 @@ class Pos(NamedTuple):
     length: int
 
 
+class Positions(dict):
+    """Value positions by path, with the object-key positions carried beside them.
+
+    The mapping itself is path -> :class:`Pos` for VALUES, because that is what nearly every
+    diagnostic is about: a schema error names a value, and :func:`position_for` walks up this
+    mapping to fall back on a containing brace. ``key_positions`` holds the other half, for the
+    handful of findings whose subject is the key itself.
+
+    That distinction is not academic. An unreachable alias is a claim about the key -- nobody
+    writes ``tambo`` -- and anchoring its caret on the value put "never used" under
+    ``Tambourine``, a name tapers have written 581 times. A caret pointing one span too far
+    right does not read as a misplaced caret; it reads as the tool asserting something false.
+
+    A ``dict`` subclass rather than a third return value from :func:`parse`, so every existing
+    ``positions.get(path)`` and ``path in positions`` keeps working untouched. The attribute is
+    ``key_positions`` and not ``keys`` because ``dict.keys`` is already a method.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.key_positions: dict[tuple, Pos] = {}
+
+
 def diagnostic_at(severity: str, summary: str, *, file: Path | None, source: str | None,
                   pos: Pos | None, detail: str | None = None,
                   caption: str = "") -> Diagnostic:
@@ -183,7 +206,7 @@ class _Scanner:
     def __init__(self, text: str) -> None:
         self.text = text
         self.i = 0
-        self.positions: dict[tuple, Pos] = {}
+        self.positions = Positions()
 
     def fail(self, message: str, index: int | None = None) -> NoReturn:
         """Raise a positioned error at ``index`` (default: the current offset)."""
@@ -235,9 +258,15 @@ class _Scanner:
             self.fail(f"unexpected character {char!r}")
         return result
 
-    def _record(self, path: tuple, start: int, length: int) -> None:
+    def _pos(self, start: int, length: int) -> Pos:
         line, col = _line_col(self.text, start)
-        self.positions[path] = Pos(line, col, length)
+        return Pos(line, col, length)
+
+    def _record(self, path: tuple, start: int, length: int) -> None:
+        self.positions[path] = self._pos(start, length)
+
+    def _record_key(self, path: tuple, start: int, length: int) -> None:
+        self.positions.key_positions[path] = self._pos(start, length)
 
     def object(self, path: tuple) -> dict:
         """Parse a ``{...}`` object, recording each member value under ``path + (key,)``."""
@@ -251,7 +280,11 @@ class _Scanner:
             self.skip_ws()
             if self._peek() != '"':
                 self.fail("expected a string key")
+            key_start = self.i
             key = self.string()
+            # Recorded before the value is parsed, and overwritten by a repeated key exactly as
+            # the value is, so the key and value positions always describe the same member.
+            self._record_key(path + (key,), key_start, self.i - key_start)
             self.skip_ws()
             if self._peek() != ":":
                 self.fail("expected ':' after object key")
@@ -364,10 +397,11 @@ class _Scanner:
         return self.text[self.i] if self.i < len(self.text) else ""
 
 
-def parse(text: str) -> tuple[Any, dict[tuple, Pos]]:
+def parse(text: str) -> tuple[Any, Positions]:
     """Parse ``text`` as JSON, returning ``(data, positions)``.
 
-    ``positions`` maps each value's path tuple to its :class:`Pos`. Raises
-    :class:`JSONPosError` (carrying a line and column) on malformed input.
+    ``positions`` maps each value's path tuple to its :class:`Pos`, and carries the matching
+    object-key spans on :attr:`Positions.key_positions`. Raises :class:`JSONPosError` (carrying
+    a line and column) on malformed input.
     """
     return _Scanner(text).parse()

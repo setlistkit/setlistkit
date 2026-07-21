@@ -58,7 +58,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from ..diagnostics import ERROR, NOTE, WARNING, Diagnostic
-from .jsonpos import Pos, diagnostic_at, parse
+from .jsonpos import Pos, Positions, diagnostic_at, parse
 from .pack import ALIASES_FILE, CLASSIFIERS_FILE, CORPUS_FILE, Pack, Rule, load_pack
 from .parse import parse_archive_items
 
@@ -209,7 +209,7 @@ def _unreachable_alias_findings(pack: Pack, pack_dir: Path, census) -> list[Diag
     normalize = pack.normalizer.normalize
     seen_keys = {normalize(token) for token in census.seen}
     source = _read_optional(pack_dir / ALIASES_FILE)
-    positions: dict[tuple, Pos] = {}
+    positions = Positions()
     if source:
         _, positions = parse(source)
     out: list[Diagnostic] = []
@@ -218,11 +218,17 @@ def _unreachable_alias_findings(pack: Pack, pack_dir: Path, census) -> list[Diag
             continue
         out.append(diagnostic_at(
             WARNING, f"alias {key!r} matches nothing in the corpus",
-            file=pack_dir / ALIASES_FILE, source=source, pos=positions.get((key,)),
-            caption="never used",
-            detail=f"No source has ever written this spelling, so the mapping to {target!r} has\n"
-                   "never once fired. Not harmful by itself. Worth a look anyway: an alias key\n"
-                   "nobody writes is often paired with a canonical name nobody writes either.",
+            # The KEY's span, not the value's. The subject of this finding is the spelling
+            # nobody writes, and the target usually is written -- often thousands of times.
+            file=pack_dir / ALIASES_FILE, source=source,
+            pos=positions.key_positions.get((key,)),
+            caption="never written",
+            detail=f"No source has ever written {key!r}, so the mapping to {target!r} has never\n"
+                   "once fired. This is about the key: the target may well be written often.\n"
+                   "An alias matches a whole normalized title exactly -- it is not a prefix and\n"
+                   "not a substring -- so a key that is a fragment of a real title never fires.\n"
+                   "Not harmful by itself. Worth a look anyway: an alias key nobody writes is\n"
+                   "often paired with a canonical name nobody writes either.",
         ))
     return out
 

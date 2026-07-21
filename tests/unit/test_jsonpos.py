@@ -35,6 +35,26 @@ def test_object_member_positions():
     assert pos[("why",)] == Pos(line=3, col=10, length=2)
 
 
+def test_object_key_positions():
+    """Where the key itself sits, for a finding whose subject is the key and not its value.
+
+    Almost every diagnostic is about a value, so that is what ``positions`` holds. An alias key
+    nobody has ever written is the exception: putting that caret on the value asserts something
+    false about a different string, and the value in an alias file is a name people DO write.
+    """
+    text = '{\n  "tambo": "Tambourine"\n}'
+    _, pos = parse(text)
+    assert pos[("tambo",)] == Pos(line=2, col=12, length=12)                 # "Tambourine"
+    assert pos.key_positions[("tambo",)] == Pos(line=2, col=3, length=7)     # "tambo"
+
+
+def test_key_positions_are_recorded_at_every_depth():
+    text = '{"outer": {"inner": 1}}'
+    _, pos = parse(text)
+    assert pos.key_positions[("outer",)].col == 2
+    assert pos.key_positions[("outer", "inner")].col == 12
+
+
 def test_array_index_positions():
     text = '["setbreak",\n "reprise"]'
     _, pos = parse(text)
