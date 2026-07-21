@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from setlistkit.store.raw_cache import RawCache
+from setlistkit.store.raw_cache import NamespaceStats, RawCache
 
 
 def test_put_get_roundtrip(tmp_path):
@@ -104,3 +104,29 @@ def test_bad_namespace_rejected(tmp_path):
     cache = RawCache(tmp_path)
     with pytest.raises(ValueError):
         cache.put("bad/ns", "k", b"x")
+
+
+# --- stats: the no-network answer to "how far has the pull got" ------------------------------
+
+def test_stats_counts_entries_and_bytes_per_namespace(tmp_path):
+    cache = RawCache(tmp_path)
+    cache.put("archive_org", "a", b"12345")
+    cache.put("archive_org", "b", b"1234567890")
+    cache.put("setlistfm", "x", b"123")
+    stats = cache.stats()
+    assert list(stats) == ["archive_org", "setlistfm"]     # alphabetized, so a diff is stable
+    assert (stats["archive_org"].entries, stats["archive_org"].bytes) == (2, 15)
+    assert (stats["setlistfm"].entries, stats["setlistfm"].bytes) == (1, 3)
+
+
+def test_stats_is_empty_before_anything_is_cached(tmp_path):
+    assert RawCache(tmp_path).stats() == {}
+
+
+def test_stats_ignores_a_payload_mid_write(tmp_path):
+    """An atomic write lands as <name>.tmp and is renamed. Counting it would make the number
+    flicker upward and back during the pull this exists to watch."""
+    cache = RawCache(tmp_path)
+    cache.put("archive_org", "a", b"12345")
+    (cache.root / "archive_org" / "blob" / "b.tmp").write_bytes(b"half a payl")
+    assert cache.stats()["archive_org"] == NamespaceStats(entries=1, bytes=5)

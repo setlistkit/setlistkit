@@ -168,10 +168,25 @@ def _cmd_store_init(config) -> int:
     return EXIT_OK
 
 
+def _human_bytes(count: int) -> str:
+    """A byte count at a glance. Three significant figures is all anyone reads."""
+    size = float(count)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"                                    # pragma: no cover - loop returns
+
+
 def _cmd_store_status(config) -> int:
     store = Store(config.data_root)
     print(f"db          : {store.db_path}")
     print(f"raw cache   : {store.raw.root}")
+    # What is actually in it, not just where it is. This is the no-network answer to "how far
+    # has the pull got", and it is safe to run in a loop -- `slkit pull -n` answers it better
+    # but spends search requests to do it, which makes it the wrong thing to poll with.
+    for namespace, stats in store.raw.stats().items():
+        print(f"  {namespace}: {stats.entries} entries, {_human_bytes(stats.bytes)}")
     # Don't open (and thereby create) the DB just to report it doesn't exist yet.
     if not store.db_path.is_file():
         print("schema      : not initialized — run `slkit store init`")

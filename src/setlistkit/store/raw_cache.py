@@ -19,6 +19,7 @@ import json
 import os
 import re
 import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -59,6 +60,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
+
+
+@dataclass(frozen=True)
+class NamespaceStats:
+    """How much of one source is cached. Counted off the filesystem, never the network."""
+
+    entries: int = 0
+    bytes: int = 0
 
 
 class RawCache:
@@ -137,6 +146,33 @@ class RawCache:
             return None
         fetched = _as_utc(datetime.fromisoformat(meta["fetched_at"]))
         return _as_utc(now or _now()) - fetched
+
+    def stats(self) -> dict[str, NamespaceStats]:
+        """Entries and payload bytes per namespace, alphabetized. Touches no network.
+
+        Here so "how far has the pull got" has an answer that costs nothing. ``slkit pull -n``
+        answers it too and answers it better -- it knows how many items remain, not just how many
+        are held -- but it spends a handful of search requests to do it, which makes it the wrong
+        thing to poll with. This is a directory listing.
+
+        ``.tmp`` files are skipped. An atomic write lands as ``<name>.tmp`` and is renamed, so a
+        payload being written right now would otherwise be counted as an entry that does not
+        exist yet, and the count would flicker upward and back during a pull.
+        """
+        out: dict[str, NamespaceStats] = {}
+        if not self.root.is_dir():
+            return out
+        for namespace in sorted(path.name for path in self.root.iterdir() if path.is_dir()):
+            blobs = self.root / namespace / "blob"
+            if not blobs.is_dir():
+                continue
+            entries, total = 0, 0
+            for payload in blobs.iterdir():
+                if payload.is_file() and not payload.name.endswith(".tmp"):
+                    entries += 1
+                    total += payload.stat().st_size
+            out[namespace] = NamespaceStats(entries=entries, bytes=total)
+        return out
 
     def delete(self, namespace: str, key: str) -> bool:
         """Drop an entry and its sidecar. Returns whether anything was there."""
