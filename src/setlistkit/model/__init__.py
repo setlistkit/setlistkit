@@ -2,8 +2,17 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Model: prediction, backtest, tuning, and forward simulation.
 
-May import ``catalog``; must not import ``picks`` or ``report``. The model math ports across
-essentially unchanged from the prior pipeline along with its tests — the expensive,
-hard-won part — while everything structural around it is written fresh. (Populated in a
-later phase.)
+May import ``catalog``; must not import ``picks`` or ``report``.
+
+:mod:`~setlistkit.model.scores` ranks every song as of a date and refuses to read past it.
+:mod:`~setlistkit.model.backtest` walks that forward and grades it, which is the only reason to
+believe any number the scorer produces -- its constants were inherited from a pipeline fitted
+against a six-year corpus and are not validated for this one.
 """
+
+from .backtest import BacktestResult, HoldoutResult, backtest, holdout, hit_rates
+from .backtest import naive_baseline, recency_baseline
+from .scores import ScoreConfig, SongScore, song_scores
+
+__all__ = ["BacktestResult", "HoldoutResult", "ScoreConfig", "SongScore", "backtest",
+           "hit_rates", "holdout", "naive_baseline", "recency_baseline", "song_scores"]

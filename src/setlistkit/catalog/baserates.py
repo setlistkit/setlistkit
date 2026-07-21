@@ -60,9 +60,9 @@ _YEAR_RE = re.compile(r"\d{4}")
 class YearRate:
     """One year's counts, and nothing that could disagree with them.
 
-    ``songs`` is a tuple of pairs rather than a dict so the record is genuinely immutable and
-    can be hashed -- a dict inside a frozen dataclass can be mutated straight through the
-    freeze. Call ``dict(row.songs)`` where a mapping is wanted.
+    ``songs`` is a tuple of pairs rather than a dict so the record is really immutable and can
+    be hashed -- a dict inside a frozen dataclass can be mutated straight through the freeze.
+    Call ``dict(row.songs)`` where a mapping is wanted.
     """
 
     year: str
