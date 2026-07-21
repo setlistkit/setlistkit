@@ -55,9 +55,48 @@ def _m0001_baseline(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
 
+def _m0002_corpus(conn: sqlite3.Connection) -> None:
+    # The merged corpus: one show per date, and its entries in the order they were played.
+    #
+    # No `year` and no `n_songs`. Both are derivable (date[:4]; a tally of the entries), and a
+    # stored copy of a derived value can disagree with what it was derived from. merge.py already
+    # refuses to read a record's own n_songs for exactly that reason -- a record claiming a count
+    # nothing backs up disqualifies every honest candidate for its date and enters the corpus
+    # with no setlist in it -- so this schema does not offer somewhere to write one.
+    #
+    # `reason` is NULL for an ordinary merged show and carries text for a manual override, which
+    # is the only kind that has to justify itself. See merge.overrides_from_mapping.
+    conn.execute(
+        "CREATE TABLE shows("
+        "  date TEXT PRIMARY KEY,"
+        "  source TEXT NOT NULL,"
+        "  identifier TEXT NOT NULL,"
+        "  reason TEXT)")
+    # Order is stored, never inferred. rowid order matches insertion order today and is not
+    # promised to; a setlist read back in the wrong order is wrong in a way that looks right.
+    #
+    # `section` separates the sets (0) from the encore (1) rather than giving the encore a magic
+    # set number, so "the encore is last" is an explicit sort and not arithmetic that happens to
+    # work. Every read orders by (section, set_no, position).
+    conn.execute(
+        "CREATE TABLE show_entries("
+        "  date TEXT NOT NULL REFERENCES shows(date) ON DELETE CASCADE,"
+        "  section INTEGER NOT NULL,"
+        "  set_no INTEGER NOT NULL,"
+        "  position INTEGER NOT NULL,"
+        "  song TEXT NOT NULL,"
+        "  segue INTEGER NOT NULL,"
+        "  non_song INTEGER NOT NULL,"
+        "  PRIMARY KEY (date, section, set_no, position))")
+    # "how often has this song been played, and when" is the question every model layer asks, and
+    # without this it is a full scan of every entry ever recorded.
+    conn.execute("CREATE INDEX show_entries_song ON show_entries(song)")
+
+
 # Forward-only. Never edit a shipped migration; add the next number instead.
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline", _m0001_baseline),
+    Migration(2, "corpus", _m0002_corpus),
 ]
 
 

@@ -3,6 +3,9 @@
 """Tests for the store and dump CLI commands."""
 
 from setlistkit.cli.main import EXIT_OK, main
+from setlistkit.store.migrations import MIGRATIONS
+
+LATEST_SCHEMA = max(m.version for m in MIGRATIONS)
 
 CONFIG = 'data_root = "state"\nuser_agent = "x (a@b.c)"\n'
 
@@ -17,13 +20,13 @@ def test_store_init_then_status(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     assert main(["--config", cfg, "store", "init"]) == EXIT_OK
     out = capsys.readouterr().out
-    assert "applied migrations: 1" in out
-    assert "schema version 1" in out
+    assert "applied migrations: 1, 2" in out
+    assert f"schema version {LATEST_SCHEMA}" in out
 
     assert main(["--config", cfg, "store", "status"]) == EXIT_OK
     out = capsys.readouterr().out
-    assert "version 1" in out
-    assert "schema_migrations: 1 rows" in out
+    assert f"version {LATEST_SCHEMA}" in out
+    assert f"schema_migrations: {LATEST_SCHEMA} rows" in out
 
 
 def test_store_status_before_init_flags_uninitialized(tmp_path, capsys):

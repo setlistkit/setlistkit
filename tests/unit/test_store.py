@@ -5,14 +5,20 @@
 import pytest
 
 from setlistkit.store.db import Store, _ident
+from setlistkit.store.migrations import MIGRATIONS
+
+# Read off the ledger rather than hard-coded, so adding a migration is one line in migrations.py
+# instead of a hunt through the suite for every place a version number was written down.
+EXPECTED_MIGRATIONS = [(m.version, m.name) for m in MIGRATIONS]
+LATEST_SCHEMA = max(version for version, _ in EXPECTED_MIGRATIONS)
 
 
-def test_init_creates_db_and_applies_baseline(tmp_path):
+def test_init_applies_every_migration_in_order(tmp_path):
     data_root = tmp_path / "data"
     with Store(data_root) as store:
-        assert store.init() == [1]
+        assert store.init() == [version for version, _ in EXPECTED_MIGRATIONS]
         assert store.db_path.is_file()
-        assert store.schema_version() == 1
+        assert store.schema_version() == LATEST_SCHEMA
         assert "meta" in store.table_names()
         assert "schema_migrations" in store.table_names()
 
@@ -22,7 +28,7 @@ def test_init_is_idempotent(tmp_path):
         store.init()
         # test that a second init applies nothing new
         assert store.init() == []
-        assert store.schema_version() == 1
+        assert store.schema_version() == LATEST_SCHEMA
 
 
 def test_init_stamps_provenance(tmp_path):
@@ -48,7 +54,7 @@ def test_table_counts(tmp_path):
     with Store(tmp_path) as store:
         store.init()
         counts = store.table_counts()
-        assert counts["schema_migrations"] == 1
+        assert counts["schema_migrations"] == LATEST_SCHEMA
         assert counts["meta"] >= 2
 
 

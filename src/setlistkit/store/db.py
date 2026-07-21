@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import __version__
+from . import corpus
 from .migrations import apply_pending, schema_version, transaction
 from .raw_cache import RawCache
 
@@ -131,6 +132,23 @@ class Store:
     def schema_version(self) -> int:
         """Highest applied migration version, or 0 for an uninitialized database."""
         return schema_version(self.conn)
+
+    # --- the merged corpus ---
+    #
+    # Thin pass-throughs. The SQL lives in store/corpus.py so this class stays the handle on the
+    # database rather than the place every table's queries accumulate.
+
+    def replace_shows(self, shows) -> int:
+        """Replace the whole corpus with ``shows``, in one transaction. Returns how many."""
+        return corpus.replace_shows(self.conn, shows)
+
+    def shows(self) -> list[dict]:
+        """Every stored show, by date, sets and encore in the order they were played."""
+        return corpus.shows(self.conn)
+
+    def show_count(self) -> int:
+        """How many shows are stored, without reading their setlists."""
+        return corpus.show_count(self.conn)
 
     def table_names(self) -> list[str]:
         """Every non-internal table, alphabetized."""
