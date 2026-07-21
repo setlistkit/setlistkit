@@ -251,6 +251,11 @@ def _cmd_pull(config, args) -> int:
               f"they are retried on the next pull:")
         for identifier in result.missing:
             print(f"    {identifier}")
+    if result.failed:
+        print(f"  {len(result.failed)} item(s) the source could not serve, even after retries. "
+              "Nothing was cached\n  for them, so the next pull tries them again:")
+        for identifier in result.failed:
+            print(f"    {identifier}")
     if result.unidentified:
         # Counted rather than swallowed. An item in none of the counters is an item nobody
         # misses, and "listed" not adding up is the only signal anything went past unfetched.

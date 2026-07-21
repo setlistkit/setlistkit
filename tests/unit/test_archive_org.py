@@ -206,7 +206,7 @@ def test_every_listed_item_lands_in_exactly_one_counter(tmp_path):
     result = _archive(tmp_path, transport).pull("moe")
     assert result.listed == 3 and result.unidentified == 1
     assert result.fetched + result.cached + len(result.missing) == result.listed
-    assert result.planned == result.fetched + len(result.missing)
+    assert result.planned == result.fetched + len(result.missing) + len(result.failed)
 
 
 def test_pull_reports_a_listing_the_paging_backstop_cut_short(tmp_path):
@@ -249,6 +249,47 @@ def test_pull_identifies_its_run_and_its_progress_to_the_host(tmp_path):
     agents = [headers["User-Agent"] for _url, headers in transport.calls]
     assert agents[0] == f"{_UA} (batch {seen[0]}; listing 1)"
     assert agents[1] == f"{_UA} (batch {seen[0]}; item 1/1)"
+
+
+def test_one_bad_tape_does_not_cost_a_run_that_is_hours_deep(tmp_path):
+    """Found in production: a single 502 killed a 4614-item pull 1923 items in.
+
+    502 is retried now, but a permanent failure must not abort either -- the item is recorded and
+    the other four thousand still get fetched.
+    """
+    # 500 is definitive, not transient, so it costs one request and is not retried.
+    transport = FakeTransport(_page(3, "a", "bad", "c"),
+                              _json_response(_meta()),
+                              Response(500, {}, b""),
+                              _json_response(_meta()))
+    result = _archive(tmp_path, transport).pull("moe")
+    assert result.failed == ("bad",)
+    assert result.fetched == 2                       # a and c still landed
+    assert RawCache(tmp_path).has("archive_org", "c")
+    # Nothing cached for the bad one, so the next pull retries it exactly like a 404.
+    assert not RawCache(tmp_path).has("archive_org", "bad")
+
+
+def test_a_run_of_failures_stops_asking(tmp_path):
+    """Resilience past this point is thousands of requests at a host already answering badly,
+    which is the one behaviour the etiquette rules exist to forbid."""
+    from setlistkit.sources.client import SourceError
+    transport = FakeTransport(_page(20, *[f"i{n}" for n in range(20)]),
+                              *[Response(500, {}, b"") for _ in range(200)])
+    with pytest.raises(SourceError):
+        _archive(tmp_path, transport).pull("moe")
+    # Five items attempted, not twenty. Each already exhausted its own retries first.
+    metadata_requests = [url for url in transport.urls if "/metadata/" in url]
+    assert len(set(metadata_requests)) == 5
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_a_transient_status_is_retried_rather_than_fatal(tmp_path, status):
+    """502 and 504 are a gateway answering for a host it could not reach. Neither is a fact
+    about the item, and a large host emits both as ordinary weather."""
+    transport = FakeTransport(_page(1, "a"), Response(status, {}, b""), _json_response(_meta()))
+    result = _archive(tmp_path, transport).pull("moe")
+    assert (result.fetched, result.failed) == (1, ())
 
 
 def test_a_dry_pull_lists_and_then_stops(tmp_path):

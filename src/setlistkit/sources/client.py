@@ -38,7 +38,13 @@ from ..store.raw_cache import RawCache
 DEFAULT_DELAY = 0.75          # seconds after each request; archive.org bots.html asks for delays
 DEFAULT_MAX_TRIES = 5
 _BACKOFF_CAP = 60.0           # never sleep more than this on one backoff
-_RETRY_STATUSES = frozenset({429, 503})   # "slow down", not "this failed" -- back off and retry
+# Statuses that mean "not now" rather than "no": back off and retry rather than giving up.
+#
+# 429 and 503 are the host asking directly. 502 and 504 are its infrastructure answering for it --
+# a gateway that could not reach the application, or waited too long. Neither is a fact about the
+# item requested, and a large host sits behind load balancers that emit both as ordinary weather.
+# Found the hard way: a single 502 on one tape killed a 4,614-item pull 1,923 items in.
+_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 
 
 class SourceError(Exception):

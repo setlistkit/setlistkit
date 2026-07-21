@@ -156,6 +156,16 @@ def test_pull_rejects_an_unknown_source(tmp_path, capsys, client):
     assert "invalid choice" in capsys.readouterr().err
 
 
+def test_pull_names_the_items_the_source_could_not_serve(tmp_path, capsys, monkeypatch):
+    fake = FakeClient(PullResult(listed=3, fetched=2, failed=("moe2003-02-22.km150.shn",)))
+    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    out = capsys.readouterr().out
+    assert "1 item(s) the source could not serve, even after retries" in out
+    assert "moe2003-02-22.km150.shn" in out
+    assert "the next pull tries them again" in out
+
+
 def test_pull_counts_listing_docs_that_carried_no_identifier(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=1, fetched=1, unidentified=2))
     monkeypatch.setattr(cli, "ArchiveOrgClient", fake)

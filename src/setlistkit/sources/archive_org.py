@@ -36,7 +36,7 @@ from datetime import timedelta
 
 from ..config import Config, require_network_identity
 from ..store.raw_cache import RawCache
-from .client import PoliteClient
+from .client import PoliteClient, SourceError
 
 NAMESPACE = "archive_org"
 
@@ -53,6 +53,13 @@ _MAX_PAGES = 40               # a 20k-item backstop against a runaway loop, not 
 # sometimes split by disc while the MP3 derivative is not, or the other way round.
 _AUDIO_FORMATS = frozenset({"VBR MP3", "MP3", "Flac", "FLAC", "24bit Flac", "Ogg Vorbis",
                             "Shorten", "Apple Lossless Audio"})
+
+# Consecutive item failures before a bulk pull gives up. One failure is a bad tape and is skipped;
+# this many in a row is the host having a bad afternoon, and continuing would mean thousands of
+# requests at something already answering badly. Each item has ALREADY exhausted the client's own
+# retries and backoff by the time it counts here, so this is five failures on top of twenty-five
+# attempts -- not a hair trigger.
+_MAX_CONSECUTIVE_FAILURES = 5
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,10 @@ class PullResult:
     # because it is the number that says what the real run would cost the host.
     planned: int = 0
     missing: tuple[str, ...] = ()          # identifiers archive.org 404'd
+    # Identifiers whose fetch failed even after the client's own retries. Separate from `missing`
+    # because the cause is different -- absent versus unwell -- though the remedy is the same:
+    # nothing was cached, so the next pull tries them again.
+    failed: tuple[str, ...] = ()
     # Listing docs carrying no identifier at all. Unfetchable and unnameable, so they get a count
     # rather than a list -- but a count, because an item in none of these is an item nobody misses.
     unidentified: int = 0
@@ -338,15 +349,33 @@ class ArchiveOrgClient:
             if dry_run:
                 return result
             batch.begin("item", total=len(todo))
-            fetched, missing = 0, []
+            fetched, missing, failed, consecutive = 0, [], [], 0
             for index, doc in enumerate(todo, start=1):
-                if self.metadata(self._identifier(doc), force_rescan=force_rescan) is None:
-                    missing.append(self._identifier(doc))
+                identifier = self._identifier(doc)
+                try:
+                    payload = self.metadata(identifier, force_rescan=force_rescan)
+                except SourceError:
+                    # One bad tape must not cost a run that is hours deep. The client has already
+                    # retried this item with backoff; recording it and moving on leaves the other
+                    # four thousand fetchable, and nothing is lost -- it was never cached, so the
+                    # next pull picks it up exactly like a 404.
+                    failed.append(identifier)
+                    consecutive += 1
+                    if consecutive >= _MAX_CONSECUTIVE_FAILURES:
+                        # ...but a run of failures is not a bad tape, it is a bad afternoon for
+                        # the host. Past this point "keep going" stops being resilience and turns
+                        # into thousands of requests at something already answering badly, which
+                        # is the one behaviour the etiquette rules exist to forbid. Stop asking.
+                        raise
+                    continue
+                consecutive = 0
+                if payload is None:
+                    missing.append(identifier)
                 else:
                     fetched += 1
                 if progress is not None:
                     progress(index, len(todo))
-        return replace(result, fetched=fetched, missing=tuple(missing))
+        return replace(result, fetched=fetched, missing=tuple(missing), failed=tuple(failed))
 
     def cached_items(self, collection: str, *, min_year: int | None = None) -> CachedItems:
         """Reassemble every cached show item. Never touches the network.
