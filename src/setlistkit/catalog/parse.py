@@ -142,7 +142,19 @@ CHECKSUM_TAIL = re.compile(r"^[ \t]*(shntool|shn\s*tool|md5|ffp|sha1|checksums?)
 #
 #   total time   "Total Time:  [02:40:38]" -- the tape's runtime, and reliably the first line of
 #                the credit block.
-_CREDIT_TAIL_BASE = (r"total\s+time\s*[:\[]", r"check\s+out\s+tour\s+dates")
+#   band:        a lineup block introduced by a heading on its own line. Band-agnostic: every
+#                scene writes one, and _credit_tail_pattern's band-name form below only fires
+#                when the taper types the BAND'S name ("moe.:"), while most of them type the
+#                word. Found on real data, where it cost a "Band" song plus "Guitar", "Bass",
+#                "Drums", "Percussion" and a member's name, once per tape that formats this way.
+#
+# The lineup heading is anchored to a line holding ONLY the heading, because "A Band In The Sky"
+# is a real song and a pattern that cut at "Band:" anywhere is one taper's colon away from eating
+# a setlist. And the trailing class is [^\S\n], not [ \t]: tapers paste from web pages, so the
+# character after the colon is routinely a non-breaking space, and a [ \t]*$ tail compiles
+# perfectly and then never fires -- the worst way for a defence to be wrong.
+_CREDIT_TAIL_BASE = (r"total\s+time\s*[:\[]", r"check\s+out\s+tour\s+dates",
+                     r"(?:band|band\s+members|line-?up|personnel|musicians)\s*:[^\S\n]*$")
 
 # Backstop for a credit line that survives the cut because its block had no header: a crew role.
 # "Steve Young: FOH", "Poster Artist". Roles, not names -- a name list would never end, and these
@@ -332,7 +344,10 @@ def _credit_tail_pattern(band_name: str | None) -> re.Pattern:
         # press bio into the setlist with them.
         alternatives += [rf"about\s+{re.escape(core)}(?!\w)",
                          rf"thanks\s+to\s+{re.escape(core)}(?!\w)",
-                         rf"{re.escape(stated)}\s*:[ \t]*$"]
+                         # [^\S\n], not [ \t] -- see the note on _CREDIT_TAIL_BASE. A pasted
+                         # description puts a non-breaking space after the colon and this never
+                         # fired for it.
+                         rf"{re.escape(stated)}\s*:[^\S\n]*$"]
     return re.compile(r"^[ \t]*(?:" + "|".join(alternatives) + r")", re.I | re.M)
 
 

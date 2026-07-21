@@ -17,6 +17,8 @@ patterns, which is enough to exercise every path without any band's data.
 
 import re
 
+import pytest
+
 from setlistkit.catalog import (ArchivePolicy, Normalizer, count_songs, parse_archive_item,
                                 parse_archive_items, title_band_filter)
 from setlistkit.catalog.parse import clean_html
@@ -269,6 +271,51 @@ def test_credit_roll_is_cut_for_a_band_name_ending_in_punctuation():
                                        "Brace Of Songs\n")),
                     policy=ArchivePolicy(band_name="!!!"))
     assert _titles(record) == ["Rebubula", "Meat", "Ophelia"]
+
+
+@pytest.mark.parametrize("heading", ["Band:", "Band Members:", "Lineup:", "Line-up:",
+                                     "Personnel:", "Musicians:"])
+def test_a_lineup_block_is_cut_by_its_own_heading(heading):
+    """Found on real data, not invented.
+
+    _credit_tail_pattern's band-name form only fires when the taper types the BAND'S name
+    ("moe.:"), and most of them type the word. One tape in every few formats its credits this
+    way and contributed "Band", "Guitar", "Bass", "Drums", "Percussion" and a member's name as
+    songs, none of which the credit-LINE filter catches because half of them are bare words.
+    """
+    record = _parse(_item(description=("Set 1:\n01. Rebubula\n02. Meat\n03. Ophelia\n"
+                                       f"{heading}\n"
+                                       "Al Schnier - electric guitar\n"
+                                       "Percussion\nBass\nKeys/Flute\n")),
+                    policy=ArchivePolicy(band_name="band."))
+    assert _titles(record) == ["Rebubula", "Meat", "Ophelia"]
+
+
+def test_a_lineup_heading_followed_by_a_non_breaking_space_still_cuts():
+    r"""Tapers paste from web pages, so the character after the colon is routinely \xa0.
+
+    A [ \t]*$ tail compiles perfectly and then never fires, which is the worst way for a
+    defence to be wrong: there is nothing to see. This is the real byte from the real tape.
+    """
+    record = _parse(_item(description=("Set 1:\n01. Rebubula\n02. Meat\n03. Ophelia\n"
+                                       "Band:\xa0\nAl Schnier - electric guitar\nPercussion\n")),
+                    policy=ArchivePolicy(band_name="band."))
+    assert _titles(record) == ["Rebubula", "Meat", "Ophelia"]
+
+
+def test_the_band_name_credit_heading_also_survives_a_non_breaking_space():
+    record = _parse(_item(description=("Set 1:\n01. Rebubula\n02. Meat\n03. Ophelia\n"
+                                       "band.:\xa0\nAl Schnier - electric guitar\nPercussion\n")),
+                    policy=ArchivePolicy(band_name="band."))
+    assert _titles(record) == ["Rebubula", "Meat", "Ophelia"]
+
+
+def test_a_song_with_band_in_its_title_is_not_a_lineup_heading():
+    """"A Band In The Sky" is a real song. The heading has to own its whole line, or this
+    filter is one taper's colon away from eating a setlist."""
+    record = _parse(_item(description=("Set 1:\n01. A Band In The Sky\n02. Meat\n"
+                                       "03. Band: In The Sky Reprise\n")))
+    assert _titles(record) == ["A Band In The Sky", "Meat", "Band: In The Sky Reprise"]
 
 
 def test_a_lineage_line_naming_ffp_does_not_cut_the_show():
