@@ -203,6 +203,14 @@ def _tracks(files: object) -> list[dict]:
 
     Ties break on the format name so two pulls of the same item agree; without it the tracklist
     the parser falls back to changes between runs, and so does every show it decides with it.
+
+    One format per item, chosen once, so track boundaries within a show stay internally
+    consistent. Note that the format with the MOST files is not always the most precise one:
+    Flac carries float seconds ("575.47") and VBR MP3 carries "09:35", and rounding thirty
+    songs a night to the nearest second is real error when a set's runtime is being estimated.
+    Changing the choice here would change which setlist the parser reads, so it is not made
+    here on precision grounds -- a consumer that needs better than a second reads the raw
+    payload itself.
     """
     by_format: dict[str, list[dict]] = {}
     for entry in files if isinstance(files, list) else []:
@@ -212,7 +220,36 @@ def _tracks(files: object) -> list[dict]:
         return []
     best = max(by_format.items(), key=lambda pair: (len(pair[1]), pair[0]))[1]
     return [{"track": str(entry.get("track") or ""), "title": str(entry.get("title") or ""),
-             "name": str(entry.get("name") or "")} for entry in best]
+             "name": str(entry.get("name") or ""),
+             # Kept as the source wrote it. The derived layer decides what a duration MEANS --
+             # which format to trust, what to do with a 45-minute "song" -- and it cannot make
+             # that call if this layer has already rounded or discarded. Raw layer stays raw.
+             "length": str(entry.get("length") or "")} for entry in best]
+
+
+def track_seconds(value: object) -> float | None:
+    """One archive.org ``length`` as seconds, or None when it cannot be read.
+
+    Two notations are in the corpus and they come from different derivatives of the same audio:
+    Flac writes float seconds ("575.47"), VBR MP3 writes "MM:SS" ("09:35"), and a long enough
+    track writes "H:MM:SS". Returning None rather than 0.0 for the unreadable ones matters --
+    a zero-length song is a data point and an unknown length is not, and averaging the two is
+    how a nominal length quietly drifts toward zero.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3:
+        return None
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError:
+        return None
+    seconds = 0.0
+    for number in numbers:                     # sexagesimal, most significant first
+        seconds = seconds * 60 + number
+    return seconds if seconds >= 0 else None
 
 
 def _flat(value: object) -> str:

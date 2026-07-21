@@ -7,7 +7,7 @@ import json
 import pytest
 
 from setlistkit.config import Config
-from setlistkit.sources.archive_org import ArchiveOrgClient
+from setlistkit.sources.archive_org import ArchiveOrgClient, _tracks, track_seconds
 from setlistkit.sources.client import PoliteClient, Response
 from setlistkit.store.raw_cache import RawCache
 
@@ -513,3 +513,57 @@ def test_tracks_are_empty_when_no_audio_file_is_listed(tmp_path):
     _archive(tmp_path, transport).pull("moe")
     item, = _archive(tmp_path, FakeTransport()).cached_items("moe").items
     assert item["tracks"] == []
+
+
+def test_tracks_keep_the_length_archive_org_gives_us():
+    """The metadata already carries it and we were dropping it on the floor.
+
+    Every durations question downstream is answered by this field, and the alternative to
+    keeping it is 4,614 more requests for a payload already sitting in the cache.
+    """
+    payload = {"files": [
+        {"name": "d1t01.flac", "format": "Flac", "track": "01", "title": "Aurora",
+         "length": "575.47"},
+        {"name": "d1t02.flac", "format": "Flac", "track": "02", "title": "Wormhole",
+         "length": "1103.02"},
+    ]}
+    tracks = _tracks(payload["files"])
+    assert [t["length"] for t in tracks] == ["575.47", "1103.02"]
+
+
+def test_a_track_with_no_length_gets_an_empty_string_not_a_missing_key():
+    """Absent and malformed are different, and a missing key is neither -- it is a KeyError."""
+    tracks = _tracks([{"name": "d1t01.flac", "format": "Flac", "track": "01", "title": "Aurora"}])
+    assert tracks[0]["length"] == ""
+
+
+def test_keeping_length_does_not_change_which_format_wins():
+    """The tracklist decides 63 of the corpus's shows. This change must not touch it."""
+    files = [{"name": "a.flac", "format": "Flac", "track": "01", "title": "Aurora"},
+             {"name": "a.mp3", "format": "VBR MP3", "track": "01", "title": "Aurora"},
+             {"name": "b.mp3", "format": "VBR MP3", "track": "02", "title": "Wormhole"}]
+    # VBR MP3 has more files, so it wins, exactly as before.
+    assert [t["name"] for t in _tracks(files)] == ["a.mp3", "b.mp3"]
+
+
+def test_track_seconds_reads_float_seconds():
+    assert track_seconds("575.47") == 575.47
+
+
+def test_track_seconds_reads_minutes_and_seconds():
+    """FLAC carries float seconds, VBR MP3 carries MM:SS. Both are in the corpus."""
+    assert track_seconds("09:35") == 575.0
+
+
+def test_track_seconds_reads_hours_minutes_and_seconds():
+    assert track_seconds("1:02:03") == 3723.0
+
+
+def test_track_seconds_returns_none_for_anything_it_cannot_read():
+    for value in ("", "   ", "unknown", None, "1:2:3:4"):
+        assert track_seconds(value) is None
+
+
+def test_track_seconds_rejects_a_negative_length():
+    """A negative duration is not a short song, it is a broken record."""
+    assert track_seconds("-5") is None
