@@ -205,16 +205,21 @@ def test_is_non_song_catches_guest_and_bare_notes():
     assert norm.is_non_song("(UM)") is True             # bare parenthesised note
 
 
-def test_guest_note_misses_space_after_slash_KNOWN_BUG():
-    """LOCKS a latent bug ported verbatim from songnorm.py, to be fixed as a measured change.
+def test_guest_note_catches_a_space_after_the_slash():
+    """the bug ported from songnorm.py, now fixed: these are the regex's OWN examples.
 
-    GUEST_NOTE is `^\\(?\\s*=?\\s*w(?:ith|/)\\b`. The `\\b` after "/" cannot fire before a
-    space, so the regex's OWN documented targets -- "w/ Andy Frasco", "(w/ BRONCO)" -- slip
-    through and are treated as songs. Only "w/word" (no space) and the "with " form are
-    caught. When the pack/normalizer fix lands (its own commit), these flip to True."""
+    `w(?:ith|/)\\b` could not match them, because a `\\b` cannot fire between "/" and a space,
+    so the one thing GUEST_NOTE was written to catch went into the vocabulary as a song. The
+    boundary now sits on "with" alone."""
     norm = _StubNormalizer()
-    assert norm.is_non_song("w/ Andy Frasco") is False
-    assert norm.is_non_song("(w/ BRONCO)") is False
+    assert norm.is_non_song("w/ Andy Frasco") is True
+    assert norm.is_non_song("(w/ BRONCO)") is True
+
+
+def test_a_song_whose_name_starts_with_with_survives():
+    """why the boundary has to stay on the spelled-out form: "with" is a word, "w/" is not."""
+    norm = _StubNormalizer()
+    assert norm.is_non_song("Within Your Reach") is False
 
 
 def test_protected_title_is_always_a_song():

@@ -86,7 +86,13 @@ _P_TIMECODE = re.compile(r"^\s*\(?\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)?\s*")
 
 # "W/ Andy Frasco", "w/ Haley Jane", "(w/ BRONCO)" -- a note about who sat in, standing alone in
 # the setlist as if it were a song.
-GUEST_NOTE = re.compile(r"^\(?\s*=?\s*w(?:ith|/)\b", re.I)
+#
+# The word boundary sits INSIDE the alternation, on "with" alone. Written as `w(?:ith|/)\b` it
+# could never fire for the slashed form: "/" and " " are both non-word characters, so there is no
+# boundary between them, and every one of the examples above -- the regex's OWN documented
+# targets -- was read as a song. "with" still needs the boundary or it eats the first word of
+# "Within Your Reach". "w/" needs nothing, because no song title has ever started with it.
+GUEST_NOTE = re.compile(r"^\(?\s*=?\s*w(?:ith\b|/)", re.I)
 
 # A setlist entry that is nothing but a PARENTHESISED note -- "(NH)", "(UM)" -- is a taper's
 # annotation the description parser promoted to a song. Left alone it is also a collision
