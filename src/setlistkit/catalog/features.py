@@ -8,8 +8,9 @@ night. Bearsong closes sets. Timmy Tucker opens them. Rebubula segues out of thi
 rotation model that treats all thirty slots in a show as interchangeable will happily predict
 four set-closers and no opener.
 
-Everything is a rate in [0,1] with an ``n_plays`` beside it. A 1.00 encore_rate on n=1 means
-nothing, and a consumer needs the n to know that.
+Everything is a rate in [0,1] with an ``n_plays`` beside it. A 1.00 encore rate on n=1 means
+nothing, and a consumer needs the n to know that. The six rates live together in ``Rates``
+because they share that denominator; ``mean_slot`` does not share it and so does not join them.
 
 Computed over the WHOLE corpus, not a recent window. The version this was ported from used
 2023-01-01 onward on the argument that a song's 2019 habits are not evidence about 2026, which
@@ -29,17 +30,35 @@ _TOP_PARTNERS = 3
 
 
 @dataclass(frozen=True)
+class Rates:
+    """How often a song took each structural role. All six are over the same ``n_plays``.
+
+    Grouped because they share that denominator, which is the thing that makes them
+    comparable to each other and to nothing else in the record. ``mean_slot`` deliberately
+    stays outside: it averages slot observations, and a set of one contributes none, so its
+    denominator is not ``n_plays`` and never was.
+    """
+
+    opener: float
+    set_closer: float
+    show_closer: float
+    encore: float
+    segue_out: float
+    segue_in: float
+
+
+@dataclass(frozen=True)
 class SongFeature:
-    """One song's structural profile. Rates are over ``n_plays``, which is the denominator."""
+    """One song's structural profile.
+
+    Every field is immutable, including ``top_partners``, so a feature can be sorted, hashed
+    and put in a set. There will be one of these per song in the corpus and consumers will
+    want to compare them; a mutable member would defeat the freeze quietly rather than loudly.
+    """
 
     song: str
     n_plays: int
-    opener_rate: float
-    set_closer_rate: float
-    show_closer_rate: float
-    encore_rate: float
-    segue_out_rate: float
-    segue_in_rate: float
+    rates: Rates
     mean_slot: float
     top_partners: tuple[tuple[str, int], ...]
     first_seen: str
@@ -125,12 +144,14 @@ def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:
     return SongFeature(
         song=song,
         n_plays=plays,
-        opener_rate=round(tally.opener[song] / plays, 3),
-        set_closer_rate=round(tally.set_closer[song] / plays, 3),
-        show_closer_rate=round(tally.show_closer[song] / plays, 3),
-        encore_rate=round(tally.encore[song] / plays, 3),
-        segue_out_rate=round(tally.segue_out[song] / plays, 3),
-        segue_in_rate=round(tally.segue_in[song] / plays, 3),
+        rates=Rates(
+            opener=round(tally.opener[song] / plays, 3),
+            set_closer=round(tally.set_closer[song] / plays, 3),
+            show_closer=round(tally.show_closer[song] / plays, 3),
+            encore=round(tally.encore[song] / plays, 3),
+            segue_out=round(tally.segue_out[song] / plays, 3),
+            segue_in=round(tally.segue_in[song] / plays, 3),
+        ),
         mean_slot=round(sum(slots) / len(slots), 3),
         top_partners=tuple(tally.partners[song].most_common(_TOP_PARTNERS)),
         first_seen=min(tally.dates[song]),

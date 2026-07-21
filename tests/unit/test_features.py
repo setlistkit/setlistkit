@@ -7,7 +7,11 @@ rates, the slot average and the segue partners against hand-built setlists small
 check by eye.
 """
 
-from setlistkit.catalog.features import SongFeature, song_features
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from setlistkit.catalog.features import Rates, SongFeature, song_features
 
 
 def _entry(song, segue=False, non_song=False):
@@ -29,9 +33,9 @@ def test_opener_and_set_closer_rates():
     shows = [_show("2025-01-01", [["Aurora", "Wormhole", "Bearsong"]]),
              _show("2025-01-02", [["Aurora", "Bearsong", "Wormhole"]])]
     feat = _by_song(song_features(shows))
-    assert feat["Aurora"].opener_rate == 1.0          # opened both sets
-    assert feat["Aurora"].set_closer_rate == 0.0
-    assert feat["Bearsong"].set_closer_rate == 0.5    # closed one of its two plays
+    assert feat["Aurora"].rates.opener == 1.0          # opened both sets
+    assert feat["Aurora"].rates.set_closer == 0.0
+    assert feat["Bearsong"].rates.set_closer == 0.5    # closed one of its two plays
 
 
 def test_a_tagged_non_song_is_never_a_feature():
@@ -43,22 +47,22 @@ def test_a_tagged_non_song_is_never_a_feature():
     shows = [_show("2025-01-01", [["Aurora", ("break", False, True)]])]
     feat = _by_song(song_features(shows))
     assert "break" not in feat
-    assert feat["Aurora"].set_closer_rate == 1.0   # the non-song did not steal the close
+    assert feat["Aurora"].rates.set_closer == 1.0   # the non-song did not steal the close
 
 
 def test_encore_rate_and_show_closer():
     shows = [_show("2025-01-01", [["Aurora", "Bearsong"]], encore=["Plane Crash"])]
     feat = _by_song(song_features(shows))
-    assert feat["Plane Crash"].encore_rate == 1.0
+    assert feat["Plane Crash"].rates.encore == 1.0
     # An encore closes the night, so nothing in the final SET is the show closer.
-    assert feat["Bearsong"].show_closer_rate == 0.0
+    assert feat["Bearsong"].rates.show_closer == 0.0
 
 
 def test_show_closer_when_there_is_no_encore():
     shows = [_show("2025-01-01", [["Aurora"], ["Bearsong", "Wormhole"]])]
     feat = _by_song(song_features(shows))
-    assert feat["Wormhole"].show_closer_rate == 1.0
-    assert feat["Aurora"].show_closer_rate == 0.0    # closed set 1, not the show
+    assert feat["Wormhole"].rates.show_closer == 1.0
+    assert feat["Aurora"].rates.show_closer == 0.0    # closed set 1, not the show
 
 
 def test_segue_rates_and_partners():
@@ -66,8 +70,8 @@ def test_segue_rates_and_partners():
              _show("2025-01-02", [[("Aurora", True), "Wormhole"]]),
              _show("2025-01-03", [[("Aurora", True), "Bearsong"]])]
     feat = _by_song(song_features(shows))
-    assert feat["Aurora"].segue_out_rate == 1.0
-    assert feat["Wormhole"].segue_in_rate == 1.0
+    assert feat["Aurora"].rates.segue_out == 1.0
+    assert feat["Wormhole"].rates.segue_in == 1.0
     assert feat["Aurora"].top_partners[0] == ("Wormhole", 2)
 
 
@@ -101,3 +105,16 @@ def test_ordering_is_stable_for_equal_play_counts():
 def test_returns_song_feature_instances():
     shows = [_show("2025-01-01", [["Aurora"]])]
     assert isinstance(song_features(shows)[0], SongFeature)
+
+
+def test_the_rates_travel_together_and_stay_immutable():
+    """The six share a denominator, so they are one object, and it is a frozen one.
+
+    A feature is a value: 1,972 of them come back from one call and a consumer will sort,
+    compare and de-duplicate them. A mutable member would defeat that quietly.
+    """
+    feature = song_features([_show("2025-01-01", [["Aurora"]])])[0]
+    assert isinstance(feature.rates, Rates)
+    assert hash(feature) is not None            # every member is immutable, so this works
+    with pytest.raises(FrozenInstanceError):
+        feature.rates.opener = 0.5
