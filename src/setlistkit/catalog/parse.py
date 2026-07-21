@@ -308,10 +308,9 @@ def _looks_songlike(token: str, rules: _Rules) -> bool:
     """Shape gate: right length, no gear vocabulary, mostly letters.
 
     The pack gets asked first, for the same reason ``_is_place`` asks it: GEAR is the widest
-    filter in this module and it cannot tell a song from a tape utility. "TLH", "Wave",
-    "Matrix", "Source", "Edit" and "Gain" are all gear words, and TLH is a real song -- one of
-    the three whose silent deletion is the entire reason ``protected_titles`` exists. Nothing
-    the pack claims gets deleted on shape.
+    filter in this module and it cannot tell a song from a tape utility. "Wave", "Matrix",
+    "Source", "Edit", "Gain" and "Reaper" are all gear words, and every one of them is a
+    perfectly plausible song title. Nothing the pack claims gets deleted on shape.
 
     Deliberately does NOT ask whether the token is banter or a guest credit. That question has
     exactly one answer and it lives in ``Normalizer.is_non_song`` -- see the module docstring.

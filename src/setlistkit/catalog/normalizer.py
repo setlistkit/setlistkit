@@ -101,8 +101,15 @@ GUEST_NOTE = re.compile(r"^\(?\s*=?\s*(?:&\s*|w(?:ith\b|/))", re.I)
 # hazard, because a two-letter "song" sits inside half the vocabulary.
 #
 # The parentheses are doing the real work here. An earlier version matched any 1-3 letter all-caps
-# entry and promptly deleted ATL, TLH and NYC -- all real moe. songs. Junk with n=1 is survivable;
-# a real song silently vanishing from the vocabulary is not.
+# entry and promptly deleted ATL and NYC, both real songs. Junk with n=1 is survivable; a real
+# song silently vanishing from the vocabulary is not.
+#
+# The comment this was ported from named TLH alongside them as a third "real song". It is not one.
+# TLH is Trader's Little Helper, the FLAC checksum tool tapers run, it appears nowhere in the
+# corpus as a setlist entry, and the old parser listed `tlh` in its gear words at the same time it
+# was being protected as a song. It got grouped with the other two because it LOOKED like them:
+# a bare three-letter all-caps token. Shape is what this whole rule is about, so that is exactly
+# the mistake to expect.
 BARE_NOTE = re.compile(r"^\([^A-Za-z]*[A-Za-z]{1,3}[^A-Za-z]*\)$")
 
 
@@ -307,7 +314,7 @@ class Normalizer:
 
         Core owns the rule, the pack owns the exceptions: a protected title is ALWAYS a song,
         even if a pattern would match it. That guard is what stopped an earlier all-caps rule
-        from deleting ATL/TLH/NYC, all real moe. songs.
+        from deleting ATL and NYC, both real songs.
         """
         entry = entry.strip()
         if self.is_protected(entry):

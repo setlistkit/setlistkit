@@ -198,18 +198,18 @@ def test_gear_words_written_as_a_track_are_not_songs():
 
 
 def test_a_song_in_the_vocabulary_survives_a_gear_word_collision():
-    """"TLH" is a real song AND a tape utility. GEAR is the widest filter here and it cannot
-    tell them apart, so anything the pack claims is never deleted on shape."""
-    record = parse_archive_item(_item(description="Set 1:\n01. Meat\n02. TLH\n03. Ophelia\n"),
-                                normalizer=_StubNormalizer(extra_vocab=("TLH",)))
-    assert _titles(record) == ["Meat", "TLH", "Ophelia"]
+    """"Wave" is a tape format AND a perfectly ordinary song title. GEAR is the widest filter
+    here and it cannot tell them apart, so anything the pack claims is never deleted on shape."""
+    record = parse_archive_item(_item(description="Set 1:\n01. Meat\n02. Wave\n03. Ophelia\n"),
+                                normalizer=_StubNormalizer(extra_vocab=("Wave",)))
+    assert _titles(record) == ["Meat", "Wave", "Ophelia"]
 
 
 def test_a_protected_title_survives_a_gear_word_collision():
     """the same guard, reached through protected_titles rather than the vocabulary."""
-    record = parse_archive_item(_item(description="Set 1:\n01. Meat\n02. TLH\n03. Ophelia\n"),
-                                normalizer=_StubNormalizer(protected=("TLH",)))
-    assert _titles(record) == ["Meat", "TLH", "Ophelia"]
+    record = parse_archive_item(_item(description="Set 1:\n01. Meat\n02. Wave\n03. Ophelia\n"),
+                                normalizer=_StubNormalizer(protected=("Wave",)))
+    assert _titles(record) == ["Meat", "Wave", "Ophelia"]
 
 
 def test_first_numbered_track_marks_where_the_setlist_starts():

@@ -26,7 +26,7 @@ class _StubNormalizer(Normalizer):
         return [re.compile(r"^setbreak$"), re.compile(r"nounc"), re.compile(r"intro")]
 
     def protected_titles(self):
-        return {"ATL", "TLH", "NYC"}
+        return {"ATL", "NYC"}
 
 
 # --- squash -------------------------------------------------------------------------------
@@ -223,17 +223,17 @@ def test_a_song_whose_name_starts_with_with_survives():
 
 
 def test_protected_title_is_always_a_song():
-    """ATL/TLH/NYC survive even when a pattern DOES match them; formatting is ignored."""
+    """ATL and NYC survive even when a pattern DOES match them; formatting is ignored."""
     class _Trap(Normalizer):
         def non_song_patterns(self):
             # each of these would delete a protected moe. song without the guard
-            return [re.compile(r"atl"), re.compile(r"tlh"), re.compile(r"nyc")]
+            return [re.compile(r"atl"), re.compile(r"nyc")]
 
         def protected_titles(self):
-            return {"ATL", "TLH", "NYC"}
+            return {"ATL", "NYC"}
 
     trap = _Trap()
-    for title in ("ATL", "TLH", "NYC"):
+    for title in ("ATL", "NYC"):
         assert trap.is_non_song(title) is False
     # squash-both-sides: punctuation in the entry does not sneak a protected title past the guard
     assert trap.is_non_song("A.T.L") is False

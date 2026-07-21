@@ -60,7 +60,7 @@ def test_full_pack_populates_every_hook(tmp_path):
             "pack.json": IDENTITY,
             "vocabulary.json": VOCAB,
             "aliases.json": '{"rec chem": "Recreational Chemistry"}',
-            "protected.json": '["ATL", "TLH", "NYC"]',
+            "protected.json": '["ATL", "NYC"]',
             "classifiers.json": '{"non_song": ["^setbreak$", '
                                 '{"pattern": "nounc", "why": "Al announcements"}]}',
         },
