@@ -25,6 +25,7 @@ from ..store import Store
 from ..store.raw_cache import RawCache
 from .common import min_year, required_setting, resolve_pack_dir
 from .derive import derive
+from .export import export
 from .ingest import ingest
 
 EXIT_OK = 0
@@ -58,30 +59,24 @@ def _add_dry_run(parser: argparse.ArgumentParser, help_text: str) -> None:
                         help=help_text)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="slkit",
-        description="setlistkit — a setlist prediction toolkit.",
-    )
-    parser.add_argument("--version", action="version", version=f"slkit {__version__}")
-    parser.add_argument(
-        "--config",
-        metavar="PATH",
-        help="path to a config file (overrides SLKIT_CONFIG and the default search order)",
-    )
-
-    sub = parser.add_subparsers(dest="command")
-
+def _add_config(sub) -> None:
+    """The ``slkit config`` parser."""
     config_cmd = sub.add_parser("config", help="inspect the resolved configuration")
     config_sub = config_cmd.add_subparsers(dest="config_action")
     config_sub.add_parser("show", help="print the resolved configuration")
     config_sub.add_parser("check", help="validate the config, including network identity")
 
+
+def _add_store(sub) -> None:
+    """The ``slkit store`` parser."""
     store_cmd = sub.add_parser("store", help="create and inspect the state store")
     store_sub = store_cmd.add_subparsers(dest="store_action")
     store_sub.add_parser("init", help="create data_root and apply schema migrations")
     store_sub.add_parser("status", help="show schema version and table counts")
 
+
+def _add_dump(sub) -> None:
+    """The ``slkit dump`` parser."""
     dump_cmd = sub.add_parser("dump", help="print a plain-text view of derived state")
     # Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
     # someone reaches for when they already suspect something is wrong -- one bug at a time.
@@ -91,6 +86,9 @@ def _build_parser() -> argparse.ArgumentParser:
     dump_cmd.add_argument("--until", metavar="YYYY-MM-DD",
                           help="only rows on or before this date")
 
+
+def _add_pull(sub) -> None:
+    """The ``slkit pull`` parser."""
     pull_cmd = sub.add_parser("pull", help="fetch raw source data into the cache")
     pull_cmd.add_argument("source", choices=_SOURCES, help="which source to fetch from")
     pull_cmd.add_argument(
@@ -105,6 +103,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_dry_run(pull_cmd, "list the collection and report what a real run would fetch, "
                            "without fetching any of it")
 
+
+def _add_ingest(sub) -> None:
+    """The ``slkit ingest`` parser."""
     ingest_cmd = sub.add_parser(
         "ingest", help="parse the cached raw data and publish the merged corpus")
     ingest_cmd.add_argument("source", choices=_SOURCES, nargs="?", default=_SOURCES[0],
@@ -121,6 +122,9 @@ def _build_parser() -> argparse.ArgumentParser:
              "no-shrink guard)",
     )
 
+
+def _add_derive(sub) -> None:
+    """The ``slkit derive`` parser."""
     derive_cmd = sub.add_parser(
         "derive", help="compute derived state from what ingest published")
     derive_sub = derive_cmd.add_subparsers(dest="derive_action")
@@ -131,6 +135,21 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_dry_run(durations_cmd,
                  "read, reconcile and report in full, but write nothing to the database")
 
+
+def _add_export(sub) -> None:
+    """The ``slkit export`` parser."""
+    export_cmd = sub.add_parser(
+        "export", help="write what was derived as one file, for something else to draw")
+    export_sub = export_cmd.add_subparsers(dest="export_action")
+    tapemeasure_cmd = export_sub.add_parser(
+        "tapemeasure", help="song lengths, features, credits and caveats as one JSON bundle")
+    tapemeasure_cmd.add_argument("--out", metavar="PATH", default="tapemeasure.json",
+                                 help="where to write the bundle (default: %(default)s)")
+    _add_dry_run(tapemeasure_cmd, "build the bundle and report it, but write no file")
+
+
+def _add_pack(sub) -> None:
+    """The ``slkit pack`` parser."""
     pack_cmd = sub.add_parser("pack", help="work with band packs")
     pack_sub = pack_cmd.add_subparsers(dest="pack_action")
     lint_cmd = pack_sub.add_parser("lint", help="validate a pack and run conformance checks")
@@ -147,6 +166,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip the checks that read the cached corpus (dead rules, redundant rules, "
              "unreachable aliases, unknown titles)",
     )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Every command's parser, one call each.
+
+    One builder per command rather than eighty lines in a row, so that adding a command is one
+    function here and one entry in ``_COMMANDS`` below -- the same shape the dispatch table
+    already has, and the reason it has it. Inline, each command left two or three locals behind
+    for the next one to read past.
+    """
+    parser = argparse.ArgumentParser(
+        prog="slkit",
+        description="setlistkit — a setlist prediction toolkit.",
+    )
+    parser.add_argument("--version", action="version", version=f"slkit {__version__}")
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help="path to a config file (overrides SLKIT_CONFIG and the default search order)",
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    _add_config(sub)
+    _add_store(sub)
+    _add_dump(sub)
+    _add_pull(sub)
+    _add_ingest(sub)
+    _add_derive(sub)
+    _add_export(sub)
+    _add_pack(sub)
 
     return parser
 
@@ -373,6 +423,7 @@ _COMMANDS = {
     "pull": _cmd_pull,
     "ingest": ingest,
     "derive": derive,
+    "export": export,
     "dump": _cmd_dump,
 }
 

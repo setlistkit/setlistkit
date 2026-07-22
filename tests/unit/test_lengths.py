@@ -367,3 +367,41 @@ def test_percentiles_are_nearest_rank_on_the_sorted_values():
                                       60.0, 70.0, 80.0, 90.0, 100.0], start=1)]
     stat = L.song_stats(rows)[0]
     assert (stat.p10_seconds, stat.median_seconds, stat.p90_seconds) == (10.0, 55.0, 90.0)
+
+
+def test_a_song_timed_twice_puts_its_p90_at_the_longer_of_the_two():
+    """the sample size that tells nearest-rank apart from floor-rank, which n=10 above cannot.
+
+    `int(fraction * (n - 1))` agrees with the ceiling at n=10 and disagrees everywhere small: at
+    n=2 it puts p90 at index 0 and returns the SHORTER take, at n=3 it returns the median exactly.
+    That shipped -- 106 of the 389 real songs with more than one timing had p90 <= median, and
+    Vocal Jam published a 19.6-minute median beside a 7.4-minute p90."""
+    rows = [_perf("Vocal Jam", 445.8, DATE), _perf("Vocal Jam", 1901.8, "2023-03-11")]
+    stat = L.song_stats(rows)[0]
+    assert stat.p90_seconds == 1901.8
+    assert stat.p10_seconds == 445.8
+    assert stat.p10_seconds <= stat.median_seconds <= stat.p90_seconds
+
+
+def test_a_percentile_is_never_on_the_wrong_side_of_the_median():
+    """the property the off-by-one broke, at every sample size rather than at a chosen one.
+
+    Lengths carry hundredths, because that is how archive.org states them, and the rounding is
+    what makes this a property worth asserting rather than arithmetic: rounding the median while
+    leaving the percentiles raw put p90 0.04s BELOW the median for every song whose timings were
+    identical, and a bar drawn from median to p90 has a negative width."""
+    for count in range(1, 12):
+        rows = [_perf("Moth", 100.0 * n + 0.56, DATE, position=n) for n in range(1, count + 1)]
+        stat = L.song_stats(rows)[0]
+        assert stat.min_seconds <= stat.p10_seconds <= stat.median_seconds, f"n={count}"
+        assert stat.median_seconds <= stat.p90_seconds <= stat.max_seconds, f"n={count}"
+
+
+def test_every_published_length_shares_one_precision():
+    """Six numbers printed side by side get compared to each other, so they round alike."""
+    rows = [_perf("Moth", secs, DATE, position=i)
+            for i, secs in enumerate([492.681, 492.684, 501.999], start=1)]
+    stat = L.song_stats(rows)[0]
+    for value in (stat.median_seconds, stat.mean_seconds, stat.min_seconds, stat.max_seconds,
+                  stat.p10_seconds, stat.p90_seconds, stat.stdev_seconds):
+        assert value == round(value, 1)

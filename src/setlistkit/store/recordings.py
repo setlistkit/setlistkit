@@ -189,6 +189,22 @@ def recordings(conn: sqlite3.Connection) -> list[dict]:
     return list(out.values())
 
 
+def uploader_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """who posted -> how many of their tapes we hold, most prolific first.
+
+    The credits. Counted in SQL rather than tallied from :func:`recordings` because the export
+    wants only this, and reading four thousand tapes and their seventy-five thousand tracks to
+    count a string is the kind of cost that gets noticed a year later as "the export is slow".
+
+    Tapes whose uploader is blank are absent rather than grouped under "": an unknown taper is
+    not a taper, and a credits list with a nameless entry at the top invites someone to read it
+    as one.
+    """
+    return {row["uploader"]: row["n"] for row in conn.execute(
+        "SELECT uploader, COUNT(*) AS n FROM recordings WHERE TRIM(uploader) <> '' "
+        "GROUP BY uploader ORDER BY n DESC, uploader")}
+
+
 def show_types(conn: sqlite3.Connection) -> dict[str, str]:
     """date -> kind. The lookup the length statistics filter acoustic nights out with."""
     return {row["date"]: row["kind"] for row in conn.execute("SELECT date, kind FROM show_types")}

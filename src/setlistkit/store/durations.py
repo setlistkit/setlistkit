@@ -49,6 +49,10 @@ _REVIEW_COLUMNS = ("identifier", "date", "n_tracks", "n_setlist", "n_desc", "rea
 
 _ABANDONED_COLUMNS = ("identifier", "date", "n_tracks", "longest_seconds")
 
+# `id` is deliberately not here: it is the table's key, not a fact about the edge, and putting it
+# in the export would publish an insertion counter as though it meant something.
+_EDGE_COLUMNS = ("kind", "date", "identifier", "song", "detail_json")
+
 # Columns SQLite has no type for and Python does: a bool stored as INTEGER comes back as 0 or 1,
 # and `if row["suspect"]` would be true for both if we let the string "False" through on the way
 # in. Coerced on write, coerced back on read, listed once.
@@ -167,6 +171,26 @@ def song_length_stats(conn: sqlite3.Connection) -> list[dict]:
 def duration_review(conn: sqlite3.Connection) -> list[dict]:
     """Tapes we hold and could not time, worst mismatch first."""
     return _read(conn, "duration_review", _REVIEW_COLUMNS, "date, identifier")
+
+
+def duration_abandoned(conn: sqlite3.Connection) -> list[dict]:
+    """Tapes with one track holding a whole set. Nothing to do about them, but they are held."""
+    return _read(conn, "duration_abandoned", _ABANDONED_COLUMNS, "date, identifier")
+
+
+def duration_edges(conn: sqlite3.Connection) -> list[dict]:
+    """Every edge case recorded, with its detail back as the mapping it went in as.
+
+    Ordered by what the row SAYS rather than by ``id``, though the id is right there. Insertion
+    order is the order the tapes happened to be read in, which is stable today only because
+    :func:`setlistkit.store.recordings.recordings` sorts -- so ordering on it would make the
+    export's row order depend on a decision made two modules away, and a golden file that fails
+    when that decision changes is a golden file that fails for the wrong reason.
+    """
+    rows = _read(conn, "duration_edges", _EDGE_COLUMNS, "kind, date, identifier, song")
+    for row in rows:
+        row["detail"] = json.loads(row.pop("detail_json"))
+    return rows
 
 
 def withheld_counts(conn: sqlite3.Connection) -> dict[str, int]:

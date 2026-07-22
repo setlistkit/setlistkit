@@ -26,6 +26,8 @@ from collections.abc import Iterable, Mapping
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
+from .normalizer import clean_song
+
 _TOP_PARTNERS = 3
 
 
@@ -108,11 +110,22 @@ def _songs_only(entries: Iterable[Mapping]) -> list[Mapping]:
     return [entry for entry in entries if not entry.get("non_song")]
 
 
+def _name(entry: Mapping) -> str:
+    """What this entry's song is called, under the one name the whole project files it by.
+
+    Canonicalised HERE and not only in the length chain, because a profile keyed by the raw
+    setlist string and a length keyed by the cleaned one are two records of the same song that
+    nothing can join. That is not hypothetical -- it is how "Hey, It's Christmas" ended up with
+    lengths under one spelling and a structural profile under another.
+    """
+    return clean_song(entry["song"])
+
+
 def _walk_set(tally: _Tally, songs: list[Mapping], date: str, *, is_last: bool) -> None:
     """Fold one set into the tally."""
     count = len(songs)
     for position, entry in enumerate(songs):
-        song = str(entry["song"])
+        song = _name(entry)
         tally.play(song, date)
         # A set of one has no first-to-last axis to place anything on, so it contributes no
         # slot observation rather than a fabricated 0.0.
@@ -125,17 +138,17 @@ def _walk_set(tally: _Tally, songs: list[Mapping], date: str, *, is_last: bool) 
             if is_last:
                 tally.show_closer[song] += 1
         if entry.get("segue") and position + 1 < count:
-            tally.segue(song, str(songs[position + 1]["song"]))
+            tally.segue(song, _name(songs[position + 1]))
 
 
 def _walk_encore(tally: _Tally, songs: list[Mapping], date: str) -> None:
     """Fold the encore into the tally. An encore song is not an opener or a set closer."""
     for position, entry in enumerate(songs):
-        song = str(entry["song"])
+        song = _name(entry)
         tally.play(song, date)
         tally.encore[song] += 1
         if entry.get("segue") and position + 1 < len(songs):
-            tally.segue(song, str(songs[position + 1]["song"]))
+            tally.segue(song, _name(songs[position + 1]))
 
 
 def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:

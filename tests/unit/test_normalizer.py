@@ -15,6 +15,7 @@ policy-reading methods can be exercised without the moe. data.
 import re
 
 from setlistkit.catalog import Normalizer
+from setlistkit.catalog.normalizer import clean_song
 
 
 # A synthetic pack: enough policy to exercise the hooks, none of the real moe. data.
@@ -220,6 +221,80 @@ def test_a_song_whose_name_starts_with_with_survives():
     """why the boundary has to stay on the spelled-out form: "with" is a word, "w/" is not."""
     norm = _StubNormalizer()
     assert norm.is_non_song("Within Your Reach") is False
+
+
+def test_a_guest_annotation_is_not_a_different_song():
+    """"Moth (w/ Daniel Donato)" is a Moth. Left attached it files a real performance under its
+    own name with n=1, which is how one song appears three times with a sample size of one."""
+    assert clean_song("Moth (w/ Daniel Donato)") == "Moth"
+    assert clean_song("Moth (with the horns)") == "Moth"
+    assert clean_song('Moth"') == "Moth"
+    # A parenthetical that is not a guest credit stays put -- it may be part of the title.
+    assert clean_song("Rebubula (reprise)") == "Rebubula (reprise)"
+
+
+def test_cleaning_a_song_name_does_not_eat_its_apostrophe():
+    """a curly apostrophe is in the same character class as a curly quote, and an earlier form of
+    this deleted every one of them wherever it stood.
+
+    "Hey, It's Christmas" was published as "Hey, Its Christmas" -- a real song under a name it
+    does not have, which then matched nothing else spelled correctly. A quote character between
+    two letters is an apostrophe."""
+    assert clean_song("Hey, It’s Christmas") == "Hey, It’s Christmas"
+    assert clean_song("Rob’s Speech") == "Rob’s Speech"
+    assert clean_song("Don't Fuck With Flo") == "Don't Fuck With Flo"
+
+
+def test_cleaning_leaves_a_spoken_moment_its_quotes():
+    """the quotes ARE the classification, so cleaning them off destroys it.
+
+    Everything downstream asks is_non_song about the CLEANED entry. Strip the quotes here and the
+    classifier is handed 'Penguin Joke' with nothing to recognise -- which is how a knock-knock
+    joke came to be published with a median length of 4m45s."""
+    assert clean_song('"Penguin Joke"') == '"Penguin Joke"'
+    assert clean_song('  "thank you very much everybody..."  ') == '"thank you very much everybody..."'
+    # A stray quote on one end only is still parse debris, not a classification.
+    assert clean_song('Moth"') == "Moth"
+
+
+def test_the_two_halves_of_an_export_file_a_song_under_one_name():
+    """the join this function exists to keep honest. features keyed songs by the raw setlist
+    string while the length chain cleaned them, so a song's lengths and its structural profile
+    were two records nothing could put back together."""
+    from setlistkit.catalog.features import song_features
+
+    shows = [{"date": "2024-01-01",
+              "sets": [[{"song": "Hey, It’s Christmas"}, {"song": "Moth (w/ Daniel Donato)"}]]}]
+    assert sorted(f.song for f in song_features(shows)) == ["Hey, It’s Christmas", "Moth"]
+
+
+def test_an_entry_wrapped_in_quotes_is_a_spoken_moment_not_a_song():
+    """how a setlist writes down banter. Left as songs these get TIMED: the corpus published
+    "thank you very much everybody..." with a median length of 14 seconds, and 25 more like it."""
+    norm = _StubNormalizer()
+    assert norm.is_non_song('"thank you very much everybody..."') is True
+    assert norm.is_non_song('"Penguin Joke"') is True
+    assert norm.is_non_song("“Band Interview”") is True     # curly quotes are the same convention
+
+
+def test_a_song_carrying_a_quoted_note_keeps_its_slot():
+    """the trap in the quoted rule: the quotes have to wrap the WHOLE entry.
+
+    'Wind it Up "False Start"' is a Wind it Up that went wrong, not a spoken moment, and a rule
+    that matched a quote anywhere would delete the song along with the note."""
+    norm = _StubNormalizer()
+    assert norm.is_non_song('Wind it Up "False Start"') is False
+    assert norm.is_non_song('end of "soundcheck" etc') is False
+
+
+def test_a_protected_title_survives_being_quoted():
+    """the escape hatch the quoted rule leans on: it is a shape rule with no vocabulary behind
+    it, so the day a real title arrives in quotes, the pack is what saves it."""
+    class _Quoted(Normalizer):
+        def protected_titles(self):
+            return {"SuperJam"}
+
+    assert _Quoted().is_non_song('"SuperJam"') is False
 
 
 def test_protected_title_is_always_a_song():

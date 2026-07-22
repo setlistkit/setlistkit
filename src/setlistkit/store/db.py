@@ -255,6 +255,10 @@ class _Tapes(_Namespace):
         """reading -> how many tapes it explained, including the ones that did not line up."""
         return recordings.listing_readings(self.conn)
 
+    def uploader_counts(self) -> dict[str, int]:
+        """who posted -> how many of their tapes we hold, most prolific first."""
+        return recordings.uploader_counts(self.conn)
+
 
 class _Durations(_Namespace):
     """What the durations chain concluded: performances, statistics, and what was skipped."""
@@ -277,6 +281,14 @@ class _Durations(_Namespace):
     def review(self) -> list[dict]:
         """Tapes we hold and could not time."""
         return durations.duration_review(self.conn)
+
+    def abandoned(self) -> list[dict]:
+        """Tapes with one track holding a whole set."""
+        return durations.duration_abandoned(self.conn)
+
+    def edges(self) -> list[dict]:
+        """Every edge case recorded, with its detail as a mapping."""
+        return durations.duration_edges(self.conn)
 
     def withheld_counts(self) -> dict[str, int]:
         """reason -> how many stored performances do not vote for their song's nominal length."""

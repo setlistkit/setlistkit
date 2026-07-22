@@ -38,6 +38,7 @@ perfectly on the machine it was written on.
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -520,8 +521,19 @@ def reconcile(observations: Iterable[Observation], shows: Mapping[str, Mapping],
 
 
 def _percentile(seconds: Sequence[float], fraction: float) -> float:
-    """Nearest-rank on a sorted list, clamped at both ends so n=1 is its own p10 and p90."""
-    index = int(fraction * (len(seconds) - 1))
+    """Nearest-rank on a sorted list, clamped at both ends so n=1 is its own p10 and p90.
+
+    THE RANK IS A CEILING, NOT A FLOOR. ``int(fraction * (n - 1))`` reads like nearest-rank and
+    is not: for n=2 it puts p90 at index 0, so the ninetieth percentile came back as the SHORTEST
+    of the two, and for n=3 it lands on the middle one, so p90 was the median exactly. On the real
+    corpus that made p90 <= median for 106 of the 389 songs with more than one timing -- Vocal Jam
+    published a 19.6-minute median beside a 7.4-minute p90, on a page whose whole subject is how
+    long this band plays things.
+
+    The clamp stays: it is what lets a song timed once be its own p10 and p90 rather than an
+    error, and a song with one good timing is the ordinary case here, not the edge.
+    """
+    index = math.ceil(fraction * len(seconds)) - 1
     return seconds[min(max(index, 0), len(seconds) - 1)]
 
 
@@ -548,8 +560,14 @@ def song_stats(performances: Iterable[Performance]) -> list[SongStat]:
             song=song, n=len(seconds),
             median_seconds=round(statistics.median(seconds), 1),
             mean_seconds=round(statistics.fmean(seconds), 1),
-            min_seconds=seconds[0], max_seconds=seconds[-1],
-            p10_seconds=_percentile(seconds, 0.10), p90_seconds=_percentile(seconds, 0.90),
+            # Rounded to the same place as the median beside them, and not because a tenth of a
+            # second matters. Rounding the computed three and leaving the observed four raw made
+            # p90 land 0.04s BELOW the median for songs whose every timing was identical -- and a
+            # consumer drawing a bar from median to p90 gets a negative width out of that. Six
+            # numbers published side by side are compared to each other, so they share a precision.
+            min_seconds=round(seconds[0], 1), max_seconds=round(seconds[-1], 1),
+            p10_seconds=round(_percentile(seconds, 0.10), 1),
+            p90_seconds=round(_percentile(seconds, 0.90), 1),
             stdev_seconds=round(statistics.stdev(seconds), 1) if len(seconds) > 1 else 0.0,
             longest_date=longest.slot.date))
     stats.sort(key=lambda stat: (-stat.median_seconds, stat.song))

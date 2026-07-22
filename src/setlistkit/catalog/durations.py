@@ -42,16 +42,12 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from .normalizer import Normalizer
+from .normalizer import Normalizer, clean_song
 
 # Songs this short cannot be matched as a substring: "bud" sits inside "buddy", "four" inside
 # "fourteen". They have to line up with whole words instead.
 SHORT_NAME = 4
 
-# "Moth (w/ Daniel Donato)" is a Moth. The guest is an annotation on the performance, not a
-# different song, and leaving it attached files a real Moth under its own name with n=1.
-_GUEST_SUFFIX = re.compile(r"\s*\(\s*w(?:ith|/)[^)]*\)\s*$", re.I)
-_QUOTES = re.compile(r"[‘’“”\"]")
 _AUDIO_EXT = re.compile(r"\.(flac|mp3|ogg|shn|m4a)$", re.I)
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -234,17 +230,6 @@ class Reading:
 def basename(name: str) -> str:
     """The track's own name. A leading directory is the taper's mic rig, not the song."""
     return _AUDIO_EXT.sub("", str(name).rsplit("/", 1)[-1])
-
-
-def clean_song(song: str) -> str:
-    """Canonical form of a setlist entry.
-
-    Strips a guest annotation ("Moth (w/ Daniel Donato)" is a Moth) and the stray curly quotes a
-    description parse drags in ('Moth"' is also a Moth). Both otherwise file a real performance
-    under its own name with n=1, which is how one song ends up appearing three times in the
-    vocabulary with a sample size of one in each.
-    """
-    return _QUOTES.sub("", _GUEST_SUFFIX.sub("", str(song))).strip()
 
 
 def _entry_song(entry) -> str:

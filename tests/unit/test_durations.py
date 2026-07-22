@@ -55,16 +55,6 @@ def test_basename_drops_the_mic_rig_directory_and_the_extension():
     assert D.basename("t04.shn") == "t04"
 
 
-def test_a_guest_annotation_is_not_a_different_song():
-    """"Moth (w/ Daniel Donato)" is a Moth. Left attached it files a real performance under its
-    own name with n=1, which is how one song appears three times with a sample size of one."""
-    assert D.clean_song("Moth (w/ Daniel Donato)") == "Moth"
-    assert D.clean_song("Moth (with the horns)") == "Moth"
-    assert D.clean_song('Moth"') == "Moth"
-    # A parenthetical that is not a guest credit stays put -- it may be part of the title.
-    assert D.clean_song("Rebubula (reprise)") == "Rebubula (reprise)"
-
-
 def test_flatten_setlist_numbers_sets_from_one_and_labels_the_encore():
     show = _show([[_entry("Buster"), _entry("Moth")], [_entry("Meat")]], [_entry("Gone")])
     assert D.flatten_setlist(show) == [

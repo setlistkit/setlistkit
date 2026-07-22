@@ -112,6 +112,34 @@ GUEST_NOTE = re.compile(r"^\(?\s*=?\s*(?:&\s*|w(?:ith\b|/))", re.I)
 # the mistake to expect.
 BARE_NOTE = re.compile(r"^\([^A-Za-z]*[A-Za-z]{1,3}[^A-Za-z]*\)$")
 
+# An entry wrapped in quotes end to end: '"thank you very much everybody..."', '"Penguin Joke"',
+# '“Band Interview”'. Quoting is how a setlist writes down a spoken moment, and the entries that
+# use it say so plainly -- announcements, dedications, jokes, a call-back to something said an
+# hour earlier. Left as songs they take a slot in a song's structural profile and, worse, get
+# TIMED: "thank you very much everybody..." published a median length of 14 seconds.
+#
+# The pack already caught eight of these by vocabulary ("Tuning", "Banter", "Al-nouncements")
+# and missed twenty-six that differ only in wording. A shape rule catches the ones nobody thought
+# to list, which is the whole reason shape rules live in core.
+#
+# TWO TRAPS. It must wrap the WHOLE entry: 'Wind it Up "False Start"' is a Wind it Up with a note
+# attached and keeps its slot. And a rule with no vocabulary behind it will eventually fire on a
+# real title someone chose to quote -- which is what ``protected`` is for, checked first.
+QUOTED_NOTE = re.compile(r'^["“”].*["“”]$', re.S)
+
+# "Moth (w/ Daniel Donato)" is a Moth. The guest is an annotation on the performance, not a
+# different song, and leaving it attached files a real Moth under its own name with n=1.
+_GUEST_SUFFIX = re.compile(r"\s*\(\s*w(?:ith|/)[^)]*\)\s*$", re.I)
+
+# Stray quote marks a description parse drags in: 'Moth"' is also a Moth.
+#
+# ONLY WHERE A QUOTE IS ACTUALLY A QUOTE. An earlier form of this deleted every one of these
+# characters wherever it stood, and the curly apostrophe is in the set, so "Hey, It’s Christmas"
+# was published as "Hey, Its Christmas" -- a real song under a name it does not have, and one
+# that no longer matched the same song coming from anywhere else. A quote character between two
+# letters is an apostrophe and is left alone.
+_STRAY_QUOTE = re.compile(r"(?<![A-Za-z])[‘’“”\"]|[‘’“”\"](?![A-Za-z])")
+
 
 def strip_attribution(text: str) -> str:
     """Drop a trailing cover credit and a leading encore marker.
@@ -133,6 +161,27 @@ def strip_attribution(text: str) -> str:
         if text == before:
             break
     return text.strip()
+
+
+def clean_song(song: str) -> str:
+    """Canonical form of a setlist entry: the name a performance is FILED under.
+
+    Here rather than beside the tape-reading code that first needed it, because it is the answer
+    to "what is this song called", and more than one pass has to give the same answer. The length
+    chain cleaned and :func:`setlistkit.catalog.features.song_features` did not, so the two halves
+    of an export keyed the same performance under two spellings -- the join silently produced a
+    song whose structural profile counted only the plays that happened to be spelled plainly.
+
+    A SPOKEN MOMENT KEEPS ITS QUOTES, because they are not decoration on a name -- they are the
+    only thing saying it is not a song. Everything downstream asks :meth:`Normalizer.is_non_song`
+    about the CLEANED entry, so stripping them here hands the classifier '"Penguin Joke"' with
+    nothing left to recognise, and twenty-six announcements, dedications and jokes get timed and
+    published with median lengths.
+    """
+    text = str(song).strip()
+    if QUOTED_NOTE.match(text):
+        return text
+    return _STRAY_QUOTE.sub("", _GUEST_SUFFIX.sub("", text)).strip()
 
 
 def strip_segue(text: str) -> tuple[str, bool]:
@@ -319,7 +368,7 @@ class Normalizer:
         entry = entry.strip()
         if self.is_protected(entry):
             return False
-        if GUEST_NOTE.match(entry) or BARE_NOTE.match(entry):
+        if GUEST_NOTE.match(entry) or BARE_NOTE.match(entry) or QUOTED_NOTE.match(entry):
             return True
         squashed = squash(entry)
         return any(pattern.search(squashed) for pattern in self.non_song_patterns())
@@ -332,8 +381,8 @@ class Normalizer:
         fire -- which is the honest answer and the one a "does this rule ever do anything" check
         needs: a rule shadowed by ``protected.json`` never fires, however well it matches.
 
-        Empty too when the shape rules did the work: ``GUEST_NOTE`` and ``BARE_NOTE`` belong to
-        this module, not to any pack, so no pack rule earns the credit.
+        Empty too when the shape rules did the work: ``GUEST_NOTE``, ``BARE_NOTE`` and
+        ``QUOTED_NOTE`` belong to this module, not to any pack, so no pack rule earns the credit.
         """
         entry = entry.strip()
         if self.is_protected(entry):
