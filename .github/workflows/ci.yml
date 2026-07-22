@@ -23,9 +23,15 @@ jobs:
 
       # Build the same pyenv/ venv the Makefile and local development use, so CI runs the
       # exact same commands a developer runs.
+      #
+      # --upgrade-deps matters: a venv is seeded with whatever pip its interpreter bundles in
+      # ensurepip, which for the older matrix entries is old enough that pip-audit fails the
+      # security gate on the seed itself (3.11 seeds pip 24.0 and setuptools 79.0.1, 3.12 seeds
+      # pip 25.0.1). That is CI's own scaffolding, not anything setlistkit declares, but the
+      # gate cannot tell the difference. Pull the seed from PyPI instead of from the tarball.
       - name: Bootstrap venv
         run: |
-          python -m venv pyenv
+          python -m venv --upgrade-deps pyenv
           make dev
 
       - name: Lint, test, security
