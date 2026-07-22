@@ -68,7 +68,10 @@ def test_dump_is_deterministic_and_drops_volatile_columns(tmp_path):
         assert "applied_at" not in first
         # real content is present
         assert "setlistkit_version" in first
-        assert "baseline" in first
+        # The migration NAME, read off the ledger for the same reason as the versions above:
+        # what this asserts is that a non-volatile column survived the dump, not what any
+        # particular migration happens to be called this week.
+        assert EXPECTED_MIGRATIONS[0][1] in first
 
 
 def test_dump_of_empty_db_has_no_tables(tmp_path):

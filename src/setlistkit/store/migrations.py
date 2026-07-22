@@ -6,6 +6,17 @@ We version the schema so later phases can add tables without a migration framewo
 on after the fact. Each migration is a function plus a version; the runner applies the ones
 not yet recorded, each in its own transaction, so a half-applied migration never survives.
 
+Today there is exactly one migration, and that is deliberate. The five that used to be here
+were the schema growing up in public: a fresh install replayed the whole history of our
+indecision to arrive at a schema it could have been handed directly. Nothing was installed
+anywhere, so there was no upgrade path worth the cost of keeping, and the collapsed versions
+are in git if anyone ever wants to read how the shape was arrived at.
+
+The forward-only promise starts at the first PyPI release and signed tag, not now. Until
+then a schema change may be folded straight back into the initial migration and any local
+database rebuilt from the raw cache, which is the only copy of anything expensive. After
+that point this file appends and never edits: add the next number, leave the past alone.
+
 The connection MUST be in autocommit mode (``isolation_level=None``). Python's sqlite3 does
 not wrap DDL in its implicit transactions, so relying on the default would leave a failed
 ``CREATE TABLE`` committed. We drive BEGIN/COMMIT/ROLLBACK ourselves instead.
@@ -48,14 +59,14 @@ class Migration:
     apply: Callable[[sqlite3.Connection], None]
 
 
-def _m0001_baseline(conn: sqlite3.Connection) -> None:
+def _meta(conn: sqlite3.Connection) -> None:
     # meta is a tiny key/value slate for provenance (version the DB was created under, etc.).
     # The interesting tables land in their own phases; this one just gives us somewhere to
     # write "who made this and when" from the very first open.
     conn.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
 
-def _m0002_corpus(conn: sqlite3.Connection) -> None:
+def _corpus(conn: sqlite3.Connection) -> None:
     # The merged corpus: one show per date, and its entries in the order they were played.
     #
     # No `year` and no `n_songs`. Both are derivable (date[:4]; a tally of the entries), and a
@@ -93,7 +104,7 @@ def _m0002_corpus(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX show_entries_song ON show_entries(song)")
 
 
-def _m0003_recordings(conn: sqlite3.Connection) -> None:
+def _recordings(conn: sqlite3.Connection) -> None:
     # The recordings mirror: one row per tape, and its tracks in the order they were played.
     #
     # A MIRROR, not a cache. Every column here is projected straight out of the raw payload at
@@ -145,7 +156,7 @@ def _m0003_recordings(conn: sqlite3.Connection) -> None:
         "  identifier TEXT)")
 
 
-def _m0004_listings(conn: sqlite3.Connection) -> None:
+def _listings(conn: sqlite3.Connection) -> None:
     # The taper's own written tracklist, read at INGEST and stored, because the description it is
     # read out of exists nowhere else. Descriptions live only in the raw cache; the cache is
     # gitignored; so a derive that read tracklists for itself would work on the machine that
@@ -179,7 +190,7 @@ def _m0004_listings(conn: sqlite3.Connection) -> None:
         "  PRIMARY KEY (identifier, idx))")
 
 
-def _m0005_durations(conn: sqlite3.Connection) -> None:
+def _durations(conn: sqlite3.Connection) -> None:
     # One row per performance: one song, one night, one place in the setlist, and how long it took
     # once every taper who recorded it had voted. The primary key is the SLOT and not the song,
     # because a song played twice in a night is two performances and keying on the song would
@@ -286,13 +297,25 @@ def _m0005_durations(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX duration_edges_kind ON duration_edges(kind)")
 
 
-# Forward-only. Never edit a shipped migration; add the next number instead.
+def _m0001_initial(conn: sqlite3.Connection) -> None:
+    """The whole schema, as one step, in dependency order.
+
+    Split into helpers per area purely so each group of tables keeps its own reasoning next
+    to it. They are not separately versioned and must not be called on their own: this
+    function is the unit that either applies whole or rolls back whole.
+    """
+    _meta(conn)
+    _corpus(conn)
+    _recordings(conn)
+    _listings(conn)
+    _durations(conn)
+
+
+# Append-only from the first release onward: never edit a shipped migration, add the next
+# number instead. Before that release, see the module docstring -- folding a change back into
+# the initial migration is allowed, and preferable to shipping a history nobody lived through.
 MIGRATIONS: list[Migration] = [
-    Migration(1, "baseline", _m0001_baseline),
-    Migration(2, "corpus", _m0002_corpus),
-    Migration(3, "recordings", _m0003_recordings),
-    Migration(4, "listings", _m0004_listings),
-    Migration(5, "durations", _m0005_durations),
+    Migration(1, "initial", _m0001_initial),
 ]
 
 
