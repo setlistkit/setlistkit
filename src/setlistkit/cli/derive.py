@@ -26,10 +26,12 @@ one of them goes unnoticed for a year.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ..catalog import durations as tapes
 from ..catalog import lengths
+from ..catalog.normalizer import Normalizer
 from ..catalog.pack import load_pack
 from ..store import Store
 from .common import resolve_pack_dir
@@ -65,6 +67,7 @@ class _Timed:
     edges: list = field(default_factory=list)
     review: list = field(default_factory=list)
     abandoned: list = field(default_factory=list)
+    rejected_overrides: list = field(default_factory=list)
     outcome: Counter = field(default_factory=Counter)
 
 
@@ -94,7 +97,43 @@ def _usable_reading(tape, night, normalizer):
     return reading
 
 
-def _read_tapes(recordings, shows, kinds, listings, normalizer) -> _Timed:
+@dataclass(frozen=True)
+class _Reader:
+    """Everything a tape is read AGAINST, and the one decision that needs all of it.
+
+    A type rather than five parameters threaded through two functions. They travel together at
+    every call and always will: reading a tape means asking what the night was (``shows``,
+    ``kinds``), what the taper said it was (``listings``), whether a person has overruled him
+    (``overrides``), and what the songs are called (``normalizer``). Passing them separately is
+    how the fifth one ends up missing at the third call site.
+    """
+
+    shows: Mapping
+    kinds: Mapping
+    listings: Mapping
+    overrides: Mapping
+    normalizer: Normalizer
+
+    def listing_for(self, tape, out: _Timed):
+        """The tracklist to read ``tape`` with, and whether a human wrote it.
+
+        An override outranks the taper, which is the whole point of authoring one -- and it is
+        only honored when it has EXACTLY as many labels as the tape has files. That count is the
+        witness. An override is a positional list, so one line short or one line long does not
+        fail: it slides every song after the gap onto its neighbor's track and produces a full
+        set of confident, wrong timings. Refusing on a length mismatch keeps the failure loud.
+        """
+        override = self.overrides.get(tape.identifier)
+        if override is None:
+            return self.listings.get(tape.identifier), False
+        if len(override) != len(tape.tracks):
+            out.rejected_overrides.append({"identifier": tape.identifier, "date": tape.date,
+                                           "labels": len(override), "tracks": len(tape.tracks)})
+            return self.listings.get(tape.identifier), False
+        return tapes.listing_from_labels(override, self.normalizer), True
+
+
+def _read_tapes(recordings, reader: _Reader) -> _Timed:
     """Every tape in the store, read on its own, into a pile of timings.
 
     Nothing here compares one tape to another -- that is the next pass, and keeping them apart is
@@ -105,7 +144,7 @@ def _read_tapes(recordings, shows, kinds, listings, normalizer) -> _Timed:
     nights: dict[str, tapes.Night] = {}
     for record in recordings:
         tape = tapes.Tape.of(record)
-        show = shows.get(record["date"])
+        show = reader.shows.get(record["date"])
         if tape.longest_seconds > tapes.GIVE_UP_TRACK_SECONDS:
             out.outcome[BOUNCED] += 1
             out.abandoned.append({"identifier": tape.identifier, "date": tape.date,
@@ -115,23 +154,29 @@ def _read_tapes(recordings, shows, kinds, listings, normalizer) -> _Timed:
         if not show:
             out.outcome[NO_SETLIST] += 1
             continue
-        listing = listings.get(tape.identifier)
+        listing, overridden = reader.listing_for(tape, out)
         if listing and len(listing) == len(tape.tracks):
-            tape = tapes.reorder_to_listing(tape, listing, normalizer).with_description(listing)
-        night = nights.setdefault(record["date"], tapes.Night.of(show, normalizer))
-        reading = _usable_reading(tape, night, normalizer)
+            # An override is authored against the files, in file order, so it needs no re-seating.
+            # The taper's own listing does: they write what they remember and number from one.
+            if not overridden:
+                tape = tapes.reorder_to_listing(tape, listing, reader.normalizer)
+            tape = tape.with_description(listing)
+        night = nights.setdefault(record["date"],
+                                  tapes.Night.of(show, reader.normalizer))
+        reading = _usable_reading(tape, night, reader.normalizer)
         if reading is None:
             out.outcome[UNNAMED] += 1
-            out.review.append(_review_row(tape, night, listing, normalizer))
+            out.review.append(_review_row(tape, night, listing, reader.normalizer))
             continue
         out.outcome["timed"] += 1
         votes, non_song = lengths.observations_of(
-            tape, reading, normalizer, kinds.get(record["date"], lengths.ELECTRIC),
-            reading.verdict)
+            tape, reading, reader.normalizer,
+            reader.kinds.get(record["date"], lengths.ELECTRIC), reading.verdict)
         out.observations.extend(votes)
         out.edges.extend(reading.edges)
         out.edges.extend(non_song)
-        out.edges.extend(lengths.unclaimed_songs(tape, reading, night, normalizer))
+        out.edges.extend(lengths.unclaimed_songs(tape, reading, night,
+                                                 reader.normalizer))
     return out
 
 
@@ -159,8 +204,9 @@ def _durations(config, args) -> int:
             print("nothing to derive: no tapes are stored. Run `slkit ingest` first.")
             return EXIT_OK
         listings = _corrected(recordings, shows, store.tapes.listings(), pack.normalizer)
-        timed = _read_tapes(recordings, shows, store.tapes.show_types(), listings,
-                            pack.normalizer)
+        timed = _read_tapes(recordings, _Reader(
+            shows=shows, kinds=store.tapes.show_types(), listings=listings,
+            overrides=pack.corpus.tape_overrides, normalizer=pack.normalizer))
         performances, disputes = lengths.reconcile(
             timed.observations, shows,
             uploaders=_uploaders(recordings), splits=lengths.track_splits(recordings),
@@ -168,6 +214,7 @@ def _durations(config, args) -> int:
         timed.edges.extend(disputes)
         stats = lengths.song_stats(performances)
         _report(timed, performances, stats, len(recordings))
+        _report_rejected_overrides(timed.rejected_overrides)
         _report_unmatched_exclusions(
             lengths.unmatched_exclusions(performances, pack.corpus.duration_exclusions))
         # getattr, because `slkit derive` with no noun at all reaches here through the default
@@ -247,12 +294,27 @@ def _report_confidence(performances) -> None:
               f"{suspect} left suspect")
 
 
+def _report_rejected_overrides(rejected) -> None:
+    """Hand-written tracklists that did not fit the tape they name.
+
+    Named and never counted. Somebody sat with a tape and wrote out sixteen songs by ear; an
+    override that silently stops applying leaves the taper's own wrong labels in charge, which is
+    the state the override was written to end.
+    """
+    if not rejected:
+        return
+    print(f"  {len(rejected)} tape override(s) refused:")
+    for row in rejected:
+        print(f"    {row['identifier']} ({row['date']}): {row['labels']} label(s) "
+              f"for {row['tracks']} track(s)")
+
+
 def _report_unmatched_exclusions(unmatched) -> None:
     """Ledger entries that ruled nothing out, named one per line.
 
     LOUD, and never a count on its own. Somebody sat and listened to each of these and decided a
     measurement was wrong; an entry that stops applying means that judgement has silently stopped
-    being honoured and the performance is back in the statistics. Printing "2 exclusions did not
+    being honored and the performance is back in the statistics. Printing "2 exclusions did not
     match" tells a reader there is a problem and nothing about where, which for a file of three
     entries is the entire content of the answer.
     """

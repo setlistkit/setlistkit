@@ -62,6 +62,7 @@ PROTECTED_FILE = "protected.json"
 CORPUS_FILE = "corpus.json"
 OVERRIDES_FILE = "overrides.json"
 DURATION_EXCLUSIONS_FILE = "duration-exclusions.json"
+TAPE_OVERRIDES_FILE = "tape-overrides.json"
 
 # Why a measured performance does not get to vote for its song's length.
 #
@@ -223,6 +224,39 @@ _CORPUS_SCHEMA = {
 # The one thing worth having a schema for is `additionalProperties: false`. A typo'd key ("resaon")
 # is otherwise invisible: the entry parses, the real key is absent, and the error says the override
 # needs a reason while a reason sits right there in the file spelled wrong.
+_TAPE_OVERRIDES_SCHEMA = {
+    "type": "object",
+    "required": ["tapes"],
+    "additionalProperties": False,
+    "properties": {
+        "tapes": {
+            "type": "object",
+            "propertyNames": {"minLength": 1},
+            "additionalProperties": {
+                "type": "object",
+                "required": ["why", "found_by", "date_added", "tracks"],
+                "additionalProperties": False,
+                "properties": {
+                    "why": {"type": "string", "minLength": 1},
+                    "found_by": {"type": "string", "minLength": 1},
+                    "date_added": {"type": "string", "pattern": _DATE},
+                    # EVERY track, in file order, not just the wrong ones. A list of corrections
+                    # keyed by track number is a list that can be one out and still apply; a whole
+                    # list can be checked against the tape's own file count, which is a fact
+                    # nobody has to remember to get right. Write the labels the way a taper does
+                    # -- a trailing ">" is a segue, "e." marks the encore -- because they run
+                    # through the same normalizer a taper's would.
+                    "tracks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+    },
+}
+
 _DURATION_EXCLUSIONS_SCHEMA = {
     "type": "object",
     "required": ["exclusions"],
@@ -365,6 +399,12 @@ class CorpusPolicy:
     # date -> the whole show someone confirmed by ear, already canonicalized through this pack's
     # normalizer, so a caller hands them straight to `merge_shows(overrides=...)`.
     overrides: Mapping[str, Mapping] = field(default_factory=dict, hash=False)
+    # identifier -> the track labels somebody wrote out by ear, in file order, replacing whatever
+    # the source said. The one thing in this class about a TAPE rather than about the corpus, and
+    # it is here for the same reason `overrides` is: a person overruling a parser with evidence.
+    #
+    # A whole list, never a patch. See _TAPE_OVERRIDES_SCHEMA.
+    tape_overrides: Mapping[str, tuple[str, ...]] = field(default_factory=dict, hash=False)
     # (date, set, position) -> {"song": the song the entry was written about, "reason": why}.
     #
     # Here rather than as an eleventh field on Pack for the reason `overrides` is here: it comes
@@ -596,6 +636,7 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
     file = pack_dir / CORPUS_FILE
     if not file.exists():
         return CorpusPolicy(overrides=overrides,
+                            tape_overrides=_load_tape_overrides(pack_dir),
                             duration_exclusions=_load_duration_exclusions(pack_dir))
     data, src = load_json(file, _CORPUS_SCHEMA)
 
@@ -633,6 +674,7 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
         side_projects=_compile_evidence(data.get("side_project_patterns", []), src,
                                         key="side_project_patterns"),
         overrides=overrides,
+        tape_overrides=_load_tape_overrides(pack_dir),
         duration_exclusions=_load_duration_exclusions(pack_dir),
     )
 
@@ -723,6 +765,26 @@ def load_pack(pack_dir) -> Pack:
         band_name=identity.get("band_name"),
         normalizer=normalizer,
     )
+
+
+def load_tape_overrides(pack_dir) -> tuple[dict[str, dict], JSONSource]:
+    """Every hand-authored tracklist in the pack, with the source to point carets into.
+
+    Public and returning the FULL entries, unlike the compiled mapping on :class:`CorpusPolicy`,
+    because lint checks the parts the runtime throws away -- whether the tape exists at all, and
+    whether the list is as long as the tape it claims to describe.
+    """
+    file = Path(pack_dir) / TAPE_OVERRIDES_FILE
+    if not file.exists():
+        return {}, JSONSource()
+    data, src = load_json(file, _TAPE_OVERRIDES_SCHEMA)
+    return dict(data.get("tapes") or {}), src
+
+
+def _load_tape_overrides(pack_dir: Path) -> dict[str, tuple[str, ...]]:
+    """``tape-overrides.json`` compiled to identifier -> the track labels, in file order."""
+    tapes, _src = load_tape_overrides(pack_dir)
+    return {identifier: tuple(entry["tracks"]) for identifier, entry in tapes.items()}
 
 
 def load_duration_exclusions(pack_dir) -> tuple[list[dict], JSONSource]:

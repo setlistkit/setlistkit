@@ -419,3 +419,16 @@ def test_a_night_counts_only_the_music_when_judging_whether_a_tape_was_read():
     night = D.Night.of(_show([[_entry("Intro"), _entry("Buster"), _entry("Moth")]]), pack)
     assert len(night) == 3
     assert night.real_songs(pack) == 2
+
+
+def test_override_labels_are_read_the_way_a_tapers_are():
+    """An author writes what they read off the page. The canonical spelling, the encore marker and
+    a trailing '>' are the machine's problem -- an override that had to be written in canonical
+    form is one nobody could write without first querying the vocabulary."""
+    pack = _Pack()
+    listing = D.listing_from_labels(["captain america >", "  waiting for the punchline  ",
+                                     "e. rebubula"], pack)
+    assert [row["song"] for row in listing] == ["captain america", "waiting for the punchline",
+                                                "e. rebubula"]
+    assert [row["segue"] for row in listing] == [True, False, False]
+    assert [row["idx"] for row in listing] == [0, 1, 2]

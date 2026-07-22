@@ -239,6 +239,26 @@ def _entry_song(entry) -> str:
     return str(getattr(entry, "song", "") or "")
 
 
+def listing_from_labels(labels: Sequence[str], normalizer: Normalizer) -> list[dict]:
+    """Hand-written track labels as a tracklist, in the shape a stored listing arrives in.
+
+    An override IS a tracklist -- the difference is who wrote it, not what it is -- so it joins
+    the pipeline at the same place the taper's own description does and every check downstream
+    applies to it unchanged. Writing a second path for it would be writing a second set of bugs.
+
+    The labels go through the SAME normalizer a taper's text does, which is the point: an author
+    writes "blue jeans pizza" and "e. rebubula" the way they read them off the page, and the
+    canonical spelling, the encore marker and a trailing ">" are the machine's problem. An
+    override that had to be written in canonical form would be an override nobody could write
+    correctly without first querying the vocabulary.
+    """
+    out = []
+    for idx, label in enumerate(labels):
+        song, segue = normalizer.strip_segue(str(label).strip())
+        out.append({"idx": idx, "song": song, "segue": segue})
+    return out
+
+
 def flatten_setlist(show: Mapping) -> list[tuple[str, int, str]]:
     """Show -> ordered ``[(set_label, position, song)]``."""
     out: list[tuple[str, int, str]] = []

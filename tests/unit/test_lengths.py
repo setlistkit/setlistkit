@@ -436,7 +436,7 @@ def test_an_exclusion_that_lands_on_a_different_song_is_refused():
 
 def test_a_refused_exclusion_is_reported_with_what_it_hit_instead():
     """Silently skipping it is the same failure one step later: somebody listened to that
-    performance, and their judgement has stopped being honoured."""
+    performance, and their judgement has stopped being honored."""
     performances, _ = _reconcile([_obs("The Pit", 1109.0)],
                                  exclusions={(DATE, "1", 1): _excl("Moth", "reprise")})
     unmatched = L.unmatched_exclusions(performances, {(DATE, "1", 1): _excl("Moth", "reprise")})

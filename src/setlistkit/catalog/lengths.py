@@ -289,7 +289,7 @@ def unclaimed_songs(tape: Tape, reading: Reading, night: Night,
     """Songs nobody claimed on a tape we otherwise believed.
 
     Either the taper spelled it in a way we do not recognise yet, or it was folded into a
-    neighbour's file. Worth a look either way: this is where the next alias comes from.
+    neighbor's file. Worth a look either way: this is where the next alias comes from.
     """
     return [Edge("song_not_found_on_named_tape", tape.date, tape.identifier, song,
                  {"note": "tape named most songs but not this one"})
@@ -489,7 +489,7 @@ def unmatched_exclusions(performances: Iterable[Performance],
     Reported rather than merely skipped. An exclusion exists because a person listened to a
     performance and judged it; if it stops applying -- the setlist was re-parsed, a song was
     renamed, the position was miscounted -- then that judgement has silently stopped being
-    honoured, and the performance it was written about is back in the statistics.
+    honored, and the performance it was written about is back in the statistics.
     """
     at_slot = {(p.slot.date, p.slot.set_label, p.slot.position): p.slot.song
                for p in performances}

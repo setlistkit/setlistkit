@@ -282,3 +282,68 @@ def test_ingest_stores_the_written_tracklist_so_derive_never_opens_the_cache(tmp
         listings = store.tapes.listings()
         assert [entry["song"] for entry in listings["example2025-07-04"]] == list(SONGS)
         assert store.tapes.listing_readings() == {"numbered": 1}
+
+
+# ---- hand-written tape overrides ---------------------------------------------------------------
+
+def _pack_with_override(tmp_path, identifier, tracks, *, extra=None):
+    """A copy of the example pack carrying one tape-overrides entry."""
+    pack = tmp_path / "pack"
+    shutil.copytree(PACK, pack)
+    tapes = {identifier: {"why": "the taper mislabeled his own tape",
+                          "found_by": "tim", "date_added": "2026-07-22",
+                          "tracks": list(tracks)}}
+    tapes.update(extra or {})
+    (pack / "tape-overrides.json").write_text(json.dumps({"tapes": tapes}), encoding="utf-8")
+    config = (tmp_path / "slkit.toml")
+    config.write_text(CONFIG.replace(str(PACK), str(pack)), encoding="utf-8")
+    return str(config)
+
+
+def _derive_with(tmp_path, tapes_, config):
+    _cache(tmp_path, tapes_)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    return main(["--config", config, "derive", "durations"])
+
+
+def test_a_hand_written_tracklist_overrules_the_taper(tmp_path):
+    """The whole point, in the shape the real case takes.
+
+    moe2007-06-10's taper mislabeled his tape in BOTH his filenames and his description, so
+    nothing in the payload disagrees with him and only a person who listened can say otherwise.
+    Here the overridden tape names nothing at all -- anonymous files, a description that is prose
+    -- so the override is the only thing that can possibly time it, and a second tape supplies the
+    night's setlist the way the corpus normally would.
+    """
+    good = _tape("example2025-07-04.a", "2025-07-04", uploader="one@example.org")
+    mute = _tape("example2025-07-04.b", "2025-07-04", (301.0, 481.0, 241.0, 621.0, 181.0),
+                 uploader="two@example.org", songs=ANONYMOUS,
+                 description="Recorded from the board. Please don't sell this.")
+    config = _pack_with_override(tmp_path, "example2025-07-04.b", SONGS)
+    assert _derive_with(tmp_path, [good, mute], config) == EXIT_OK
+    performances, _ = _stored(tmp_path)
+    assert [row["song"] for row in performances] == list(SONGS)
+    # Both tapers now speak for every song -- which is only possible if the override was read.
+    assert [row["n_ballots"] for row in performances] == [2] * len(SONGS)
+
+
+def test_an_override_of_the_wrong_length_is_refused_and_named(tmp_path, capsys):
+    """A positional list one line short does not fail -- it slides every song after the gap onto
+    its neighbor's track and produces a full set of confident, wrong timings. The tape's own file
+    count is the witness, and refusing is what keeps the failure loud."""
+    config = _pack_with_override(tmp_path, "example2025-07-04", SONGS[:-1])   # 4 labels, 5 files
+    assert _derive_with(tmp_path, [_tape("example2025-07-04", "2025-07-04")], config) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "1 tape override(s) refused" in out
+    assert "4 label(s) for 5 track(s)" in out
+    # ...and the taper's own reading still stands, rather than the tape being dropped.
+    performances, _ = _stored(tmp_path)
+    assert [row["song"] for row in performances] == list(SONGS)
+
+
+def test_a_tape_with_no_override_still_reads_its_own_description(tmp_path):
+    """The override is a targeted overrule, not a new requirement. Every other tape is untouched."""
+    config = _pack_with_override(tmp_path, "some-other-tape", SONGS)
+    assert _derive_with(tmp_path, [_tape("example2025-07-04", "2025-07-04")], config) == EXIT_OK
+    performances, _ = _stored(tmp_path)
+    assert [row["song"] for row in performances] == list(SONGS)

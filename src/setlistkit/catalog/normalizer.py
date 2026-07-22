@@ -70,6 +70,12 @@ _P_ATTRIB_INITIAL = re.compile(r"\s*\([A-Z]{2,3}\)\s*$")
 #
 # Requires the trailing dot or colon. A bare leading "e " is not stripped, because that is a
 # word, and a rule that eats it would eat the first word of anything.
+#
+# The full word "encore" is held to the same rule, though it collides with nothing in the
+# vocabulary and could safely be loosened. Loosening it made "^encorebreak$" a dead rule -- the
+# marker came off before the classifier ever saw the title -- which is a live change to a shared
+# path in exchange for letting one hand-written override say "encore okayalright" instead of
+# "e. okayalright". Not worth it. An override author writes the marker the way a taper does.
 _P_ENCORE_MARK = re.compile(r"^(?:e|enc|encore)\s*[.:]\s*", re.I)
 
 # A guest credit welded onto the song, unparenthesised. Emma Derhak (Rob's daughter) sings with

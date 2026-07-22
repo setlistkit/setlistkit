@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 r"""The suite must not read the environment it happens to be run from.
 
-Python 3.14 colorizes argparse help, and can_colorize() honours FORCE_COLOR, so anything that
+Python 3.14 colorizes argparse help, and can_colorize() honors FORCE_COLOR, so anything that
 exports it turns the "usage: slkit" test_cli asserts on into
 
     \x1b[1;34musage: \x1b[0m\x1b[1;35mslkit\x1b[0m [\x1b[32m-h\x1b[0m]
