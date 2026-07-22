@@ -41,7 +41,7 @@ from dataclasses import asdict, dataclass, field
 
 from ..catalog.merge import merge_shows, override_disagreements
 from ..catalog.pack import load_pack
-from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, count_songs,
+from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING, count_songs,
                              parse_archive_items)
 from ..catalog.showtypes import show_types
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
@@ -67,6 +67,7 @@ _MAX_LISTED = 12
 
 _SKIP_LABELS = {
     NOT_THIS_BAND: "title names a different band (a side project's tape)",
+    OTHER_BILLING: "the band under a billing this corpus does not model (a duo, a trio)",
     NO_DATE: "no date we can believe",
 }
 
@@ -421,9 +422,18 @@ def _report_skipped(skipped, pack, n_items: int) -> None:
         # Named, not just counted. This is the refusal that is a JUDGEMENT about a real band --
         # a taper who inverted the article gets their whole night thrown away -- so it has to
         # leave behind something to grep the cache for.
-        for item in skipped:
-            if item.reason == reason:
-                print(f"      {item.identifier or '(no identifier)'}")
+        #
+        # Capped, and says what it capped, for the same reason the absent list is: one pack rule
+        # can refuse thirty tapes, and thirty identifiers push every other line off the screen.
+        named = [item for item in skipped if item.reason == reason]
+        for item in named[:_MAX_LISTED]:
+            # The billing rule that fired travels with the identifier. A pack may name several,
+            # and "some other lineup" sends a reader back to the file to work out which rule
+            # they are arguing with.
+            why = f"  (matched /{item.billing}/)" if item.billing else ""
+            print(f"      {item.identifier or '(no identifier)'}{why}")
+        if len(named) > _MAX_LISTED:
+            print(f"      ... and {len(named) - _MAX_LISTED} more")
     dropped = sorted({item.date for item in skipped if item.reason == DROPPED_DATE})
     if not dropped:
         return

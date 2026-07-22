@@ -183,10 +183,16 @@ _CORPUS_SCHEMA = {
         },
         "junk_patterns": _FRAGMENTS_SCHEMA,
         "gear_patterns": _FRAGMENTS_SCHEMA,
-        # Same SHAPE as a filter fragment and a different job, which is why it is not compiled by
-        # the same function: a fragment is folded into an alternation and DELETES what it matches,
-        # while this is searched in a tape's free text and only TAGS the night it names.
+        # Same SHAPE as a filter fragment and a different job, which is why neither is compiled
+        # by the same function: a fragment is folded into an alternation and DELETES what it
+        # matches, while these two are searched in a tape's free text.
+        #
+        # The pair are opposites and the difference is who was on stage. `acoustic_patterns`
+        # TAGS a night the band played quieter, keeping it in the corpus. `side_project_patterns`
+        # REFUSES a tape by a different cut of the lineup -- a duo, a trio -- whose songs are not
+        # plays by the band at all. See catalog/showtypes.py.
         "acoustic_patterns": _FRAGMENTS_SCHEMA,
+        "side_project_patterns": _FRAGMENTS_SCHEMA,
     },
 }
 
@@ -296,6 +302,9 @@ class CorpusPolicy:
     # the filter alternation, and they tag a night rather than deleting anything from it.
     # Empty means no acoustic tag is ever produced. See catalog/showtypes.py.
     acoustic: tuple[re.Pattern, ...] = ()
+    # Billings that are this band in a shape the corpus does not model. A match REFUSES the tape,
+    # where an acoustic pattern only tags it. Empty means nothing is refused on these grounds.
+    side_projects: tuple[re.Pattern, ...] = ()
     # date -> the whole show someone confirmed by ear, already canonicalized through this pack's
     # normalizer, so a caller hands them straight to `merge_shows(overrides=...)`.
     overrides: Mapping[str, Mapping] = field(default_factory=dict, hash=False)
@@ -350,6 +359,7 @@ class Pack:
             # No band name means no band filter. Refusing to guess is the whole point: an
             # unreadable title is not evidence that a show is fake, and neither is a silent one.
             band_filter=title_band_filter(self.band_name) if self.band_name else None,
+            side_projects=self.corpus.side_projects,
             junk_patterns=tuple(rule.pattern for rule in self.corpus.junk),
             gear_patterns=tuple(rule.pattern for rule in self.corpus.gear),
             band_name=self.band_name,
@@ -480,18 +490,20 @@ def _compile_evidence(entries: list, src: JSONSource, *, key: str) -> tuple[re.P
     wrapped pattern could never match, and nothing is deleted when one fires.
 
     ``why`` is still required by the schema and still checked, even though the runtime does not
-    carry it. The reason is the same as everywhere else in this pack: the tag it produces changes
-    which nights a length distribution is built from, and a later reader disagreeing with a call
-    has nothing but the stated reason to check it against.
+    carry it. The reason is the same as everywhere else in this pack: both kinds of rule take
+    nights away from something -- one from the length distributions, one from the corpus
+    entirely -- and a later reader disagreeing with a call has nothing but the stated reason to
+    check it against.
     """
     patterns: list[re.Pattern] = []
     for index, entry in enumerate(entries):
         if not entry["why"].strip():
             _fail(src, f"{key} entry must say what it is",
                   src.positions.get((key, index, "why")),
-                  detail=(f'"{entry["pattern"]}" tags a night as acoustic, which takes it out of\n'
-                          "every length distribution downstream. Say what the billing is, so a\n"
-                          "later reader can tell a brand name from a word a taper happened to use."),
+                  detail=(f'"{entry["pattern"]}" decides that a night is not an ordinary show,\n'
+                          "which either takes it out of every length distribution or refuses it\n"
+                          "from the corpus outright. Say what the billing is, so a later reader\n"
+                          "can tell a brand name from a word a taper happened to use."),
                   caption="empty")
         # Case-insensitive, unlike a filter fragment. A fragment is matched against `squash`ed
         # text, which has already lowercased it; these are searched against a tape's raw metadata
@@ -547,6 +559,8 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
         gear=_compile_fragments(data.get("gear_patterns", []), src, key="gear_patterns"),
         acoustic=_compile_evidence(data.get("acoustic_patterns", []), src,
                                    key="acoustic_patterns"),
+        side_projects=_compile_evidence(data.get("side_project_patterns", []), src,
+                                        key="side_project_patterns"),
         overrides=overrides,
     )
 

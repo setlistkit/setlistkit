@@ -9,20 +9,26 @@ Pooling those is not adding data, it is averaging two distributions that have no
 with each other, and it is how a 5-minute version of a twenty-minute song gets into a length
 table.
 
-WHY THIS IS A TAG AND NOT A DELETION
-The obvious move is to drop acoustic shows from the corpus. Do not:
+TAG OR DELETE IS THE PACK'S CALL, AND IT TURNS ON WHO WAS ON STAGE
+There are two different nights hiding under the word "acoustic", and they want opposite
+treatment:
 
-  * the corpus feeds the rotation model, the base rates and the backtests. Deleting rows
-    silently changes all of their inputs.
-  * the band really did play those songs on that night. Whether that should reset a song's
-    due-clock for an electric show is a real question worth testing, and deleting the row
-    answers it by accident, in the dark, forever.
-  * a mixed night breaks deletion outright. An acoustic first set inside a full electric show
-    cannot be deleted without throwing away a real electric set. A tag copes with a partial;
-    a delete cannot.
+  * SAME LINEUP, different instruments. The band as the corpus knows it, playing quieter. Tag
+    it. The songs are real evidence about what this band plays, the row belongs in the rotation
+    model, and only the length statistics need to leave it out. Deleting it would silently
+    change the inputs of the model, the base rates and the backtests at once.
+  * DIFFERENT LINEUP under a related name -- a duo, a trio, half the band. That is not the same
+    act, and fifteen songs by two of its members are not fifteen plays by the band. The pack
+    refuses those outright with ``side_project_patterns``, and they never reach this module.
+    moe.stly is that case: fourteen nights, 206 songs, all of them Al and Rob.
 
-So every consumer decides for itself. Length statistics exclude acoustic. Nothing else has to
-change at all.
+A mixed night settles why the first kind cannot simply be deleted. An acoustic set inside a
+full electric show cannot be removed without throwing away a real electric set, so a tag copes
+with a partial where a delete cannot -- and moe.'s six mixed nights, New Year's Eve among them,
+are exactly that.
+
+So this module never deletes anything. What it produces is a tag, every consumer decides for
+itself, and length statistics are the consumer that excludes acoustic and mixed.
 
 DETECTING ONE
 On the brand name, never on the bare word "acoustic". Tapers list their gear in the
@@ -47,6 +53,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from .parse import item_text
+
 ELECTRIC = "electric"
 ACOUSTIC = "acoustic"
 MIXED = "mixed"
@@ -63,13 +71,9 @@ _ALTEREGO_RE = re.compile(r"perform(?:ing|s)\s+as\b", re.I)
 # set-level provenance ever arrives.
 _MIXED_RE = re.compile(r"set\s*1[^.]{0,40}\bacoustic\b", re.I)
 
-_TAG_RE = re.compile(r"<[^>]+>")
-
 # Strongest evidence wins when a date's tapes disagree, which they do: a night can be taped
 # four times over by four people who describe it four ways.
 _RANK = {ALTEREGO: 3, ACOUSTIC: 2, MIXED: 1}
-
-_TEXT_FIELDS = ("identifier", "title", "list_title", "description", "venue")
 
 
 @dataclass(frozen=True)
@@ -80,12 +84,6 @@ class ShowType:
     kind: str
     evidence: str | None
     identifier: str | None
-
-
-def _text_of(item: Mapping) -> str:
-    """Every field a taper might have written it in, HTML stripped."""
-    blob = " ".join(str(item.get(field) or "") for field in _TEXT_FIELDS)
-    return _TAG_RE.sub(" ", blob)
 
 
 def _classify(blob: str, acoustic: Sequence[re.Pattern]) -> tuple[str, str] | None:
@@ -126,7 +124,7 @@ def show_types(items: Iterable[Mapping], *, dates: Mapping[str, str] | None = No
         if not date:
             continue
         seen.add(date)
-        verdict = _classify(_text_of(item), acoustic)
+        verdict = _classify(item_text(item), acoustic)
         if verdict is None:
             continue
         kind, why = verdict

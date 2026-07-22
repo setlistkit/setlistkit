@@ -21,7 +21,7 @@ import pytest
 
 from setlistkit.catalog import (ArchivePolicy, Normalizer, count_songs, parse_archive_item,
                                 parse_archive_items, title_band_filter)
-from setlistkit.catalog.parse import clean_html
+from setlistkit.catalog.parse import NOT_THIS_BAND, OTHER_BILLING, clean_html
 
 _VOCAB = ["Rebubula", "Meat", "Plane Crash", "Ophelia", "The Faker", "Recreational Chemistry",
           "Hi & Lo", "Timmy Tucker"]
@@ -629,3 +629,123 @@ def test_an_override_date_that_is_not_a_bare_date_is_refused():
     good = _parse(_item(), policy=ArchivePolicy(
         date_overrides={"band2026-01-31.akg": "2025-06-14"}))
     assert good["date"] == "2025-06-14" and good["year"] == "2025"
+
+
+# --- the band under another billing ---------------------------------------------------------
+#
+# Not the same question as the band filter, and not the same answer as a show type. A side
+# project announces itself in the TITLE. A billing hides in the description: twelve of moe.'s
+# fourteen acoustic nights are titled "moe. Live at ..." like any other show.
+
+DUO = (re.compile(r"moe\.?stly", re.I),)
+
+
+def _billing_policy(**kwargs):
+    return ArchivePolicy(side_projects=DUO, **kwargs)
+
+
+def test_a_billing_named_only_in_the_description_still_refuses_the_tape():
+    """The case the band filter structurally cannot see: the title reads like any other show."""
+    item = {"identifier": "moe2024-02-07", "title": "moe. Live at Pickle Barrel on 2024-02-07",
+            "meta_date": "2024-02-07",
+            "description": "moe.stly acoustic 2024-02-07 Killington, VT\nSet 1:\n01. Aurora\n"}
+    result = parse_archive_items([item], normalizer=_StubNormalizer(),
+                                 policy=_billing_policy())
+    assert result.shows == []
+    assert [(s.identifier, s.reason) for s in result.skipped] == [("moe2024-02-07",
+                                                                  OTHER_BILLING)]
+
+
+def test_the_refusal_names_the_rule_that_fired():
+    """A pack may name several billings, and "some other lineup" sends a reader back to the
+    file to work out which rule they are arguing with."""
+    item = {"identifier": "t1", "title": "moe. Live at X on 2024-02-07", "meta_date": "2024-02-07",
+            "description": "Al and Rob moe.stly acoustic\nSet 1:\n01. Aurora\n"}
+    skipped, = parse_archive_items([item], normalizer=_StubNormalizer(),
+                                   policy=_billing_policy()).skipped
+    assert skipped.billing == r"moe\.?stly"
+
+
+def test_a_link_to_an_acoustic_show_does_not_refuse_an_electric_night():
+    """The trap this shares with the show-type classifier, and why they read one blob.
+
+    A taper linking to the acoustic tour's page from an ordinary electric night writes the
+    brand into an href and never into the prose. Read raw, that URL throws away a real show.
+    """
+    link = '<a href="https://archive.org/details/moe.stlyAcoustic2023">Full Electric Show</a>'
+    item = {"identifier": "t1", "title": "moe. Live at X on 2024-02-07", "meta_date": "2024-02-07",
+            "description": f"{link}\nSet 1:\n01. Aurora\n02. Wormhole\n"}
+    result = parse_archive_items([item], normalizer=_StubNormalizer(), policy=_billing_policy())
+    assert [show["date"] for show in result.shows] == ["2024-02-07"]
+    assert result.skipped == ()
+
+
+def test_a_pack_naming_no_billings_refuses_nothing_on_those_grounds():
+    item = {"identifier": "t1", "title": "moe. Live at X on 2024-02-07", "meta_date": "2024-02-07",
+            "description": "moe.stly acoustic\nSet 1:\n01. Aurora\n02. Wormhole\n"}
+    result = parse_archive_items([item], normalizer=_StubNormalizer(), policy=ArchivePolicy())
+    assert [show["date"] for show in result.shows] == ["2024-02-07"]
+
+
+def test_a_billing_is_matched_however_the_taper_capitalised_it():
+    for written in ("moe.stly", "Moe.stly", "MOE.STLY", "Moestly"):
+        item = {"identifier": "t1", "title": "moe. Live at X on 2024-02-07",
+                "meta_date": "2024-02-07",
+                "description": f"Al & Rob {written} acoustic\nSet 1:\n01. Aurora\n"}
+        result = parse_archive_items([item], normalizer=_StubNormalizer(), policy=_billing_policy())
+        assert result.shows == [], written
+
+
+def test_one_tape_naming_the_billing_refuses_the_whole_night():
+    """The billing is a fact about the NIGHT, not about the tape that mentions it.
+
+    2023-11-19 exactly: one taper wrote "moe.stlyAcoustic" into the filename and the next
+    uploaded the same duo show titled like any other night. Refusing only the first left the
+    show in the corpus with a ten-song setlist read off the tape that stayed silent.
+    """
+    items = [
+        {"identifier": "moe.stlyAcoustic2023-11-19.ck93", "meta_date": "2023-11-19",
+         "title": "moe. Live at Soundcheck on 2023-11-19",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
+        {"identifier": "moe2023-11-19.oc818", "meta_date": "2023-11-19",
+         "title": "moe. Live at Soundcheck on 2023-11-19",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
+    ]
+    result = parse_archive_items(items, normalizer=_StubNormalizer(), policy=_billing_policy())
+    assert result.shows == []
+    assert {s.reason for s in result.skipped} == {OTHER_BILLING}
+    # ...and the silent tape is told which rule condemned it, though its own text is clean.
+    silent, = [s for s in result.skipped if s.identifier == "moe2023-11-19.oc818"]
+    assert silent.billing == r"moe\.?stly"
+
+
+def test_a_tape_the_band_filter_already_turned_away_does_not_condemn_the_date():
+    """A different act's tape is not a record about this band's night.
+
+    Letting one vote would delete a real show whenever a co-headline or a guest set happened to
+    be filed under the same date.
+    """
+    items = [
+        {"identifier": "duo2024-07-21", "meta_date": "2024-07-21",
+         "title": "Al and Rob moe.stly Acoustic Live at Globe Hall on 2024-07-21",
+         "description": "Set 1:\n01. Aurora\n"},
+        {"identifier": "moe2024-07-21", "meta_date": "2024-07-21",
+         "title": "moe. Live at Globe Hall on 2024-07-21",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n03. Timmy Tucker\n"},
+    ]
+    result = parse_archive_items(items, normalizer=_StubNormalizer(),
+                                 policy=ArchivePolicy(side_projects=DUO,
+                                                      band_filter=title_band_filter("moe.")))
+    assert [show["identifier"] for show in result.shows] == ["moe2024-07-21"]
+    assert [(s.identifier, s.reason) for s in result.skipped] == [("duo2024-07-21",
+                                                                   NOT_THIS_BAND)]
+
+
+def test_a_single_item_parse_cannot_know_what_the_other_tapes_say():
+    """parse_archive_item sees one item, so only its own text can refuse it. Documented rather
+    than fixed: the caller that wants the night-level rule calls parse_archive_items."""
+    item = {"identifier": "moe2023-11-19.oc818", "meta_date": "2023-11-19",
+            "title": "moe. Live at Soundcheck on 2023-11-19",
+            "description": "Set 1:\n01. Aurora\n02. Wormhole\n"}
+    assert parse_archive_item(item, normalizer=_StubNormalizer(),
+                              policy=_billing_policy()) is not None

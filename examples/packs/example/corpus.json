@@ -28,7 +28,14 @@
   "acoustic_patterns": [
     {
       "pattern": "example\\.?stly",
-      "why": "This band's own billing for an acoustic duo night. Matched on the BRAND name and never on the bare word 'acoustic', because tapers list their gear in the description and 'percussion, flute, acoustic guitar' is not an acoustic show -- the bare word swept in New Year's Eve and six other full electric nights. A night tagged acoustic is left out of every length distribution, so the tag is a real exclusion and the brand name is what earns it."
+      "why": "This band's billing when the SAME five play an unplugged night. It is tagged and not refused because the band is all there: the songs are real evidence about what this band plays, so the row belongs in the rotation model and only the length statistics leave it out -- a song that runs 18 minutes electric runs 6 unplugged, and pooling the two averages distributions that have nothing to do with each other. Matched on the BRAND name and never on the bare word 'acoustic', because tapers list their gear in the description and 'percussion, flute, acoustic guitar' is not an acoustic show."
+    }
+  ],
+
+  "side_project_patterns": [
+    {
+      "pattern": "the\\s+example\\s+duo",
+      "why": "Two of the five under a related name, which is not the same act however similar the billing looks. Fifteen songs by a duo are not fifteen plays by the band, so this REFUSES the tape rather than tagging it: left in, those songs enter the rotation model and the base rates as ordinary plays. This is the opposite of acoustic_patterns above and the difference is only ever who was on stage. Matched against the tape's whole text, not its title, because a billing usually hides in the description while the title reads like any other show."
     }
   ]
 }

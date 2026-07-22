@@ -40,7 +40,7 @@ import functools
 import html
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -205,12 +205,27 @@ VENUE_WORDS = re.compile(
 BAND_IN_TITLE = re.compile(r"^\s*(.{0,60}?)\s+Live\s+at\b", re.I)
 
 
-# Why an item did not become a show. Three rules can refuse one, and from downstream all three
+# Why an item did not become a show. Four rules can refuse one, and from downstream all four
 # look identical: the date is simply not in the corpus. A night that was deliberately dropped and
 # a night nobody taped are very different facts about a band, so the parser says which.
 NOT_THIS_BAND = "not_this_band"      # the title names a different act; a side project's tape
 NO_DATE = "no_date"                  # no date we can believe, so nothing can be joined to it
 DROPPED_DATE = "dropped_date"        # the pack refuses this night, and says why in corpus.json
+# The band under another billing: an acoustic duo, a trio, some other cut of the lineup. Its own
+# reason and not NOT_THIS_BAND, because the two are found in different places and a report that
+# conflated them would lie. A side project announces itself in the TITLE, where the band filter
+# reads it. A billing hides in the description: twelve of moe.'s fourteen acoustic nights are
+# titled "moe. Live at ..." like any other show, and say "Al & Rob moe.stly acoustic" further
+# down. Saying "title names a different band" about those would name a title that says no
+# such thing.
+OTHER_BILLING = "other_billing"
+
+# Every field a taper might write a billing into. The same list the show-type classifier reads,
+# deliberately: these two judgements are made one after the other on one item, and if they read
+# different text a night can be refused by one rule and tagged by the other.
+_ITEM_TEXT_FIELDS = ("identifier", "title", "list_title", "description", "venue")
+
+_TAG_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True)
@@ -220,11 +235,16 @@ class Skipped:
     ``date`` is filled in only for :data:`DROPPED_DATE`, because that is the only case where a
     date was successfully read before the item was turned away -- and it is the one the caller
     needs, to look the reason up in the pack that asked for the drop.
+
+    ``billing`` is filled in only for :data:`OTHER_BILLING`, and carries the pattern that fired.
+    A pack may name several billings, and "this was some other lineup" sends a reader back to
+    the file to work out which rule they are arguing with. The rule itself does not.
     """
 
     identifier: str
     reason: str
     date: str = ""
+    billing: str = ""
 
 
 @dataclass(frozen=True)
@@ -294,6 +314,15 @@ class ArchivePolicy:
     ``band_filter``
         Decides whether an item is this band at all. Side projects land in the same collection.
         See :func:`title_band_filter`.
+    ``side_projects``
+        Compiled patterns naming a billing that is this band in a shape the corpus does not
+        model -- an acoustic duo, a trio, half the lineup under another name. Matched against
+        the item's whole text rather than its title, because that is where a billing hides:
+        twelve of moe.'s fourteen acoustic nights are titled like any other show. A match
+        refuses the item outright, which is the difference between this and a show type. The
+        band did play those songs; they are simply not evidence about what the FIVE-PIECE plays
+        next, and a duo playing fifteen songs a night otherwise enters the rotation model as
+        fifteen ordinary plays.
     ``junk_patterns``
         Extra regex fragments for the credit/annotation filter -- cover artists, member
         surnames. Each is grouped and bounded by non-word lookarounds, so a fragment may
@@ -311,6 +340,7 @@ class ArchivePolicy:
     # comparable field. Equality still reads it; only hashing skips it.
     date_overrides: Mapping[str, str] = field(default_factory=dict, hash=False)
     band_filter: Callable[[Mapping[str, Any]], bool] | None = None
+    side_projects: tuple[re.Pattern, ...] = ()
     junk_patterns: tuple[str, ...] = ()
     gear_patterns: tuple[str, ...] = ()
     band_name: str | None = None
@@ -436,6 +466,32 @@ def _attribute(census: Census, each: tuple[tuple[str, re.Pattern], ...], token: 
     for fragment, compiled in each:
         if compiled.search(token):
             census.record(fragment, token)
+
+
+def item_text(item: Mapping[str, Any]) -> str:
+    """Every field a taper might have written a billing into, HTML stripped.
+
+    The tags come out FIRST and that is the whole subtlety. Descriptions carry markup, and a
+    taper linking to the acoustic tour's page from an ordinary electric night writes the brand
+    into an ``href`` and never into the prose. Read raw, that link refuses a full electric show
+    on the strength of a URL. Stripping first is what stops it, and it is why this is one
+    function rather than two that agree until someone edits one of them.
+    """
+    blob = " ".join(str(item.get(field) or "") for field in _ITEM_TEXT_FIELDS)
+    return _TAG_RE.sub(" ", blob)
+
+
+def billed_as_other(item: Mapping[str, Any],
+                    patterns: Sequence[re.Pattern]) -> re.Pattern | None:
+    """The pattern saying this tape is the band under another billing, or None.
+
+    Returns the pattern rather than a bool so a caller can say WHICH rule refused a night. A
+    refusal that cannot name its own reason is indistinguishable from a night nobody taped.
+    """
+    if not patterns:
+        return None
+    blob = item_text(item)
+    return next((pattern for pattern in patterns if pattern.search(blob)), None)
 
 
 def title_band_filter(band_name: str) -> Callable[[Mapping[str, Any]], bool]:
@@ -774,15 +830,60 @@ def count_songs(sets: Iterable[Iterable[Mapping[str, Any]]],
     return tally + sum(1 for entry in encore if not entry.get("non_song"))
 
 
-def _parse_item(item: Mapping[str, Any], rules: _Rules,
-                policy: ArchivePolicy) -> dict | Skipped:
-    """One item into a show record, or a :class:`Skipped` saying which rule refused it."""
+def _billed_dates(items: list[Mapping[str, Any]], policy: ArchivePolicy) -> dict[str, str]:
+    """Dates some tape says were played under a billing the corpus does not model.
+
+    A first pass, because the question is about a NIGHT and the evidence arrives one tape at a
+    time. A night taped twice can have the billing in one filename and nowhere in the other, and
+    refusing only the tape that says so leaves the show in the corpus with a full setlist read
+    off the tape that stayed silent.
+
+    Tapes the band filter already turned away do not vote. Those are a different act's tapes --
+    a co-headline, a guest sit-in, someone else's night entirely -- and letting one of them
+    condemn a date would delete a real show on the strength of a record that was never about it.
+    """
+    found: dict[str, str] = {}
+    if not policy.side_projects:
+        return found
+    for item in items:
+        if policy.band_filter is not None and not policy.band_filter(item):
+            continue
+        pattern = billed_as_other(item, policy.side_projects)
+        if pattern is None:
+            continue
+        date = _show_date(item, policy.date_overrides)
+        if date:
+            found.setdefault(date, pattern.pattern)
+    return found
+
+
+def _parse_item(item: Mapping[str, Any], rules: _Rules, policy: ArchivePolicy,
+                billed: Mapping[str, str] | None = None) -> dict | Skipped:
+    """One item into a show record, or a :class:`Skipped` saying which rule refused it.
+
+    ``billed`` maps a date to the billing pattern some tape of that night matched. Empty for
+    a single-item parse, which cannot know what the other tapes of a night say.
+    """
+    billed = billed or {}
     identifier = str(item.get("identifier") or "")
     if policy.band_filter is not None and not policy.band_filter(item):
         return Skipped(identifier, NOT_THIS_BAND)
+    # After the band filter and before the date, because this is the same question one step in:
+    # is this tape evidence about the band the corpus is about. Reading the date first would
+    # only mean computing one for an item that is leaving anyway.
+    billing = billed_as_other(item, policy.side_projects)
+    if billing is not None:
+        return Skipped(identifier, OTHER_BILLING, billing=billing.pattern)
     date = _show_date(item, policy.date_overrides)
     if not date:
         return Skipped(identifier, NO_DATE)
+    # A billing is a fact about the NIGHT, not about the tape that mentions it. One taper writes
+    # "moe.stly" into the filename and the next uploads the same duo show titled like any other,
+    # and refusing only the first leaves the night in the corpus with a full setlist -- which is
+    # 2023-11-19 exactly, ten songs by two people. Strongest evidence across a date's tapes wins,
+    # which is the rule the show-type classifier already applies for the same reason.
+    if date in billed:
+        return Skipped(identifier, OTHER_BILLING, billing=billed[date])
     if date in policy.drop_dates:
         return Skipped(identifier, DROPPED_DATE, date)
     sets, encore = _parse_description(item.get("description", ""), rules,
@@ -839,10 +940,12 @@ def parse_archive_items(items: Iterable[Mapping[str, Any]], *, normalizer: Norma
     """
     policy = policy or ArchivePolicy()
     rules = _rules_for(normalizer, policy)
+    items = list(items)
+    billed = _billed_dates(items, policy)
     shows: list[dict] = []
     skipped: list[Skipped] = []
     for item in items:
-        record = _parse_item(item, rules, policy)
+        record = _parse_item(item, rules, policy, billed)
         if isinstance(record, Skipped):
             skipped.append(record)
         else:
