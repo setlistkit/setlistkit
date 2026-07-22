@@ -259,7 +259,7 @@ def _build_vocab(names, aliases: dict[str, str]) -> tuple[list[str], dict[str, s
 
 
 def _canonicalize(raw: str, norm_to_canon: dict[str, str], aliases: dict[str, str],
-                  cutoff: float = 0.9) -> tuple[str | None, bool]:
+                  cutoff: float = 0.9, sink=None) -> tuple[str | None, bool]:
     """Map a raw song string to a canonical display name + segue flag."""
     # The display form gets the same annotations stripped as the normalized one. Otherwise a song
     # we do NOT recognise falls through to `disp` still carrying its credit -- "Rebubula II (UM)"
@@ -271,15 +271,32 @@ def _canonicalize(raw: str, norm_to_canon: dict[str, str], aliases: dict[str, st
     if not norm:
         return None, seg
     if norm in aliases:
+        _note(sink, "s3.alias")
         return aliases[norm], seg
     if norm in norm_to_canon:
+        _note(sink, "s3.exact")
         return norm_to_canon[norm], seg
     # fuzzy against known vocabulary
     match = difflib.get_close_matches(norm, list(norm_to_canon.keys()), n=1, cutoff=cutoff)
     if match:
+        _note(sink, "s3.fuzzy")
         return norm_to_canon[match[0]], seg
+    # Nothing matched, so this mints a new song. Before it does, measure how NEAR it came: a
+    # one-character typo in an eight-character title scores about 0.875, just under the 0.9 gate,
+    # and every one of those becomes a song with a plausible-looking median beside it. Counting
+    # the near misses says how much traffic a candidate band would carry -- without acting on it,
+    # because proposing a merge is recognition and performing one is discovery.
+    if sink is not None:
+        near = difflib.get_close_matches(norm, list(norm_to_canon.keys()), n=1, cutoff=0.80)
+        _note(sink, "s3.band" if near else "s3.fallthrough")
     # unknown -> the cleaned display form
     return disp.strip(), seg
+
+
+def _note(sink, edge_id: str) -> None:
+    """Record a rung on the funnel, if one is listening."""
+    if sink is not None:
+        sink.hit(edge_id)
 
 
 class Normalizer:
@@ -325,14 +342,19 @@ class Normalizer:
             self._canon, self._norm_to_canon = _build_vocab(self._vocabulary, self.aliases())
         return self._canon, self._norm_to_canon
 
-    def canonicalize(self, raw: str, cutoff: float = 0.9) -> tuple[str | None, bool]:
+    def canonicalize(self, raw: str, cutoff: float = 0.9,
+                     sink=None) -> tuple[str | None, bool]:
         """Map a raw song string to a canonical display name + segue flag.
 
         Alias first, then exact normalized match, then difflib fuzzy within ``cutoff``;
         anything else falls through as its own cleaned display form.
+
+        ``sink`` is an optional :class:`~setlistkit.catalog.funnel.Funnel` that records WHICH rung
+        answered. Optional and keyword-defaulted so every existing caller is untouched: this is a
+        measurement, and a measurement that changes the thing it measures is worth nothing.
         """
         _, norm_to_canon = self.build_vocab()
-        return _canonicalize(raw, norm_to_canon, self.aliases(), cutoff)
+        return _canonicalize(raw, norm_to_canon, self.aliases(), cutoff, sink)
 
     def synonym_map(self, names) -> dict[str, str]:
         """Map every name in ``names`` to the one name that IS that song.

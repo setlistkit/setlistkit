@@ -44,6 +44,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .funnel import Funnel
 from .normalizer import Normalizer, squash
 
 # A description parse this thin is not a setlist, it is a taper who wrote prose. Below it we
@@ -305,6 +306,7 @@ class ParseResult:
     shows: list[dict] = field(default_factory=list)
     skipped: tuple[Skipped, ...] = ()
     census: Census = field(default_factory=Census)
+    funnel: Funnel = field(default_factory=Funnel)
 
 
 @dataclass(frozen=True)
@@ -372,6 +374,9 @@ class _Rules:
     # is a census that is empty exactly when someone forgot, and an empty one reports every rule
     # in the pack as dead.
     census: Census
+    # Counts DECISIONS where the census counts tokens. Rides here for the same reason and under
+    # the same always-on rule. See :mod:`setlistkit.catalog.funnel` for why the two are separate.
+    funnel: Funnel
     vocab: Mapping[str, str]
     # The pack's normalized-spelling -> canonical map, read for membership only. An alias key
     # is the pack declaring "this taper spelling IS that song", which makes it exactly as much
@@ -461,6 +466,7 @@ def _rules_for(normalizer: Normalizer, policy: ArchivePolicy) -> _Rules:
     _, norm_to_canon = normalizer.build_vocab()
     return _Rules(normalizer=normalizer,
                   census=Census(),
+                  funnel=Funnel(),
                   vocab=norm_to_canon,
                   aliases=normalizer.aliases(),
                   junk=_junk_pattern(tuple(policy.junk_patterns)),
@@ -635,32 +641,42 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
         # Recorded before anything can remove it. This is the only place the raw token exists;
         # every branch below either drops it or rewrites it into a canonical name.
         rules.census.seen[piece] += 1
+        rules.funnel.hit("s2.seen")
         # One guard, ahead of every rule that DROPS. Asked once and reused, so a title the pack
         # claims cannot be deleted by the shape gate, the gear words, the annotation filter, a
         # credit line or a crew role -- previously only the first two deferred to it.
-        claimed = _claimed(piece, rules)
-        if not claimed:
-            if not _looks_songlike(piece, rules):
+        if not rules.funnel.branch("s2.claimed", _claimed(piece, rules)):
+            if not rules.funnel.branch("s2.shape", _looks_songlike(piece, rules)):
                 rules.census.dropped[piece] += 1
                 continue
-            if CREDIT.search(piece) or CREW_ROLE.search(piece):
+            if not rules.funnel.branch(
+                    "s2.credit", not (CREDIT.search(piece) or CREW_ROLE.search(piece))):
                 rules.census.dropped[piece] += 1
                 continue
-            if rules.junk.search(piece) or URLISH.search(piece):
+            if not rules.funnel.branch(
+                    "s2.junk", not (rules.junk.search(piece) or URLISH.search(piece))):
                 _attribute(rules.census, rules.junk_each, piece)
                 rules.census.dropped[piece] += 1
                 continue
-        canon, canon_seg = rules.normalizer.canonicalize(piece)
-        if not canon:
+        canon, canon_seg = rules.normalizer.canonicalize(piece, sink=rules.funnel)
+        if not rules.funnel.branch("s2.canon", bool(canon)):
             rules.census.dropped[piece] += 1
             continue
-        non_song = rules.normalizer.is_non_song(canon)
+        non_song = not rules.funnel.branch(
+            "s2.nonsong", not rules.normalizer.is_non_song(canon))
         # An unknown title we are keeping AS A SONG has to look like one: short, no digits.
         # Non-songs skip this gate because they are already labelled for what they are.
         if not non_song and rules.normalizer.normalize(canon) not in rules.vocab:
             if len(canon.split()) > 5 or re.search(r"\d", canon):
+                rules.funnel.hit("s2.unknown.fail")
                 rules.census.dropped[piece] += 1
                 continue
+        # Counted for every song that survives to be emitted, not only for the unknown ones the
+        # gate above actually examined. A title the vocabulary knows skips that gate entirely,
+        # and counting only the examined ones would leave the node's arithmetic short by every
+        # known song in the corpus -- which is most of them.
+        if not non_song:
+            rules.funnel.hit("s2.unknown.pass")
         if non_song:
             rules.census.tagged[piece] += 1
             # Attributed against CANON, because canon is what is_non_song was just asked about --
@@ -903,6 +919,7 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules, policy: ArchivePolicy,
     a single-item parse, which cannot know what the other tapes of a night say.
     """
     billed = billed or {}
+    rules.funnel.hit("s1.start")
     identifier = str(item.get("identifier") or "")
     # Before the band filter, because both refuse and the question is only which reason is TRUE.
     # A pack pattern is a named billing with a stated why; the band filter is a heuristic on a
@@ -910,21 +927,21 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules, policy: ArchivePolicy,
     # & Rob Derhak Live at Globe Hall", and reporting those as "title names a different band"
     # files a moe. duo night under the same heading as a Dylan tribute act.
     billing = billed_as_other(item, policy.side_projects)
-    if billing is not None:
+    if not rules.funnel.branch("s1.billing", billing is None):
         return Skipped(identifier, OTHER_BILLING, billing=billing.pattern)
-    if policy.band_filter is not None and not policy.band_filter(item):
+    if not rules.funnel.branch("s1.band", policy.band_filter is None or policy.band_filter(item)):
         return Skipped(identifier, NOT_THIS_BAND)
     date = _show_date(item, policy.date_overrides)
-    if not date:
+    if not rules.funnel.branch("s1.date", bool(date)):
         return Skipped(identifier, NO_DATE)
     # A billing is a fact about the NIGHT, not about the tape that mentions it. One taper writes
     # "moe.stly" into the filename and the next uploads the same duo show titled like any other,
     # and refusing only the first leaves the night in the corpus with a full setlist -- which is
     # 2023-11-19 exactly, ten songs by two people. Strongest evidence across a date's tapes wins,
     # which is the rule the show-type classifier already applies for the same reason.
-    if date in billed:
+    if not rules.funnel.branch("s1.night", date not in billed):
         return Skipped(identifier, OTHER_BILLING, billing=billed[date])
-    if date in policy.drop_dates:
+    if not rules.funnel.branch("s1.drop", date not in policy.drop_dates):
         return Skipped(identifier, DROPPED_DATE, date)
     sets, encore = _parse_description(item.get("description", ""), rules,
                                       places=_place_terms(item, rules.normalizer))
@@ -934,11 +951,13 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules, policy: ArchivePolicy,
         # Both parses usually cover the same show, so counting both put every token of every
         # weak-parse item in twice -- which moved titles across the unknown-title reporting
         # floor and reordered a ranking whose whole job is to say which one to fix first.
-        attempt = replace(rules, census=Census())
+        attempt = replace(rules, census=Census(), funnel=Funnel())
         track_sets, track_encore = _parse_tracks(item.get("tracks"), attempt)
         if count_songs(track_sets, track_encore) > count_songs(sets, encore):
             sets, encore, source = track_sets, track_encore, "tracks"
             _merge_census(rules.census, attempt.census)
+            rules.funnel.merge(attempt.funnel)
+    rules.funnel.hit("s1.parse.tracks" if source == "tracks" else "s1.parse.description")
     return {"date": date, "year": date[:4], "sets": sets, "encore": encore,
             "n_songs": count_songs(sets, encore), "source": source,
             "identifier": str(item.get("identifier") or "")}
@@ -992,4 +1011,4 @@ def parse_archive_items(items: Iterable[Mapping[str, Any]], *, normalizer: Norma
             shows.append(record)
     return ParseResult(shows=sorted(shows, key=lambda rec: (rec["date"], rec["identifier"])),
                        skipped=tuple(sorted(skipped, key=lambda s: s.identifier)),
-                       census=rules.census)
+                       census=rules.census, funnel=rules.funnel)
