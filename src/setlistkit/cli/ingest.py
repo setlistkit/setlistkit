@@ -44,6 +44,7 @@ from ..catalog.pack import load_pack
 from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING, count_songs,
                              parse_archive_items)
 from ..catalog.showtypes import show_types
+from ..catalog.tracklists import read_tracklist, song_vocabulary
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..sources.archive_org import ArchiveOrgClient
 from ..store import Store
@@ -102,6 +103,7 @@ class _Mirror:
 
     recordings: list[dict] = field(default_factory=list)
     show_types: list[dict] = field(default_factory=list)
+    listings: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -137,12 +139,12 @@ def ingest(config, args) -> int:
                        songs=sum(count_songs(show["sets"], show["encore"])
                                  for show in merged.shows))
 
-    mirror = _mirror(cached.items, parsed.shows, pack.corpus.acoustic)
+    mirror = _mirror(cached.items, parsed.shows, pack, merged.shows)
 
     with Store(config.data_root) as store:
         store.init()
-        previous = _Previous(totals=_Totals(store.show_count(), store.song_count()),
-                             source_by_date=store.show_sources())
+        previous = _Previous(totals=_Totals(store.corpus.show_count(), store.corpus.song_count()),
+                             source_by_date=store.corpus.show_sources())
         _report_merge(merged, previous, produced, pack, len(cached.items))
         _report_skipped(parsed.skipped, pack, len(cached.items))
         _report_mirror(mirror, {show["date"] for show in merged.shows})
@@ -154,16 +156,57 @@ def ingest(config, args) -> int:
             print("dry run: nothing written")
             return EXIT_OK
         _guard_no_shrink(produced, previous.totals, force=args.force)
-        store.replace_shows(merged.shows)
+        store.corpus.replace_shows(merged.shows)
         # After the corpus and inside the same command, never on their own schedule. A mirror
         # rebuilt at a different moment than the corpus it is joined to is a mirror of a
         # different collection, and nothing about the two would say so.
-        store.replace_recordings(mirror.recordings)
-        store.replace_show_types(mirror.show_types)
+        store.tapes.replace_recordings(mirror.recordings)
+        store.tapes.replace_show_types(mirror.show_types)
+        # Written here rather than by derive, and written from the same parse the mirror is. The
+        # description a listing is read out of lives only in the raw cache; see _listings.
+        store.tapes.replace_listings(mirror.listings)
     return EXIT_OK
 
 
-def _mirror(items, shows, acoustic) -> _Mirror:
+def _listings(kept, pack, corpus_shows) -> dict[str, dict]:
+    """Each accepted tape's written tracklist, read from the description it is the only copy of.
+
+    THIS IS WHY TRACKLIST READING HAPPENS AT INGEST. A description exists in exactly one place --
+    the raw cache -- and that cache is gitignored, so a later stage reading it for itself works on
+    the machine that pulled and comes back empty everywhere else. That is precisely how `uploader`
+    went missing for 425 tapes in the previous implementation: not a bug in the code that used it,
+    a bug in WHERE it was read. So the description is projected once, at the only moment it is
+    open, and every later stage reads a table.
+
+    The vocabulary is built from the MERGED corpus and not from the per-item parses. A night with
+    five tapes is five parses of one setlist, and counting them separately would inflate every
+    song's play count fivefold -- which is the count the vocabulary's floor of two is measured
+    against, so the floor would stop excluding anything.
+
+    A tape with no timed tracks is skipped entirely rather than read: the file count is the only
+    thing that decides between the readings, and there is no count to check a listing against.
+    """
+    vocab = song_vocabulary(pack.normalizer, corpus_shows)
+    gear = pack.archive_policy().gear_patterns
+    out: dict[str, dict] = {}
+    for item in kept:
+        n_tracks = len(item.get("duration_tracks") or ())
+        if not n_tracks:
+            continue
+        listing = read_tracklist(item.get("description", ""), n_tracks, vocab=vocab,
+                                 normalizer=pack.normalizer, gear_patterns=gear)
+        if not listing.entries:
+            continue                       # no listing at all, which is not a listing that failed
+        out[str(item["identifier"])] = {
+            "reading": listing.reading,
+            "matched": listing.matched,
+            "entries": [{"idx": entry.index, "song": entry.song, "segue": entry.segue}
+                        for entry in listing.entries],
+        }
+    return out
+
+
+def _mirror(items, shows, pack, corpus_shows) -> _Mirror:
     """The tapes to store and the date tags to store, from the items the parser accepted.
 
     Keyed on acceptance rather than on the whole cache, because all three of the parser's
@@ -181,7 +224,9 @@ def _mirror(items, shows, acoustic) -> _Mirror:
     kept = [item for item in items if str(item.get("identifier") or "") in dates]
     return _Mirror(
         recordings=[dict(item, date=dates[item["identifier"]]) for item in kept],
-        show_types=[asdict(kind) for kind in show_types(kept, dates=dates, acoustic=acoustic)])
+        show_types=[asdict(kind) for kind in show_types(kept, dates=dates,
+                                                        acoustic=pack.corpus.acoustic)],
+        listings=_listings(kept, pack, corpus_shows))
 
 
 def _report_mirror(mirror: _Mirror, corpus_dates: set[str]) -> None:
@@ -210,7 +255,25 @@ def _report_mirror(mirror: _Mirror, corpus_dates: set[str]) -> None:
         # point of keeping them with NULL seconds is that this line can exist at all.
         print(f"    {unreadable} track(s) have a length we could not read, kept with the source "
               "string")
+    _report_listings(mirror)
     _report_setlistless(mirror, corpus_dates)
+
+
+def _report_listings(mirror: _Mirror) -> None:
+    """How many tapers wrote a tracklist, and how many of those we could line up with the files.
+
+    Both numbers, because the gap between them is the interesting one. A listing that did not
+    match is a taper who DID write down what is on the tape and a reader that could not follow
+    them, which is a bug worth having; a tape with no listing at all is just a tape. Reporting
+    only the matched count makes those two indistinguishable, and the match rate is the single
+    number that moves when a change to the reader breaks something.
+    """
+    if not mirror.listings:
+        return
+    matched = sum(1 for listing in mirror.listings.values() if listing["matched"])
+    total = len(mirror.listings)
+    print(f"    {matched} of {total} tape(s) with a written tracklist line up with their files "
+          f"({100 * matched / total:.1f}%)")
 
 
 def _report_setlistless(mirror: _Mirror, corpus_dates: set[str]) -> None:

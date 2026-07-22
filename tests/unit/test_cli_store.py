@@ -68,7 +68,7 @@ def test_dump_narrows_to_a_date_range(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     with Store(tmp_path / "state") as store:
         store.init()
-        store.replace_recordings([
+        store.tapes.replace_recordings([
             {"identifier": ident, "date": date, "uploader": "t@example.org",
              "audio_format": "Flac",
              "duration_tracks": [{"idx": 0, "name": f"{ident}.flac", "title": "x",

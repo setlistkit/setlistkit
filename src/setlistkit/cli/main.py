@@ -24,6 +24,7 @@ from ..sources.client import SourceError
 from ..store import Store
 from ..store.raw_cache import RawCache
 from .common import min_year, required_setting, resolve_pack_dir
+from .derive import derive
 from .ingest import ingest
 
 EXIT_OK = 0
@@ -119,6 +120,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="publish even when the merge produced far fewer shows than are stored (see the "
              "no-shrink guard)",
     )
+
+    derive_cmd = sub.add_parser(
+        "derive", help="compute derived state from what ingest published")
+    derive_sub = derive_cmd.add_subparsers(dest="derive_action")
+    durations_cmd = derive_sub.add_parser(
+        "durations", help="how long each song runs, reconciled across every tape of a night")
+    durations_cmd.add_argument("--pack", metavar="PATH",
+                               help="pack directory to derive with (overrides [catalog] pack)")
+    _add_dry_run(durations_cmd,
+                 "read, reconcile and report in full, but write nothing to the database")
 
     pack_cmd = sub.add_parser("pack", help="work with band packs")
     pack_sub = pack_cmd.add_subparsers(dest="pack_action")
@@ -361,6 +372,7 @@ _COMMANDS = {
     "store": _cmd_store,
     "pull": _cmd_pull,
     "ingest": ingest,
+    "derive": derive,
     "dump": _cmd_dump,
 }
 

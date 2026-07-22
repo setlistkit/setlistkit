@@ -84,6 +84,65 @@ def replace_show_types(conn: sqlite3.Connection, types: Iterable[Mapping]) -> in
     return len(rows)
 
 
+def replace_listings(conn: sqlite3.Connection, by_tape: Mapping[str, Mapping]) -> tuple[int, int]:
+    """Replace every tape's written tracklist. Returns ``(listings, entries)`` written.
+
+    Keyed by identifier, and written in the same run as the mirror it hangs off, for the reason
+    :func:`replace_recordings` is written beside the corpus: the listing is read out of the same
+    description the setlist is, and two projections of one payload made at two different moments
+    are two projections of two different payloads.
+
+    Unmatched listings are stored too, with ``matched`` false. See the migration for why that is
+    a column and not an absence.
+    """
+    rows = sorted(by_tape.items())
+    entries = [(identifier, int(entry["idx"]), str(entry["song"]), int(bool(entry["segue"])))
+               for identifier, listing in rows
+               for entry in listing.get("entries") or ()]
+    with transaction(conn):
+        conn.execute("DELETE FROM recording_listing_entries")
+        conn.execute("DELETE FROM recording_listings")
+        conn.executemany(
+            "INSERT INTO recording_listings(identifier, reading, n_entries, matched) "
+            "VALUES(?, ?, ?, ?)",
+            [(identifier, str(listing["reading"]), len(listing.get("entries") or ()),
+              int(bool(listing["matched"]))) for identifier, listing in rows])
+        conn.executemany(
+            "INSERT INTO recording_listing_entries(identifier, idx, song, segue) "
+            "VALUES(?, ?, ?, ?)", entries)
+    return len(rows), len(entries)
+
+
+def listings(conn: sqlite3.Connection, *, matched_only: bool = True) -> dict[str, list[dict]]:
+    """identifier -> its written tracklist, in play order.
+
+    ``matched_only`` defaults to TRUE, so the caller that just wants to time songs gets only the
+    listings that lined up with their tape's files -- which is the only thing anything may join
+    on. Asking for the rest is possible and has to be spelled out, which is the point.
+    """
+    where = " WHERE matched = 1" if matched_only else ""
+    wanted = {row["identifier"] for row in conn.execute(
+        "SELECT identifier FROM recording_listings" + where)}      # nosec B608 - literal branch
+    out: dict[str, list[dict]] = {identifier: [] for identifier in wanted}
+    for row in conn.execute(
+            "SELECT identifier, idx, song, segue FROM recording_listing_entries "
+            "ORDER BY identifier, idx"):
+        if row["identifier"] in out:
+            out[row["identifier"]].append(
+                {"idx": row["idx"], "song": row["song"], "segue": bool(row["segue"])})
+    return out
+
+
+def listing_readings(conn: sqlite3.Connection) -> dict[str, int]:
+    """reading -> how many tapes it explained. What ingest reports, so a drift in the mix shows.
+
+    UNMATCHED is one of the readings and is by far the most interesting one: it is the count of
+    tapes whose taper wrote a listing we could not line up with their own files.
+    """
+    return {row["reading"]: row["n"] for row in conn.execute(
+        "SELECT reading, COUNT(*) AS n FROM recording_listings GROUP BY reading ORDER BY reading")}
+
+
 def recording_count(conn: sqlite3.Connection) -> int:
     """How many tapes are mirrored, without reading their tracks."""
     return conn.execute("SELECT COUNT(*) FROM recordings").fetchone()[0]

@@ -563,3 +563,32 @@ def withheld_counts(performances: Iterable[Performance]) -> dict[str, int]:
     and every reason in here is one a human might disagree with.
     """
     return dict(Counter(reason for reason in (p.withheld for p in performances) if reason))
+
+
+def as_row(performance: Performance) -> dict:
+    """One performance as a flat mapping: the form it is stored and published in.
+
+    This lives HERE, next to the type, rather than in the store or the exporter, and the reason is
+    ``withheld``. It is a property -- a priority ordering over four other fields -- so any consumer
+    flattening a performance for itself would either drop it or reimplement it, and a second
+    implementation of "why was this held back" is exactly the drift the property was introduced to
+    prevent. Flattening is a question about a Performance, so the Performance answers it.
+
+    Nesting is dropped because storage and JSON are both flat, but nothing is renamed on the way
+    out: the keys here are the column names, so the mapping between the two is the identity and
+    there is no third place where a field can be misfiled.
+    """
+    slot, consensus, sandwich = performance.slot, performance.consensus, performance.sandwich
+    return {
+        "date": slot.date, "set_label": slot.set_label, "position": slot.position,
+        "song": slot.song, "seconds": performance.seconds,
+        "n_tapes": consensus.n_tapes, "n_tapes_seen": consensus.n_tapes_seen,
+        "n_ballots": consensus.n_ballots, "spread_seconds": consensus.spread_seconds,
+        "spread_all_tapes": consensus.spread_all_tapes, "suspect": consensus.suspect,
+        "resolved_by": consensus.resolved_by, "segued": performance.segued,
+        "show_type": performance.show_type, "excluded": performance.excluded,
+        "withheld": performance.withheld,
+        "double_play_parts": None if sandwich is None else sandwich.parts,
+        "sandwich_total_seconds": None if sandwich is None else sandwich.total_seconds,
+        "is_longest_part": None if sandwich is None else sandwich.is_longest_part,
+    }

@@ -92,7 +92,7 @@ def test_ident_rejects_non_identifiers():
 
 def _three_nights(store):
     store.init()
-    store.replace_recordings([
+    store.tapes.replace_recordings([
         {"identifier": ident, "date": date, "uploader": "t@example.org", "audio_format": "Flac",
          "duration_tracks": [{"idx": 0, "name": f"{ident}.flac", "title": "x",
                               "length_raw": "100.0", "seconds": 100.0}]}

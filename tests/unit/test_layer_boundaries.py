@@ -22,12 +22,20 @@ SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 # stay reusable, so it imports none of its siblings. The spec's layer-mapping table puts parse
 # and merge under `catalog`, not `sources`, so is-this-a-song stays in one layer and `sources`
 # never needs to reach up for it — the two meet at the cache, not at an import.
+#
+# `store` is below all of them and imports none of them. It is the layer every other one writes
+# through, so a single import upward would make "install the catalog alone" impossible -- and the
+# pressure to add one is real and arrives with every new table: the durations tables hold
+# nineteen columns flattened out of catalog dataclasses, and typing the writer on those classes
+# is the obvious move right up until the store depends on the layer above it. The store speaks
+# mappings keyed by column name instead, and catalog.lengths.as_row produces them.
 FORBIDDEN = {
     "sources": {"catalog", "model", "picks", "report"},
     "catalog": {"model", "picks", "report"},
     "model": {"picks", "report"},
     "picks": {"report"},
     "report": set(),
+    "store": {"sources", "catalog", "model", "picks", "report"},
 }
 
 
@@ -108,4 +116,26 @@ def test_layer_does_not_import_forbidden_siblings(layer, forbidden):
                     violations.append(f"{py_path.name} imports {mod}")
     assert not violations, (
         f"{layer} must not import {sorted(forbidden)}: " + "; ".join(violations)
+    )
+
+
+# The cache is gitignored, so anything reading it works on the machine that pulled and comes back
+# empty everywhere else. `slkit ingest` is the ONE command allowed to open it -- it is the command
+# whose job is to project raw payloads into tables -- and every later command reads those tables.
+#
+# This is not a hypothetical. The previous implementation read the uploader out of the raw payload
+# at derive time and lost it for 425 of 425 tapes in production while working perfectly on a
+# workstation, which disabled ballot consolidation entirely: four mic feeds from one taper voted
+# four times, so the loudest uploader on a night decided that night.
+CACHE_READERS = ("RawCache", "ArchiveOrgClient", "cached_items")
+
+
+@pytest.mark.parametrize("module", ["derive"])
+def test_a_derive_command_reads_the_store_and_never_the_raw_cache(module):
+    source = (SRC_ROOT / "setlistkit" / "cli" / f"{module}.py").read_text(encoding="utf-8")
+    mods = _imports_in_source(source, ["setlistkit", "cli"])
+    reached = {m for m in mods if any(m.endswith(f".{name}") for name in CACHE_READERS)}
+    assert not reached, (
+        f"cli/{module}.py must read the store, not the cache, but imports {sorted(reached)}. "
+        "Descriptions and uploaders are projected into tables at ingest for exactly this reason."
     )

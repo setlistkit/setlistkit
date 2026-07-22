@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import __version__
-from . import corpus, recordings
+from . import corpus, durations, recordings
 from .migrations import apply_pending, schema_version, transaction
 from .raw_cache import RawCache
 
@@ -48,6 +48,18 @@ _DATE_EXPR = {
     "show_types": '"date"',
     "recording_tracks": ('(SELECT "date" FROM "recordings" '
                          'WHERE "recordings"."identifier" = "recording_tracks"."identifier")'),
+    "performance_durations": '"date"',
+    "duration_review": '"date"',
+    "duration_abandoned": '"date"',
+    "duration_edges": '"date"',
+    "recording_listings": ('(SELECT "date" FROM "recordings" '
+                           'WHERE "recordings"."identifier" = "recording_listings"."identifier")'),
+    "recording_listing_entries": (
+        '(SELECT "date" FROM "recordings" WHERE "recordings"."identifier" = '
+        '"recording_listing_entries"."identifier")'),
+    # song_length_stats is deliberately absent. Its `longest_date` is a date but not the row's
+    # axis: a song's statistics are computed over every year it was played, so narrowing them to a
+    # range would print a whole-corpus median under a header claiming it covers one month.
 }
 
 
@@ -120,13 +132,167 @@ def _range_label(since: str | None, until: str | None) -> str:
     return f"from {since}" if since is not None else f"through {until}"
 
 
+class _Namespace:
+    """One domain's queries, bound to a store's connection.
+
+    The store used to carry every table's queries as flat methods on itself, and at three domains
+    that was twenty-eight of them in one undifferentiated list -- ``recordings`` and ``shows`` and
+    ``performances`` sitting side by side with nothing saying which layer each belonged to. The
+    connection is still owned in exactly one place; what changed is that asking for a query now
+    means naming the domain it belongs to.
+
+    Subclasses declare their methods explicitly rather than forwarding by ``__getattr__``. A
+    facade that answers to anything is a facade where a typo becomes a runtime AttributeError deep
+    in a run instead of a name your editor could have completed.
+
+    ``TABLES`` is what each domain owns, declared so a domain can be counted without anyone
+    keeping a second list of which tables belong to which layer. That list has to exist somewhere
+    for the report each command prints, and next to the queries is the only place it cannot drift
+    away from them.
+    """
+
+    TABLES: tuple[str, ...] = ()
+
+    def __init__(self, store: "Store") -> None:
+        self._store = store
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """The store's connection.
+
+        Read through the store on every access rather than captured at construction: the store
+        opens lazily and reopens after a ``close()``, and a namespace holding the handle from
+        before would be a namespace writing to a connection nobody else is using.
+        """
+        return self._store.conn
+
+    def counts(self) -> dict[str, int]:
+        """Row count for each table this domain owns, in declaration order.
+
+        Declaration order rather than alphabetical, because the tables of a domain are written in
+        dependency order and reading them that way is how a broken run reads: recordings before
+        their tracks, performances before the statistics aggregated from them. A zero halfway down
+        the list says which stage stopped.
+        """
+        return {table: self.conn.execute(_count_sql(table)).fetchone()[0]
+                for table in self.TABLES}
+
+
+class _Corpus(_Namespace):
+    """The merged corpus: one show per date, and its entries in play order."""
+
+    TABLES = ("shows", "show_entries")
+
+    def replace_shows(self, shows) -> int:
+        """Replace the whole corpus with ``shows``, in one transaction. Returns how many."""
+        return corpus.replace_shows(self.conn, shows)
+
+    def shows(self) -> list[dict]:
+        """Every stored show, by date, sets and encore in the order they were played."""
+        return corpus.shows(self.conn)
+
+    def show_count(self) -> int:
+        """How many shows are stored, without reading their setlists."""
+        return corpus.show_count(self.conn)
+
+    def song_count(self) -> int:
+        """How many actual songs are stored, ignoring the tagged non-songs."""
+        return corpus.song_count(self.conn)
+
+    def show_sources(self) -> dict[str, str]:
+        """date -> which source won it, without reading their setlists."""
+        return corpus.show_sources(self.conn)
+
+
+class _Tapes(_Namespace):
+    """The recordings mirror: every tape of every night, its tracks, its listing, its date's kind.
+
+    Every tape, not just the one that won the merge. A setlist is a single fact about a night, so
+    the corpus keeps one; a duration is a measurement, and the same performance timed by four
+    tapers is four measurements whose disagreement is the error bar.
+    """
+
+    TABLES = ("recordings", "recording_tracks", "show_types", "recording_listings",
+              "recording_listing_entries")
+
+    def replace_recordings(self, records) -> tuple[int, int]:
+        """Replace the mirror. Returns ``(recordings, tracks)`` written."""
+        return recordings.replace_recordings(self.conn, records)
+
+    def replace_show_types(self, types) -> int:
+        """Replace every date's electric/acoustic/mixed/alterego tag. Returns how many."""
+        return recordings.replace_show_types(self.conn, types)
+
+    def replace_listings(self, by_tape) -> tuple[int, int]:
+        """Replace every tape's written tracklist. Returns ``(listings, entries)`` written."""
+        return recordings.replace_listings(self.conn, by_tape)
+
+    def recording_count(self) -> int:
+        """How many tapes are mirrored, without reading their tracks."""
+        return recordings.recording_count(self.conn)
+
+    def track_count(self) -> int:
+        """How many tracks are mirrored."""
+        return recordings.track_count(self.conn)
+
+    def show_type_counts(self) -> dict[str, int]:
+        """kind -> how many dates carry it."""
+        return recordings.show_type_counts(self.conn)
+
+    def recordings(self) -> list[dict]:
+        """Every mirrored tape with its tracks, by date then identifier, tracks in play order."""
+        return recordings.recordings(self.conn)
+
+    def show_types(self) -> dict[str, str]:
+        """date -> kind."""
+        return recordings.show_types(self.conn)
+
+    def listings(self, *, matched_only: bool = True) -> dict[str, list[dict]]:
+        """identifier -> its written tracklist, in play order. Matched listings only by default."""
+        return recordings.listings(self.conn, matched_only=matched_only)
+
+    def listing_readings(self) -> dict[str, int]:
+        """reading -> how many tapes it explained, including the ones that did not line up."""
+        return recordings.listing_readings(self.conn)
+
+
+class _Durations(_Namespace):
+    """What the durations chain concluded: performances, statistics, and what was skipped."""
+
+    TABLES = ("performance_durations", "song_length_stats", "duration_review",
+              "duration_abandoned", "duration_edges")
+
+    def replace(self, performance_rows, stat_rows, **kwargs) -> dict[str, int]:
+        """Replace every durations table in one transaction. Returns a count per table."""
+        return durations.replace_durations(self.conn, performance_rows, stat_rows, **kwargs)
+
+    def performances(self) -> list[dict]:
+        """Every stored performance, in play order."""
+        return durations.performances(self.conn)
+
+    def song_length_stats(self) -> list[dict]:
+        """Every song's length statistics, longest first."""
+        return durations.song_length_stats(self.conn)
+
+    def review(self) -> list[dict]:
+        """Tapes we hold and could not time."""
+        return durations.duration_review(self.conn)
+
+    def withheld_counts(self) -> dict[str, int]:
+        """reason -> how many stored performances do not vote for their song's nominal length."""
+        return durations.withheld_counts(self.conn)
+
+
 class Store:
     """Owns the database connection and the raw cache rooted at ``data_root``.
 
-    Usable as a context manager so the connection closes cleanly::
+    The tables are reached through one namespace per domain -- ``store.corpus``, ``store.tapes``,
+    ``store.durations`` -- while the connection, the PRAGMAs, the migration walk and the plain-text
+    dump stay here. Usable as a context manager so the connection closes cleanly::
 
         with Store(cfg.data_root) as store:
             store.init()
+            store.corpus.replace_shows(shows)
     """
 
     def __init__(self, data_root: str | Path, *, filename: str = DB_FILENAME) -> None:
@@ -134,6 +300,9 @@ class Store:
         self.db_path = self.data_root / filename
         self.raw = RawCache(self.data_root)
         self._conn: sqlite3.Connection | None = None
+        self.corpus = _Corpus(self)
+        self.tapes = _Tapes(self)
+        self.durations = _Durations(self)
 
     # --- connection lifecycle ---
 
@@ -189,60 +358,7 @@ class Store:
         """Highest applied migration version, or 0 for an uninitialized database."""
         return schema_version(self.conn)
 
-    # --- the merged corpus ---
-    #
-    # Thin pass-throughs. The SQL lives in store/corpus.py so this class stays the handle on the
-    # database rather than the place every table's queries accumulate.
-
-    def replace_shows(self, shows) -> int:
-        """Replace the whole corpus with ``shows``, in one transaction. Returns how many."""
-        return corpus.replace_shows(self.conn, shows)
-
-    def shows(self) -> list[dict]:
-        """Every stored show, by date, sets and encore in the order they were played."""
-        return corpus.shows(self.conn)
-
-    def show_count(self) -> int:
-        """How many shows are stored, without reading their setlists."""
-        return corpus.show_count(self.conn)
-
-    def song_count(self) -> int:
-        """How many actual songs are stored, ignoring the tagged non-songs."""
-        return corpus.song_count(self.conn)
-
-    def show_sources(self) -> dict[str, str]:
-        """date -> which source won it, without reading their setlists."""
-        return corpus.show_sources(self.conn)
-
-    # --- the recordings mirror ---
-
-    def replace_recordings(self, records) -> tuple[int, int]:
-        """Replace the mirror. Returns ``(recordings, tracks)`` written."""
-        return recordings.replace_recordings(self.conn, records)
-
-    def replace_show_types(self, types) -> int:
-        """Replace every date's electric/acoustic/mixed/alterego tag. Returns how many."""
-        return recordings.replace_show_types(self.conn, types)
-
-    def recording_count(self) -> int:
-        """How many tapes are mirrored, without reading their tracks."""
-        return recordings.recording_count(self.conn)
-
-    def track_count(self) -> int:
-        """How many tracks are mirrored."""
-        return recordings.track_count(self.conn)
-
-    def show_type_counts(self) -> dict[str, int]:
-        """kind -> how many dates carry it."""
-        return recordings.show_type_counts(self.conn)
-
-    def recordings(self) -> list[dict]:
-        """Every mirrored tape with its tracks, by date then identifier, tracks in play order."""
-        return recordings.recordings(self.conn)
-
-    def show_types(self) -> dict[str, str]:
-        """date -> kind."""
-        return recordings.show_types(self.conn)
+    # --- the whole database, whatever is in it ---
 
     def table_names(self) -> list[str]:
         """Every non-internal table, alphabetized."""

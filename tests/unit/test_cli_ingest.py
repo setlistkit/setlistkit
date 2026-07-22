@@ -69,7 +69,7 @@ def _cache(tmp_path, items=None, *, num_found=None, page=1):
 
 def _shows(tmp_path):
     with Store(tmp_path / "state") as store:
-        return store.shows()
+        return store.corpus.shows()
 
 
 def test_ingest_publishes_the_shows_it_could_parse(tmp_path, capsys):
@@ -310,7 +310,7 @@ def test_a_collapse_in_songs_alone_is_refused(tmp_path, capsys):
     assert "refusing to publish: songs fell from 18 to 6" in err
     assert "junk or gear fragment" in err
     with Store(tmp_path / "state") as store:
-        assert store.song_count() == 18            # the good corpus is untouched
+        assert store.corpus.song_count() == 18            # the good corpus is untouched
 
 
 def test_the_report_runs_before_the_guard_refuses(tmp_path, capsys):
@@ -588,7 +588,7 @@ TAPED = {
 
 def _mirror(tmp_path):
     with Store(tmp_path / "state") as store:
-        return store.recordings()
+        return store.tapes.recordings()
 
 
 def test_ingest_mirrors_the_tapes_it_accepted_and_only_those(tmp_path):
@@ -658,8 +658,8 @@ def test_show_types_are_stored_for_every_night_and_tallied_in_the_report(tmp_pat
     main(["--config", _cfg(tmp_path), "ingest"])
     assert "show types: {'acoustic': 1, 'alterego': 1, 'electric': 1}" in capsys.readouterr().out
     with Store(tmp_path / "state") as store:
-        assert store.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego",
-                                      "2025-08-02": "acoustic"}
+        assert store.tapes.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego",
+                                            "2025-08-02": "acoustic"}
         evidence = store.conn.execute(
             "SELECT evidence FROM show_types WHERE date = '2025-08-02'").fetchone()[0]
         assert evidence == r"tape metadata matches /example\.?stly/"
@@ -677,7 +677,7 @@ def test_the_show_type_of_a_corrected_night_lands_on_the_night_it_was_played(tmp
     main(["--config", _cfg(tmp_path), "ingest"])
     with Store(tmp_path / "state") as store:
         # The tag is on 2025, the year the show happened -- not on the 2024 the uploader typed.
-        assert store.show_types() == {"2025-06-14": "alterego"}
+        assert store.tapes.show_types() == {"2025-06-14": "alterego"}
 
 
 def test_the_report_counts_tapes_and_tracks_separately(tmp_path, capsys):
@@ -705,7 +705,7 @@ def test_a_dry_run_reports_the_mirror_and_writes_none_of_it(tmp_path, capsys):
     assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run"]) == EXIT_OK
     assert "mirror: 1 tape(s) / 2 track(s)" in capsys.readouterr().out
     with Store(tmp_path / "state") as store:
-        assert store.recording_count() == 0 and store.track_count() == 0
+        assert store.tapes.recording_count() == 0 and store.tapes.track_count() == 0
 
 
 def test_the_mirror_is_rebuilt_whole_on_every_ingest(tmp_path):
@@ -754,6 +754,6 @@ def test_a_tape_whose_description_yields_no_setlist_is_mirrored_and_explained(tm
     assert "1 date(s) have a tape but no setlist the merge would take" in out
     assert "['2025-09-09']" in out
     with Store(tmp_path / "state") as store:
-        assert store.recording_count() == 2                 # both tapes mirrored
-        assert [s["date"] for s in store.shows()] == ["2025-07-04"]   # one show in the corpus
-        assert "2025-09-09" in store.show_types()
+        assert store.tapes.recording_count() == 2                 # both tapes mirrored
+        assert [s["date"] for s in store.corpus.shows()] == ["2025-07-04"]   # one show in the corpus
+        assert "2025-09-09" in store.tapes.show_types()

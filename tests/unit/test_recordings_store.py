@@ -27,9 +27,9 @@ def test_every_tape_of_a_night_is_kept_not_just_the_winner(tmp_path):
     """
     with Store(tmp_path) as store:
         store.init()
-        assert store.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0),
-                                         _tape("b", "2024-01-01", 101.0, 199.0)]) == (2, 4)
-        assert [r["identifier"] for r in store.recordings()] == ["a", "b"]
+        assert store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0),
+                                               _tape("b", "2024-01-01", 101.0, 199.0)]) == (2, 4)
+        assert [r["identifier"] for r in store.tapes.recordings()] == ["a", "b"]
 
 
 def test_tracks_come_back_in_the_order_they_were_stored_in(tmp_path):
@@ -38,8 +38,8 @@ def test_tracks_come_back_in_the_order_they_were_stored_in(tmp_path):
         store.init()
         tape = _tape("a", "2024-01-01", 100.0, 200.0, 300.0)
         tape["duration_tracks"].reverse()          # hand them over backwards; idx still decides
-        store.replace_recordings([tape])
-        stored, = store.recordings()
+        store.tapes.replace_recordings([tape])
+        stored, = store.tapes.recordings()
         assert [t["idx"] for t in stored["tracks"]] == [0, 1, 2]
         assert [t["seconds"] for t in stored["tracks"]] == [100.0, 200.0, 300.0]
 
@@ -51,8 +51,8 @@ def test_an_unreadable_length_survives_the_round_trip_as_null_beside_its_source_
         tape = _tape("a", "2024-01-01", 100.0)
         tape["duration_tracks"].append({"idx": 1, "name": "a.t01.flac", "title": "x",
                                         "length_raw": "unknown", "seconds": None})
-        store.replace_recordings([tape])
-        stored, = store.recordings()
+        store.tapes.replace_recordings([tape])
+        stored, = store.tapes.recordings()
         assert stored["tracks"][1]["seconds"] is None
         assert stored["tracks"][1]["length_raw"] == "unknown"
 
@@ -61,18 +61,18 @@ def test_the_mirror_is_replaced_whole_and_leaves_no_orphan_tracks(tmp_path):
     """Ingest recomputes it from the whole cache every run; a patched mirror is half of two."""
     with Store(tmp_path) as store:
         store.init()
-        store.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0)])
-        assert store.replace_recordings([_tape("b", "2024-02-01", 300.0)]) == (1, 1)
-        assert store.recording_count() == 1 and store.track_count() == 1
-        assert [r["identifier"] for r in store.recordings()] == ["b"]
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0)])
+        assert store.tapes.replace_recordings([_tape("b", "2024-02-01", 300.0)]) == (1, 1)
+        assert store.tapes.recording_count() == 1 and store.tapes.track_count() == 1
+        assert [r["identifier"] for r in store.tapes.recordings()] == ["b"]
 
 
 def test_a_tape_with_no_readable_durations_is_stored_rather_than_dropped(tmp_path):
     """It is a real recording of a real night. Slice 3 has a table for saying so."""
     with Store(tmp_path) as store:
         store.init()
-        assert store.replace_recordings([_tape("a", "2024-01-01", audio_format="")]) == (1, 0)
-        stored, = store.recordings()
+        assert store.tapes.replace_recordings([_tape("a", "2024-01-01", audio_format="")]) == (1, 0)
+        stored, = store.tapes.recordings()
         assert stored["n_tracks"] == 0 and stored["audio_format"] == ""
 
 
@@ -84,8 +84,8 @@ def test_the_uploader_is_stored_and_not_looked_up_again(tmp_path):
     """
     with Store(tmp_path) as store:
         store.init()
-        store.replace_recordings([_tape("a", "2024-01-01", 100.0, uploader="nate@example.org")])
-        stored, = store.recordings()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0, uploader="nate@example.org")])
+        stored, = store.tapes.recordings()
         assert stored["uploader"] == "nate@example.org"
 
 
@@ -93,9 +93,9 @@ def test_deleting_a_recording_takes_its_tracks_with_it(tmp_path):
     """The FK cascade, asserted rather than assumed: it needs a PRAGMA to be on."""
     with Store(tmp_path) as store:
         store.init()
-        store.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0)])
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0)])
         store.conn.execute("DELETE FROM recordings WHERE identifier = 'a'")
-        assert store.track_count() == 0
+        assert store.tapes.track_count() == 0
 
 
 def test_a_track_cannot_be_stored_for_a_tape_that_does_not_exist(tmp_path):
@@ -115,13 +115,13 @@ def test_show_types_are_stored_with_the_tape_the_verdict_was_read_off(tmp_path):
     """
     with Store(tmp_path) as store:
         store.init()
-        assert store.replace_show_types([
+        assert store.tapes.replace_show_types([
             {"date": "2024-01-01", "kind": "acoustic", "evidence": "'moe.stly' in tape metadata",
              "identifier": "a"},
             {"date": "2024-01-02", "kind": "electric", "evidence": None, "identifier": None},
         ]) == 2
-        assert store.show_types() == {"2024-01-01": "acoustic", "2024-01-02": "electric"}
-        assert store.show_type_counts() == {"acoustic": 1, "electric": 1}
+        assert store.tapes.show_types() == {"2024-01-01": "acoustic", "2024-01-02": "electric"}
+        assert store.tapes.show_type_counts() == {"acoustic": 1, "electric": 1}
         row = store.conn.execute(
             "SELECT identifier FROM show_types WHERE date = '2024-01-01'").fetchone()
         assert row["identifier"] == "a"
@@ -136,7 +136,7 @@ def test_an_orphaned_track_row_does_not_invent_a_tape(tmp_path):
     """
     with Store(tmp_path) as store:
         store.init()
-        store.replace_recordings([_tape("a", "2024-01-01", 100.0)])
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0)])
 
     hand_edit = sqlite3.connect(tmp_path / "setlistkit.sqlite")    # no foreign_keys pragma
     hand_edit.execute("INSERT INTO recording_tracks VALUES('ghost', 0, 'x.flac', 'x', '1.0', 1.0)")
@@ -144,5 +144,68 @@ def test_an_orphaned_track_row_does_not_invent_a_tape(tmp_path):
     hand_edit.close()
 
     with Store(tmp_path) as store:
-        assert [r["identifier"] for r in store.recordings()] == ["a"]
-        assert [t["name"] for t in store.recordings()[0]["tracks"]] == ["a.t00.flac"]
+        assert [r["identifier"] for r in store.tapes.recordings()] == ["a"]
+        assert [t["name"] for t in store.tapes.recordings()[0]["tracks"]] == ["a.t00.flac"]
+
+
+def _listing(*songs, reading="numbered", matched=True):
+    return {"reading": reading, "matched": matched,
+            "entries": [{"idx": idx, "song": song, "segue": False}
+                        for idx, song in enumerate(songs, start=1)]}
+
+
+def test_a_written_tracklist_is_stored_at_ingest_because_its_description_is_not(tmp_path):
+    """The whole reason listings are a table.
+
+    A description exists in exactly one place -- the raw cache -- and that cache is gitignored, so
+    anything reading it for itself works on the machine that pulled and comes back empty
+    everywhere else. That is how `uploader` went missing for 425 tapes: not a bug in the code that
+    used it, a bug in WHERE it was read.
+    """
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0, 200.0)])
+        assert store.tapes.replace_listings({"a": _listing("Rebubula", "Moth")}) == (1, 2)
+        assert store.tapes.listings() == {
+            "a": [{"idx": 1, "song": "Rebubula", "segue": False},
+                  {"idx": 2, "song": "Moth", "segue": False}]}
+
+
+def test_a_listing_that_did_not_line_up_is_kept_but_not_handed_out(tmp_path):
+    """`matched` is the only thing a consumer may join on, and it is a column rather than an
+    absence: "no listing" and "a listing we could not trust" are different facts, and only the
+    second is worth a human's attention. Getting the untrusted ones takes saying so."""
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0),
+                                        _tape("b", "2024-01-01", 100.0)])
+        store.tapes.replace_listings({
+            "a": _listing("Rebubula", "Moth"),
+            "b": _listing("Wormwood", reading="unmatched", matched=False)})
+        assert list(store.tapes.listings()) == ["a"]
+        assert sorted(store.tapes.listings(matched_only=False)) == ["a", "b"]
+        assert store.tapes.listing_readings() == {"numbered": 1, "unmatched": 1}
+
+
+def test_listing_entries_come_back_in_the_order_the_taper_wrote_them(tmp_path):
+    """A tracklist read back out of order is a tracklist that times the wrong songs, and every
+    duration computed from it looks exactly as plausible as a right one."""
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 1.0, 2.0, 3.0)])
+        listing = _listing("Timmy Tucker", "Plane Crash", "Buster")
+        listing["entries"].reverse()               # hand them over backwards; idx still decides
+        store.tapes.replace_listings({"a": listing})
+        assert [e["song"] for e in store.tapes.listings()["a"]] == [
+            "Timmy Tucker", "Plane Crash", "Buster"]
+
+
+def test_a_second_ingest_replaces_the_listings_rather_than_accumulating_them(tmp_path):
+    """Recomputed whole from the cache on every run, like the mirror it hangs off. A partial
+    write would leave half of one run joined to half of another on nothing."""
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 1.0, 2.0)])
+        store.tapes.replace_listings({"a": _listing("Rebubula", "Moth")})
+        assert store.tapes.replace_listings({"a": _listing("Wormwood")}) == (1, 1)
+        assert [e["song"] for e in store.tapes.listings()["a"]] == ["Wormwood"]
