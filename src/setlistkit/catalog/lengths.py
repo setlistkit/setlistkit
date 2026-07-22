@@ -254,10 +254,25 @@ def observations_of(tape: Tape, reading: Reading, normalizer: Normalizer,
     An MC introduction consumed a track and has to stay consumed -- dropping it earlier would
     slide every song after it up one slot -- but it is not a length observation, and a repertoire
     where "Intro" runs 40 seconds every night is a repertoire with a fictional song in it.
+
+    A ZERO-LENGTH TRACK IS THE SAME KIND OF THING, and it is absent data rather than a short
+    performance. archive.org states some tracks as 0:00 -- a placeholder, a derivative that never
+    finished, a metadata stub -- and the parser reads exactly what it is told. Left as a vote it
+    is not merely noise: it is the smallest possible number, so it lands as the song's minimum and
+    drags the low end of every chart drawn from it. Moth published a floor of 0:00 across 350
+    performances this way. Consumed like a non-song, for the same reason: the track exists and
+    the alignment after it has to stay honest.
     """
     votes: list[Observation] = []
     edges: list[Edge] = []
     for row in reading.rows:
+        if not row.seconds:
+            edges.append(Edge("zero_length_track", tape.date, tape.identifier, row.song,
+                              {"track": basename(row.track_name),
+                               "note": "the source states this track as 0:00, which is missing "
+                                       "data rather than a performance of zero seconds; it "
+                                       "consumed its track but casts no vote"}))
+            continue
         if normalizer.is_non_song(row.song):
             edges.append(Edge("non_song_excluded", tape.date, tape.identifier, row.song,
                               {"seconds": row.seconds, "track": basename(row.track_name),
@@ -418,7 +433,7 @@ def _resolve(observations: Sequence[Observation], segued: bool, uploaders: Mappi
 
 def _performance_of(slot: Slot, observations: Sequence[Observation], show: Mapping, *,
                     uploaders: Mapping[str, str], splits: Mapping[str, int],
-                    exclusions: Mapping[tuple[str, str, int], str]
+                    exclusions: Mapping[tuple[str, str, int], Mapping[str, str]]
                     ) -> tuple[Performance, Edge | None]:
     """One slot's timings, reconciled into one duration and whatever a human should see."""
     segued = touches_segue(show, slot.set_label, slot.position)
@@ -439,7 +454,54 @@ def _performance_of(slot: Slot, observations: Sequence[Observation], show: Mappi
     return Performance(slot=slot, seconds=round(statistics.median(verdict.seconds), 2),
                        consensus=consensus, segued=segued,
                        show_type=observations[0].show_type,
-                       excluded=exclusions.get((slot.date, slot.set_label, slot.position))), edge
+                       excluded=_excluded_reason(slot, exclusions)), edge
+
+
+def _excluded_reason(slot: Slot, exclusions: Mapping[tuple[str, str, int], Mapping[str, str]]
+                     ) -> str | None:
+    """The ledger's reason for this slot, but ONLY if the ledger meant this song.
+
+    THE ENTRY HAS TO PROVE IT HIT WHAT IT WAS WRITTEN FOR. An exclusion is identified by
+    (date, set, position), and a position is a number somebody counted off a page -- so it is
+    exactly the kind of key that can be one out and still land on a real row. When it does, the
+    ledger silently deletes a performance nobody examined and leaves the one somebody did.
+
+    That is not hypothetical: the first three entries this project seeded were written against a
+    different implementation's numbering, and "the 2:17 Moth reprise" landed on an eighteen-minute
+    Pit. Both halves failed quietly -- a good measurement stopped voting, and the bad one kept
+    voting -- and the run reported a tidy tally of exclusions applied.
+
+    So the song is carried in the ledger as a WITNESS rather than as part of the key. Part of the
+    key, a renamed song would stop excluding anything and say nothing; as a witness, a mismatch is
+    a refusal that :mod:`setlistkit.cli.derive` reports by name.
+    """
+    entry = exclusions.get((slot.date, slot.set_label, slot.position))
+    if entry is None or entry.get("song") != slot.song:
+        return None
+    return entry.get("reason")
+
+
+def unmatched_exclusions(performances: Iterable[Performance],
+                         exclusions: Mapping[tuple[str, str, int], Mapping[str, str]]
+                         ) -> list[dict]:
+    """Ledger entries that did not rule anything out, with what sits at the slot instead.
+
+    Reported rather than merely skipped. An exclusion exists because a person listened to a
+    performance and judged it; if it stops applying -- the setlist was re-parsed, a song was
+    renamed, the position was miscounted -- then that judgement has silently stopped being
+    honoured, and the performance it was written about is back in the statistics.
+    """
+    at_slot = {(p.slot.date, p.slot.set_label, p.slot.position): p.slot.song
+               for p in performances}
+    out = []
+    for (date, set_label, position), entry in sorted(exclusions.items()):
+        found = at_slot.get((date, set_label, position))
+        if found == entry.get("song"):
+            continue
+        out.append({"date": date, "set": set_label, "position": position,
+                    "song": entry.get("song"), "reason": entry.get("reason"),
+                    "found": found})
+    return out
 
 
 def _mark_sandwiches(performances: Sequence[Performance]) -> tuple[list[Performance], list[Edge]]:
@@ -495,7 +557,7 @@ def _by_slot(observations: Iterable[Observation]) -> dict[Slot, list[Observation
 
 def reconcile(observations: Iterable[Observation], shows: Mapping[str, Mapping], *,
               uploaders: Mapping[str, str], splits: Mapping[str, int],
-              exclusions: Mapping[tuple[str, str, int], str] | None = None
+              exclusions: Mapping[tuple[str, str, int], Mapping[str, str]] | None = None
               ) -> tuple[list[Performance], list[Edge]]:
     """Every tape's timings for a night, reconciled into one duration per performance.
 
@@ -504,6 +566,10 @@ def reconcile(observations: Iterable[Observation], shows: Mapping[str, Mapping],
     is detectable from metadata, because both look exactly like a genuinely unusual performance,
     which is what a statistic cannot tell them from. Excluded rows are still measured and still
     returned, tagged with their reason. They simply do not vote.
+
+    Each entry names the song it was written about, and an entry that lands on a different song
+    is REFUSED rather than applied -- see :func:`_excluded_reason`. Ask
+    :func:`unmatched_exclusions` for the ones that did not take.
     """
     ruled_out = exclusions or {}
     performances: list[Performance] = []

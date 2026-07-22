@@ -309,7 +309,7 @@ def test_a_performance_a_human_ruled_out_is_kept_tagged_and_silent():
     """Neither a tape that cut off mid-song nor a two-minute reprise is detectable from metadata,
     because both look exactly like a genuinely unusual performance. Nothing is deleted."""
     performance = _only([_obs("Moth", 247.0, "a")],
-                        exclusions={(DATE, "1", 1): "truncated"})
+                        exclusions={(DATE, "1", 1): {"song": "Moth", "reason": "truncated"}})
     assert performance.seconds == 247.0
     assert performance.excluded == "truncated"
     assert L.song_stats([performance]) == []
@@ -405,3 +405,65 @@ def test_every_published_length_shares_one_precision():
     for value in (stat.median_seconds, stat.mean_seconds, stat.min_seconds, stat.max_seconds,
                   stat.p10_seconds, stat.p90_seconds, stat.stdev_seconds):
         assert value == round(value, 1)
+
+
+# ---- the exclusions ledger ---------------------------------------------------------------------
+
+def _excl(song, reason="truncated"):
+    return {"song": song, "reason": reason}
+
+
+def test_an_exclusion_stops_a_performance_voting_without_deleting_it():
+    """A ruled-out performance is still measured, still stored and still published -- tagged.
+    Deleting it would hide the judgement instead of recording it."""
+    perf = _only([_obs("Moth", 247.0)],
+                 exclusions={(DATE, "1", 1): _excl("Moth")})
+    assert perf.seconds == 247.0
+    assert perf.excluded == "truncated"
+    assert perf.withheld == "truncated"
+
+
+def test_an_exclusion_that_lands_on_a_different_song_is_refused():
+    """THE ONE THAT BIT US. Position is a number somebody counted off a page, so it is exactly
+    the key that can be one out and still hit a real row -- and the seeded ledger's "2:17 Moth
+    reprise" landed on an eighteen-minute Pit. A good measurement stopped voting and the bad one
+    kept voting, and the run reported a tidy tally of exclusions applied."""
+    perf = _only([_obs("The Pit", 1109.0)],
+                 exclusions={(DATE, "1", 1): _excl("Moth", "reprise")})
+    assert perf.excluded is None
+    assert perf.withheld is None
+
+
+def test_a_refused_exclusion_is_reported_with_what_it_hit_instead():
+    """Silently skipping it is the same failure one step later: somebody listened to that
+    performance, and their judgement has stopped being honoured."""
+    performances, _ = _reconcile([_obs("The Pit", 1109.0)],
+                                 exclusions={(DATE, "1", 1): _excl("Moth", "reprise")})
+    unmatched = L.unmatched_exclusions(performances, {(DATE, "1", 1): _excl("Moth", "reprise")})
+    assert unmatched == [{"date": DATE, "set": "1", "position": 1, "song": "Moth",
+                          "reason": "reprise", "found": "The Pit"}]
+
+
+def test_an_exclusion_for_a_slot_nobody_played_is_reported_rather_than_ignored():
+    performances, _ = _reconcile([_obs("Moth", 600.0)])
+    unmatched = L.unmatched_exclusions(performances, {("1999-01-01", "2", 9): _excl("Moth")})
+    assert unmatched[0]["found"] is None
+
+
+def test_an_excluded_performance_does_not_reach_its_song_pool():
+    rows = [_perf("Moth", 600.0, DATE), _perf("Moth", 4.0, "2023-03-11")]
+    assert L.song_stats(rows)[0].n == 2
+    ruled_out = [r for r in rows if r.slot.date != "2023-03-11"]
+    assert L.song_stats(ruled_out)[0].n == 1
+
+
+def test_a_zero_length_track_is_not_a_performance_of_zero_seconds():
+    """archive.org states some tracks as 0:00 -- a placeholder or an unfinished derivative.
+    As a vote it is the smallest number there is, so it lands as the song's minimum: Moth
+    published a floor of 0:00 across 350 performances before this."""
+    tape = D.Tape("moe2023-01-19", DATE)
+    reading = D.Reading(rows=(D.Row("1", 1, "Moth", 0.0, "01 Moth.flac"),
+                              D.Row("1", 2, "Meat", 600.0, "02 Meat.flac")))
+    votes, edges = L.observations_of(tape, reading, _Pack())
+    assert [v.slot.song for v in votes] == ["Meat"]
+    assert [e.kind for e in edges] == ["zero_length_track"]

@@ -163,10 +163,13 @@ def _durations(config, args) -> int:
                             pack.normalizer)
         performances, disputes = lengths.reconcile(
             timed.observations, shows,
-            uploaders=_uploaders(recordings), splits=lengths.track_splits(recordings))
+            uploaders=_uploaders(recordings), splits=lengths.track_splits(recordings),
+            exclusions=pack.corpus.duration_exclusions)
         timed.edges.extend(disputes)
         stats = lengths.song_stats(performances)
         _report(timed, performances, stats, len(recordings))
+        _report_unmatched_exclusions(
+            lengths.unmatched_exclusions(performances, pack.corpus.duration_exclusions))
         # getattr, because `slkit derive` with no noun at all reaches here through the default
         # above and argparse never set the flags belonging to the subcommand nobody named.
         if getattr(args, "dry_run", False):
@@ -242,6 +245,25 @@ def _report_confidence(performances) -> None:
     if resolved:
         print(f"  disputes settled: {dict(sorted(resolved.items()))}; "
               f"{suspect} left suspect")
+
+
+def _report_unmatched_exclusions(unmatched) -> None:
+    """Ledger entries that ruled nothing out, named one per line.
+
+    LOUD, and never a count on its own. Somebody sat and listened to each of these and decided a
+    measurement was wrong; an entry that stops applying means that judgement has silently stopped
+    being honoured and the performance is back in the statistics. Printing "2 exclusions did not
+    match" tells a reader there is a problem and nothing about where, which for a file of three
+    entries is the entire content of the answer.
+    """
+    if not unmatched:
+        return
+    print(f"  {len(unmatched)} duration exclusion(s) ruled nothing out:")
+    for row in unmatched:
+        found = row["found"]
+        at = f"found {found!r}" if found else "no performance at that slot"
+        print(f"    {row['date']} set {row['set']} position {row['position']}: "
+              f"wanted {row['song']!r} ({row['reason']}), {at}")
 
 
 def _report_unmeasured(timed: _Timed) -> None:

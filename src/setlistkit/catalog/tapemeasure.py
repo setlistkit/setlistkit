@@ -170,7 +170,8 @@ def _withheld(performances: Iterable[Mapping]) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
-def bundle(concluded: Concluded, features: Iterable[SongFeature], credits: Mapping[str, int], *,
+def bundle(concluded: Concluded, features: Iterable[SongFeature],
+           tapers: Mapping[str, int], *,
            corpus_shows: int, recordings_read: int) -> dict:
     """The whole tape measure as one JSON-ready mapping.
 
@@ -189,6 +190,6 @@ def bundle(concluded: Concluded, features: Iterable[SongFeature], credits: Mappi
         "abandoned": [dict(row) for row in concluded.abandoned],
         "edges": [dict(row) for row in concluded.edges],
         "credits": [{"uploader": _credited(uploader), "n_tapes": n}
-                    for uploader, n in credits.items()],
+                    for uploader, n in tapers.items()],
         "totals": _totals(concluded),
     }

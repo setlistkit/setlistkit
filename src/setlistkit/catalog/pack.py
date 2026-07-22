@@ -61,6 +61,26 @@ CLASSIFIERS_FILE = "classifiers.json"
 PROTECTED_FILE = "protected.json"
 CORPUS_FILE = "corpus.json"
 OVERRIDES_FILE = "overrides.json"
+DURATION_EXCLUSIONS_FILE = "duration-exclusions.json"
+
+# Why a measured performance does not get to vote for its song's length.
+#
+# AN ENUM RATHER THAN FREE TEXT, because these are counted. The derive report and the published
+# bundle both tally what was held back, and a tally over free text is a tally of spellings --
+# "truncated", "cut off" and "tape cuts" would read as three findings about one problem.
+#
+# Small on purpose, and grown deliberately. Each of these was earned by a performance somebody
+# sat and listened to; a fourth kind means editing this line in a commit that says what it heard,
+# rather than a ledger entry quietly inventing a category nothing else knows about.
+_EXCLUSION_REASONS = (
+    # The recording stops mid-song. The number is the length of the TAPE, not of the performance.
+    "truncated",
+    # A short reprise of something played in full earlier -- a tip of the hat, not a performance.
+    "reprise",
+    # The track is not the song the setlist says it is. A taper's numbering slipped, so a real
+    # timing is filed under the wrong name and both songs are wrong.
+    "mislabeled",
+)
 
 # A date the rest of the toolkit will accept. Enforced in the schema because a typo'd date is
 # the silent kind of wrong: "2025-13-01" never equals any show's date, so the drop or the
@@ -203,6 +223,43 @@ _CORPUS_SCHEMA = {
 # The one thing worth having a schema for is `additionalProperties: false`. A typo'd key ("resaon")
 # is otherwise invisible: the entry parses, the real key is absent, and the error says the override
 # needs a reason while a reason sits right there in the file spelled wrong.
+_DURATION_EXCLUSIONS_SCHEMA = {
+    "type": "object",
+    "required": ["exclusions"],
+    "additionalProperties": False,
+    "properties": {
+        "exclusions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                # Every field required, including the ones only a human reads. An exclusion is a
+                # claim that a real measurement is wrong, made by one person, unreviewable later
+                # unless they wrote down what they heard and when -- `note` and `found_by` are
+                # the whole audit trail, and an optional audit trail is one that is absent
+                # exactly when it matters.
+                "required": ["date", "set", "position", "song", "reason", "note",
+                             "found_by", "date_added"],
+                "additionalProperties": False,
+                "properties": {
+                    "date": {"type": "string", "pattern": _DATE},
+                    # A string, matching the database and the bundle: sets are "1", "2", "E",
+                    # and an integer here would make the encore unrepresentable.
+                    "set": {"type": "string", "minLength": 1},
+                    "position": {"type": "integer", "minimum": 1},
+                    # Carried so lint can check the ledger still points at the song it was
+                    # written about. It is NOT part of the key -- a renamed song should surface
+                    # as a stale entry to fix, not silently stop excluding anything.
+                    "song": {"type": "string", "minLength": 1},
+                    "reason": {"enum": list(_EXCLUSION_REASONS)},
+                    "note": {"type": "string", "minLength": 1},
+                    "found_by": {"type": "string", "minLength": 1},
+                    "date_added": {"type": "string", "pattern": _DATE},
+                },
+            },
+        },
+    },
+}
+
 _OVERRIDES_SCHEMA = {
     "type": "object",
     "required": ["overrides"],
@@ -308,6 +365,19 @@ class CorpusPolicy:
     # date -> the whole show someone confirmed by ear, already canonicalized through this pack's
     # normalizer, so a caller hands them straight to `merge_shows(overrides=...)`.
     overrides: Mapping[str, Mapping] = field(default_factory=dict, hash=False)
+    # (date, set, position) -> {"song": the song the entry was written about, "reason": why}.
+    #
+    # Here rather than as an eleventh field on Pack for the reason `overrides` is here: it comes
+    # from its own file and belongs to this idea. Everything in this class is a person overruling
+    # a parser with evidence, and an exclusion is the same act one layer further down -- the
+    # parser read a real number off a real tape, and a human listened and said it is not a
+    # performance of that song.
+    #
+    # The full ledger rows are NOT kept. This is the shape `lengths.reconcile(exclusions=...)`
+    # consumes; the notes and attributions stay in the file, where a person reads them, and lint
+    # is what checks them.
+    duration_exclusions: Mapping[tuple[str, str, int], str] = field(
+        default_factory=dict, hash=False)
 
 
 @dataclass(frozen=True)
@@ -525,7 +595,8 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
     overrides = _load_overrides(pack_dir, normalizer)
     file = pack_dir / CORPUS_FILE
     if not file.exists():
-        return CorpusPolicy(overrides=overrides)
+        return CorpusPolicy(overrides=overrides,
+                            duration_exclusions=_load_duration_exclusions(pack_dir))
     data, src = load_json(file, _CORPUS_SCHEMA)
 
     drops = data.get("drop_dates", {})
@@ -562,6 +633,7 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
         side_projects=_compile_evidence(data.get("side_project_patterns", []), src,
                                         key="side_project_patterns"),
         overrides=overrides,
+        duration_exclusions=_load_duration_exclusions(pack_dir),
     )
 
 
@@ -651,6 +723,37 @@ def load_pack(pack_dir) -> Pack:
         band_name=identity.get("band_name"),
         normalizer=normalizer,
     )
+
+
+def load_duration_exclusions(pack_dir) -> tuple[list[dict], JSONSource]:
+    """The ledger's rows as written, with the source to point carets into.
+
+    Public and returning the FULL rows, unlike the compiled mapping on :class:`CorpusPolicy`,
+    because lint has to check the parts the runtime throws away: that an entry still points at
+    the song it was written about, and that two people have not ruled out the same slot twice.
+
+    The source travels with the rows for the reason :class:`JSONSource` exists -- a finding about
+    a ledger entry is worth a caret on the entry, and handing back rows alone is how a caller
+    ends up reporting "something in this file is wrong" and making a person grep for it. An empty
+    ``JSONSource`` is a legitimate value here: a pack with no ledger has nothing to point at.
+    """
+    file = Path(pack_dir) / DURATION_EXCLUSIONS_FILE
+    if not file.exists():
+        return [], JSONSource()
+    data, src = load_json(file, _DURATION_EXCLUSIONS_SCHEMA)
+    return list(data.get("exclusions") or ()), src
+
+
+def _load_duration_exclusions(pack_dir: Path) -> dict[tuple[str, str, int], str]:
+    """``durations.json`` compiled to the (date, set, position) -> reason map reconcile wants.
+
+    Optional, like every ledger a band may not keep. A pack that does not do durations carries
+    no empty key and no empty file -- the absence IS the statement, and it costs nothing.
+    """
+    rows, _src = load_duration_exclusions(pack_dir)
+    return {(row["date"], row["set"], row["position"]):
+            {"song": row["song"], "reason": row["reason"]}
+            for row in rows}
 
 
 def _load_overrides(pack_dir: Path, normalizer: Normalizer) -> dict[str, dict]:

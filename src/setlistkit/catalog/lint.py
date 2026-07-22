@@ -59,7 +59,8 @@ from pathlib import Path
 
 from ..diagnostics import ERROR, NOTE, WARNING, Diagnostic
 from .jsonpos import Pos, Positions, diagnostic_at, parse
-from .pack import ALIASES_FILE, CLASSIFIERS_FILE, CORPUS_FILE, Pack, Rule, load_pack
+from .pack import ALIASES_FILE, CLASSIFIERS_FILE, CORPUS_FILE, Pack, Rule, \
+    load_duration_exclusions, load_pack
 from .parse import parse_archive_items
 
 
@@ -93,6 +94,7 @@ def lint(pack_dir, items: Iterable[Mapping] = ()) -> list[Diagnostic]:
     diagnostics.extend(_rule_findings(pack, pack_dir))
     diagnostics.extend(_corpus_findings(pack, pack_dir))
     diagnostics.extend(_alias_findings(pack, pack_dir))
+    diagnostics.extend(_exclusion_slot_findings(pack_dir))
 
     items = list(items)
     if not items:
@@ -105,8 +107,10 @@ def lint(pack_dir, items: Iterable[Mapping] = ()) -> list[Diagnostic]:
         ))
         return diagnostics
 
-    census = parse_archive_items(items, normalizer=pack.normalizer,
-                                 policy=pack.archive_policy()).census
+    parsed = parse_archive_items(items, normalizer=pack.normalizer,
+                                 policy=pack.archive_policy())
+    census = parsed.census
+    diagnostics.extend(_exclusion_corpus_findings(pack_dir, parsed.shows))
     diagnostics.extend(_dead_rule_findings(pack, pack_dir, census))
     diagnostics.extend(_subsumed_rule_findings(pack, pack_dir, census))
     diagnostics.extend(_unreachable_alias_findings(pack, pack_dir, census))
@@ -372,6 +376,75 @@ def _corpus_findings(pack: Pack, pack_dir: Path) -> list[Diagnostic]:
                     detail=f"The fragment was given {example!r} as a title it must NOT match, and\n"
                            "it matches it anyway. Fix the pattern or drop the counter-example.",
                 ))
+    return out
+
+
+def _exclusion_slot_findings(pack_dir: Path) -> list[Diagnostic]:
+    """Two entries ruling out the same slot.
+
+    An ERROR rather than a warning, because the ledger compiles to a mapping keyed by slot: the
+    second entry silently wins and the first one's reason, note and attribution are discarded at
+    load. Nothing downstream can tell that happened, so the tally of why performances were held
+    back would quietly disagree with the file a person reads to check it.
+    """
+    rows, src = load_duration_exclusions(pack_dir)
+    seen: dict[tuple, dict] = {}
+    out: list[Diagnostic] = []
+    for index, row in enumerate(rows):
+        slot = (row["date"], row["set"], row["position"])
+        first = seen.setdefault(slot, row)
+        if first is not row:
+            out.append(src.diagnostic(
+                f"{row['date']} set {row['set']} position {row['position']} is ruled out "
+                f"twice ({first['reason']}, then {row['reason']})",
+                at=("exclusions", index, "date"), caption=row["reason"],
+                detail="The ledger is keyed by slot, so only the LAST entry for a slot survives\n"
+                       "loading -- the other one's reason and note are dropped without a word.\n"
+                       "Keep the entry that describes what is actually wrong and delete the\n"
+                       "other, or fix whichever one has the slot wrong.",
+            ))
+    return out
+
+
+def _exclusion_corpus_findings(pack_dir: Path, shows: Iterable[Mapping]) -> list[Diagnostic]:
+    """Ledger entries that no longer point at anything.
+
+    Checked by DATE and SONG rather than by position, deliberately. Position is 1-based in the
+    ledger and 0-based in a parsed setlist, and a lint check that has to get an index convention
+    right in order to tell the truth is a lint check that will eventually lie. Date and song are
+    free of that: if the night is not in the corpus, or the song was not played that night, the
+    entry excludes nothing no matter how the positions are counted.
+
+    A WARNING, not an error. A stale entry is inert -- it rules out a slot nothing occupies -- so
+    it cannot corrupt a statistic. What it does is rot: it reads as a performance still being
+    held back when the vote it was written to stop has been counted for months.
+    """
+    rows, src = load_duration_exclusions(pack_dir)
+    played: dict[str, set[str]] = {}
+    for show in shows:
+        songs = played.setdefault(str(show.get("date") or ""), set())
+        for one in (*(show.get("sets") or []), show.get("encore") or []):
+            songs.update(str(entry.get("song")) for entry in one)
+
+    out: list[Diagnostic] = []
+    for index, row in enumerate(rows):
+        where = ("exclusions", index, "date")
+        if row["date"] not in played:
+            out.append(src.diagnostic(
+                f"no show on {row['date']}, so this exclusion rules out nothing",
+                severity=WARNING, at=where, caption="no such night",
+                detail="The ledger names a night the corpus does not have. Either the date is a\n"
+                       "typo, or the show was dropped or re-dated after this entry was written.",
+            ))
+        elif row["song"] not in played[row["date"]]:
+            out.append(src.diagnostic(
+                f"{row['song']!r} was not played on {row['date']}, so this exclusion "
+                f"rules out nothing",
+                severity=WARNING, at=where, caption="song not in that setlist",
+                detail="The song is not in that night's setlist. Most often this means the title\n"
+                       "was renamed or aliased since the entry was written, and the performance\n"
+                       "it was meant to hold back is now voting again under the new spelling.",
+            ))
     return out
 
 
