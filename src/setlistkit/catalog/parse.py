@@ -96,7 +96,14 @@ URLISH = re.compile(r"://|www\.|\.(?:org|com|net)\b", re.I)
 
 # Footnote and annotation marks that are never part of a real title. Note the absence of '&',
 # which is legitimate -- plenty of songs are "X & Y".
-FOOT = re.compile(r"[\*\#\^\@\%\+]")
+#
+# '$' and '§' were missing, and their absence was splitting songs in half. A taper hangs the mark
+# on the title -- "Buster $", "Moth $", "Lazarus $", "Low$" -- and the corpus then held those as
+# songs distinct from Buster, Moth, Lazarus and Low, so one night's play went to a title with a
+# footnote on it and the rest of the history went to the real one. 32 entries across the corpus.
+# Neither character appears in any vocabulary, alias or protected title, here or in any pack, so
+# there is no real name for this to damage.
+FOOT = re.compile(r"[\*\#\^\@\%\+\$§]")
 
 # Internal segue markers that join two distinct songs inside one token ("A > B", "A -> B").
 SEG_SPLIT = re.compile(r"(~?->|~?>|→|<)")
@@ -410,6 +417,18 @@ def _gear_pattern(extra: tuple[str, ...]) -> re.Pattern:
     return fragment_pattern(_GEAR_BASE, *extra)
 
 
+def gear_pattern(extra: Sequence[str] = ()) -> re.Pattern:
+    """The lineage filter, for the other catalog modules that must agree with the parser.
+
+    Public because "is this line the taper describing their rig" is asked in more than one place
+    now -- the description parser and the tracklist reader both need it -- and two answers to it
+    means a gear line that is dropped from one reading of a description and counted as a track in
+    the other. The cache lives on the private form, which needs a hashable key; this takes any
+    sequence so callers do not have to remember that.
+    """
+    return _gear_pattern(tuple(extra))
+
+
 @functools.lru_cache(maxsize=32)
 def _credit_tail_pattern(band_name: str | None) -> re.Pattern:
     """Where the setlist ends and the credit roll begins.
@@ -519,14 +538,27 @@ def title_band_filter(band_name: str) -> Callable[[Mapping[str, Any]], bool]:
     return _filter
 
 
-def clean_html(value: object) -> str:
-    """Flatten an item's description field to plain text with the line breaks preserved.
+def unescape_description(value: object) -> str:
+    """An item's description as text, still carrying its tags.
 
-    Unescaped twice because archive.org descriptions are routinely double-encoded.
+    Unescaped TWICE because archive.org descriptions are routinely double-encoded: a segue
+    written ``&amp;gt;`` is two passes away from the ``>`` it means, and one pass leaves
+    ``&gt;`` sitting in a song title where it joins to nothing.
+
+    Split out from :func:`clean_html` for the tracklist reader, which needs the entities resolved
+    and the tags INTACT -- it breaks a line at every tag, where the setlist parser only breaks at
+    the ones that mean a line break. Sharing the unescape and not the tag handling is deliberate:
+    the double-decoding is one answer to one question, and where a line ends is a different
+    question with a different right answer on each side.
     """
     if isinstance(value, list):
         value = " ".join(str(part) for part in value)
-    text = html.unescape(html.unescape(str(value or "")))
+    return html.unescape(html.unescape(str(value or "")))
+
+
+def clean_html(value: object) -> str:
+    """Flatten an item's description field to plain text with the line breaks preserved."""
+    text = unescape_description(value)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
     text = re.sub(r"</p>|</div>|<li>", "\n", text, flags=re.I)
     return re.sub(r"<[^>]+>", " ", text)
