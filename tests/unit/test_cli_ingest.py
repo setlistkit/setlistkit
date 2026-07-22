@@ -564,3 +564,181 @@ def test_a_broken_override_file_stops_the_run_with_a_caret(tmp_path, capsys):
     assert "every override needs a non-empty 'reason'" in err
     assert "no reason given" in err                    # the caret caption, so it is positioned
     assert "overrides.json" in err
+
+
+# --- the recordings mirror ---------------------------------------------------------------
+#
+# The corpus keeps one show per date; the mirror keeps every tape, because independent timings
+# of one performance are what the durations chain votes with. Both are written by this one
+# command, from one parse, so the two can never describe different collections.
+
+FLAC = [{"format": "Flac", "name": "d1t01.flac", "track": "1", "title": "Aurora",
+         "length": "575.47"},
+        {"format": "Flac", "name": "d1t02.flac", "track": "2", "title": "Wormhole",
+         "length": "1103.02"}]
+
+TAPED = {
+    "example2025-07-04": dict(ITEMS["example2025-07-04"],
+                              uploader="nate@example.org", files=FLAC),
+    "other2025-01-01": dict(ITEMS["other2025-01-01"], uploader="x@example.org", files=FLAC),
+    "example2025-10-31": dict(ITEMS["example2025-10-31"], uploader="y@example.org", files=FLAC),
+    "undated": dict(ITEMS["undated"], uploader="z@example.org", files=FLAC),
+}
+
+
+def _mirror(tmp_path):
+    with Store(tmp_path / "state") as store:
+        return store.recordings()
+
+
+def test_ingest_mirrors_the_tapes_it_accepted_and_only_those(tmp_path):
+    """All three of the parser's refusals are refusals to MEASURE as well.
+
+    A side project's tape times a different band's songs, an undated item joins to nothing, and
+    a dropped date is one the pack has already said is not evidence about this band -- its
+    twenty-minute "song" would land in the same table the length statistics read.
+    """
+    _cache(tmp_path, TAPED)
+    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert [r["identifier"] for r in _mirror(tmp_path)] == ["example2025-07-04"]
+
+
+def test_the_mirrored_tape_carries_its_uploader_and_its_tracks_in_order(tmp_path):
+    _cache(tmp_path, TAPED)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    tape, = _mirror(tmp_path)
+    assert tape["uploader"] == "nate@example.org"
+    assert tape["audio_format"] == "Flac"
+    assert [t["idx"] for t in tape["tracks"]] == [0, 1]
+    # Float seconds, off FLAC -- not the "09:35" a denser MP3 derivative would have given.
+    assert [t["seconds"] for t in tape["tracks"]] == [575.47, 1103.02]
+
+
+def test_the_mirror_and_the_corpus_agree_about_which_night_a_tape_belongs_to(tmp_path):
+    """The pack corrects an uploader who typed the wrong year. Both tables must take the fix.
+
+    Two tables joined on a date that two layers computed separately is two tables that will
+    eventually disagree, and the disagreement is invisible: the mirror simply joins to nothing.
+    """
+    items = {"example2024-06-14": {
+        "title": "The Example Live at Northlands on 2024-06-14", "date": "2024-06-14",
+        "description": "Set 1:\n01. Aurora\n02. Wormhole\n",
+        "uploader": "nate@example.org", "files": FLAC}}
+    _cache(tmp_path, items)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    tape, = _mirror(tmp_path)
+    assert tape["date"] == "2025-06-14"                       # not the 2024 it claims
+    assert [s["date"] for s in _shows(tmp_path)] == ["2025-06-14"]
+
+
+def test_show_types_are_stored_for_every_night_and_tallied_in_the_report(tmp_path, capsys):
+    """A tag and never a deletion -- so it has to be stored somewhere every consumer can read."""
+    items = {
+        "example2025-07-04": dict(ITEMS["example2025-07-04"], files=FLAC),
+        # The alter-ego rule, not the acoustic one: the acoustic pattern is written against
+        # moe.'s own brand name, so it cannot fire for a pack about a band called The Example.
+        "example2025-08-01": {
+            "title": "The Example Live at Northlands on 2025-08-01",
+            "date": "2025-08-01", "files": FLAC,
+            "description": "Tonight they are performing as The Ghosts of Electricity.\n"
+                           "Set 1:\n01. Aurora\n"},
+    }
+    _cache(tmp_path, items)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    assert "show types: {'alterego': 1, 'electric': 1}" in capsys.readouterr().out
+    with Store(tmp_path / "state") as store:
+        assert store.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego"}
+
+
+def test_the_show_type_of_a_corrected_night_lands_on_the_night_it_was_played(tmp_path):
+    """Tagging the stated date puts the verdict on the wrong night for exactly the tapes whose
+    metadata was already known to be wrong."""
+    items = {"example2024-06-14": {
+        "title": "The Example Live at Northlands on 2024-06-14", "date": "2024-06-14",
+        "description": "Tonight they are performing as The Ghosts of Electricity.\n"
+                       "Set 1:\n01. Aurora\n02. Wormhole\n",
+        "files": FLAC}}
+    _cache(tmp_path, items)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    with Store(tmp_path / "state") as store:
+        # The tag is on 2025, the year the show happened -- not on the 2024 the uploader typed.
+        assert store.show_types() == {"2025-06-14": "alterego"}
+
+
+def test_the_report_counts_tapes_and_tracks_separately(tmp_path, capsys):
+    """They fail independently. A format list that stopped matching what archive.org labels its
+    derivatives stores every tape, measures none of them, and reports an identical tape count."""
+    _cache(tmp_path, TAPED)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    assert "mirror: 1 tape(s) / 2 track(s)" in capsys.readouterr().out
+
+
+def test_a_tape_with_no_readable_durations_is_stored_and_counted_out_loud(tmp_path, capsys):
+    """A slow drift in that number is the shape this failure arrives in."""
+    items = {"example2025-07-04": dict(ITEMS["example2025-07-04"],
+                                       files=[{"format": "JPEG", "name": "cover.jpg"}])}
+    _cache(tmp_path, items)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    assert "1 tape(s) carry no readable durations" in capsys.readouterr().out
+    tape, = _mirror(tmp_path)
+    assert tape["n_tracks"] == 0
+
+
+def test_a_dry_run_reports_the_mirror_and_writes_none_of_it(tmp_path, capsys):
+    """The half of the ingest most likely to be what someone is checking must not go silent."""
+    _cache(tmp_path, TAPED)
+    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run"]) == EXIT_OK
+    assert "mirror: 1 tape(s) / 2 track(s)" in capsys.readouterr().out
+    with Store(tmp_path / "state") as store:
+        assert store.recording_count() == 0 and store.track_count() == 0
+
+
+def test_the_mirror_is_rebuilt_whole_on_every_ingest(tmp_path):
+    """It is recomputed from the entire cache each run, exactly like the corpus."""
+    _cache(tmp_path, TAPED)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    _cache(tmp_path, {"example2025-07-04": dict(ITEMS["example2025-07-04"], files=FLAC[:1])})
+    main(["--config", _cfg(tmp_path), "ingest", "--force"])
+    tape, = _mirror(tmp_path)
+    assert tape["n_tracks"] == 1
+
+
+def test_adding_the_mirror_did_not_move_a_single_setlist(tmp_path):
+    """The projection the parser reads is untouched, so this slice cannot change a show.
+
+    Asserted here as well as in test_duration_tracks because the guarantee that matters is the
+    end-to-end one: the same cache, ingested by the same command, still publishes the same songs.
+    """
+    _cache(tmp_path, TAPED)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    shows = _shows(tmp_path)
+    assert [show["date"] for show in shows] == ["2025-07-04"]
+    assert [entry["song"] for entry in shows[0]["sets"][0]] == ["Aurora", "Wormhole", "Tuning"]
+    assert shows[0]["encore"] == [{"song": "Jamboree", "segue": False, "non_song": False}]
+
+
+def test_a_tape_whose_description_yields_no_setlist_is_mirrored_and_explained(tmp_path, capsys):
+    """The parser accepts it and the merge still drops the date: right band, no songs.
+
+    Those tapes stay in the mirror on purpose -- a description that did not parse is a candidate
+    for recovery, not something to hide -- which makes the tag count exceed the show count. An
+    unexplained gap is indistinguishable from a bug in whichever join notices it first.
+    """
+    items = {
+        "example2025-07-04": dict(ITEMS["example2025-07-04"], files=FLAC),
+        # Untitled files as well as an unparseable description: the parser falls back to the
+        # tracklist when a description is weak, so a tape needs both to yield nothing.
+        "example2025-09-09": {
+            "title": "The Example Live at Northlands on 2025-09-09", "date": "2025-09-09",
+            "description": "Recorded from the soundboard. No setlist yet.",
+            "files": [dict(f, title="") for f in FLAC]},
+    }
+    _cache(tmp_path, items)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    out = capsys.readouterr().out
+    assert "1 date(s) have a tape but no setlist the merge would take" in out
+    assert "['2025-09-09']" in out
+    with Store(tmp_path / "state") as store:
+        assert store.recording_count() == 2                 # both tapes mirrored
+        assert [s["date"] for s in store.shows()] == ["2025-07-04"]   # one show in the corpus
+        assert "2025-09-09" in store.show_types()

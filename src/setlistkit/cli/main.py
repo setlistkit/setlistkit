@@ -81,7 +81,14 @@ def _build_parser() -> argparse.ArgumentParser:
     store_sub.add_parser("init", help="create data_root and apply schema migrations")
     store_sub.add_parser("status", help="show schema version and table counts")
 
-    sub.add_parser("dump", help="print a plain-text view of derived state")
+    dump_cmd = sub.add_parser("dump", help="print a plain-text view of derived state")
+    # Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
+    # someone reaches for when they already suspect something is wrong -- one bug at a time.
+    dump_cmd.add_argument("--since", metavar="YYYY-MM-DD",
+                          help="only rows on or after this date (tables with no date axis are "
+                               "printed in full, and say so)")
+    dump_cmd.add_argument("--until", metavar="YYYY-MM-DD",
+                          help="only rows on or before this date")
 
     pull_cmd = sub.add_parser("pull", help="fetch raw source data into the cache")
     pull_cmd.add_argument("source", choices=_SOURCES, help="which source to fetch from")
@@ -203,9 +210,25 @@ def _cmd_store_status(config) -> int:
     return EXIT_OK
 
 
-def _cmd_dump(config, _args) -> int:
-    with Store(config.data_root) as store:
-        print(store.dump(), end="")
+def _cmd_dump(config, args) -> int:
+    """Print the store as text, optionally narrowed to a date range.
+
+    A malformed date is refused rather than compared. Dates are stored as YYYY-MM-DD strings and
+    the range is a string comparison, so ``--until 2023`` sorts below every date IN 2023 and would
+    hand back an empty dump of the year that was asked for -- which reads as "there is nothing
+    there", the one answer this view exists to make trustworthy.
+    """
+    try:
+        with Store(config.data_root) as store:
+            print(store.dump(since=args.since, until=args.until), end="")
+    except ValueError as exc:
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=str(exc),
+            detail="Dates are stored and compared as YYYY-MM-DD text, so a shorter one does not\n"
+                   "mean what it looks like: `--until 2023` sorts below every date in 2023 and\n"
+                   "would print an empty range rather than the year you asked for.",
+        )) from exc
     return EXIT_OK
 
 

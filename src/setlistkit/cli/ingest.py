@@ -25,18 +25,25 @@ anything they decide. What lives HERE is the three things Phase 3 deliberately k
 4. **The stats block.** Winners by source, new dates, dates that vanished, and where a date
    changed which source it trusts. The point of a source flip is that it is usually right and
    occasionally the first sign something broke, and neither is visible from the corpus alone.
+
+5. **Publishing the recordings mirror.** The corpus keeps one show per date; the mirror keeps
+   every tape, because independent timings of one performance are what the durations chain votes
+   with. It is written from the same parse the corpus is, in the same run, so the two can never
+   describe different collections -- and it is keyed on what the parser ACCEPTED, so all three of
+   its refusals are refusals to measure as well.
 """
 
 from __future__ import annotations
 
 import textwrap
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 
 from ..catalog.merge import merge_shows, override_disagreements
 from ..catalog.pack import load_pack
 from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, count_songs,
                              parse_archive_items)
+from ..catalog.showtypes import show_types
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..sources.archive_org import ArchiveOrgClient
 from ..store import Store
@@ -84,6 +91,19 @@ class _Totals:
 
 
 @dataclass(frozen=True)
+class _Mirror:
+    """What a run would write to the recordings mirror, computed before anything is written.
+
+    Its own type rather than a tuple, and computed before the dry-run branch, so ``--dry-run``
+    reports the mirror exactly as the real run would build it. A dry run that skipped the work
+    would be silent about the half of the ingest most likely to be what someone is checking.
+    """
+
+    recordings: list[dict] = field(default_factory=list)
+    show_types: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class _Previous:
     """What was in the corpus before this run, for the parts of the report that are a diff."""
 
@@ -116,12 +136,15 @@ def ingest(config, args) -> int:
                        songs=sum(count_songs(show["sets"], show["encore"])
                                  for show in merged.shows))
 
+    mirror = _mirror(cached.items, parsed.shows)
+
     with Store(config.data_root) as store:
         store.init()
         previous = _Previous(totals=_Totals(store.show_count(), store.song_count()),
                              source_by_date=store.show_sources())
         _report_merge(merged, previous, produced, pack, len(cached.items))
         _report_skipped(parsed.skipped, pack, len(cached.items))
+        _report_mirror(mirror, {show["date"] for show in merged.shows})
         # --dry-run is exempt: the guard protects the stored corpus, and a dry run cannot reach
         # it. Refusing anyway would make the one command that is safe to run while diagnosing a
         # shrink the one command that will not tell you about it.
@@ -131,7 +154,83 @@ def ingest(config, args) -> int:
             return EXIT_OK
         _guard_no_shrink(produced, previous.totals, force=args.force)
         store.replace_shows(merged.shows)
+        # After the corpus and inside the same command, never on their own schedule. A mirror
+        # rebuilt at a different moment than the corpus it is joined to is a mirror of a
+        # different collection, and nothing about the two would say so.
+        store.replace_recordings(mirror.recordings)
+        store.replace_show_types(mirror.show_types)
     return EXIT_OK
+
+
+def _mirror(items, shows) -> _Mirror:
+    """The tapes to store and the date tags to store, from the items the parser accepted.
+
+    Keyed on acceptance rather than on the whole cache, because all three of the parser's
+    refusals are refusals to MEASURE as well. A side project's tape times a different band's
+    songs. An item with no believable date joins to nothing. A dropped date is one the pack has
+    already said is not evidence about this band -- a tribute night, an all-star jam -- and its
+    twenty-minute "song" would land in the same table the length statistics read.
+
+    The date comes from the parse, not from the item, so the mirror and the corpus agree about
+    which night a tape belongs to even where the pack corrected an uploader who typed the wrong
+    one. Two tables joined on a date that two layers computed separately is two tables that will
+    eventually disagree.
+    """
+    dates = {show["identifier"]: show["date"] for show in shows}
+    kept = [item for item in items if str(item.get("identifier") or "") in dates]
+    return _Mirror(
+        recordings=[dict(item, date=dates[item["identifier"]]) for item in kept],
+        show_types=[asdict(kind) for kind in show_types(kept, dates=dates)])
+
+
+def _report_mirror(mirror: _Mirror, corpus_dates: set[str]) -> None:
+    """What the mirror holds, and how much of it carries no measurement at all.
+
+    Tracks are counted beside tapes because they fail independently: a format list that stopped
+    matching what archive.org labels its derivatives stores every tape and measures none of them,
+    and the tape count comes out identical to the run before it.
+
+    A tape with no readable durations is stored rather than dropped -- it is a real recording of
+    a real night, and slice 3 has a table for saying so -- but it is counted out loud here,
+    because a slow drift in that number is the shape this failure arrives in.
+    """
+    tracks = sum(len(record.get("duration_tracks") or ()) for record in mirror.recordings)
+    kinds = Counter(row["kind"] for row in mirror.show_types)
+    print(f"  mirror: {len(mirror.recordings)} tape(s) / {tracks} track(s); "
+          f"show types: {dict(sorted(kinds.items()))}")
+    silent = [record for record in mirror.recordings if not record.get("duration_tracks")]
+    if silent:
+        print(f"    {len(silent)} tape(s) carry no readable durations and are stored with none")
+    unreadable = sum(1 for record in mirror.recordings
+                     for track in record.get("duration_tracks") or ()
+                     if track["seconds"] is None)
+    if unreadable:
+        # Not a warning. It is a handful of tracks in a corpus of tens of thousands, and the
+        # point of keeping them with NULL seconds is that this line can exist at all.
+        print(f"    {unreadable} track(s) have a length we could not read, kept with the source "
+              "string")
+    _report_setlistless(mirror, corpus_dates)
+
+
+def _report_setlistless(mirror: _Mirror, corpus_dates: set[str]) -> None:
+    """Tapes on dates the corpus does not hold, which is why the two counts differ.
+
+    The parser accepts an item and the merge still drops its date when nothing could be read out
+    of the description -- right band, believable date, no setlist. Those tapes stay in the mirror
+    on purpose: a recording whose description did not parse is a candidate for recovery, and the
+    review queue slice 3 builds is exactly the list of them.
+
+    Said out loud because otherwise the tag count exceeds the show count by a handful with
+    nothing anywhere explaining it, and an unexplained gap is indistinguishable from a bug in
+    whichever join notices it first -- six months later, by someone who was not here.
+    """
+    orphans = sorted({record["date"] for record in mirror.recordings
+                      if record["date"] not in corpus_dates})
+    if not orphans:
+        return
+    print(f"    {len(orphans)} date(s) have a tape but no setlist the merge would take, so they "
+          "are mirrored\n    and tagged without being in the corpus: "
+          f"{_abbreviated(orphans)}")
 
 
 def _shrink(produced: _Totals, previous: _Totals) -> str | None:

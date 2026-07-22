@@ -93,10 +93,63 @@ def _m0002_corpus(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX show_entries_song ON show_entries(song)")
 
 
+def _m0003_recordings(conn: sqlite3.Connection) -> None:
+    # The recordings mirror: one row per tape, and its tracks in the order they were played.
+    #
+    # A MIRROR, not a cache. Every column here is projected straight out of the raw payload at
+    # ingest and rebuilt whole on the next one, which is what makes it safe to be a second copy
+    # of something we already hold. What it buys is that no later stage has to open the raw
+    # cache: that cache is gitignored, so a consumer that reaches into it works on the machine
+    # it was written on and comes back empty on the server. `uploader` is exactly the field that
+    # happened to in the previous implementation -- 425 tapes, silently uncredited.
+    conn.execute(
+        "CREATE TABLE recordings("
+        "  identifier TEXT PRIMARY KEY,"
+        "  date TEXT NOT NULL,"
+        "  uploader TEXT NOT NULL,"
+        "  audio_format TEXT NOT NULL,"
+        "  n_tracks INTEGER NOT NULL)")
+    # Several tapes per night is the normal case and the whole point -- independent timings of
+    # one performance are what the durations chain votes with -- so every read of a night's
+    # tapes is a lookup by date, not by identifier.
+    conn.execute("CREATE INDEX recordings_date ON recordings(date)")
+    # `idx` is the computed play order, stored rather than inferred, for the same reason
+    # show_entries stores position: an order recomputed on read is an order that can silently
+    # differ from the one the join was built against. See sources.archive_org._ordered for what
+    # computing it costs and what believing archive.org's own `track` field cost before that.
+    #
+    # `length_raw` sits beside `seconds` because the raw layer stays raw. A duration that could
+    # not be parsed is NULL seconds with the source string intact, so a parser bug is diagnosable
+    # from the database rather than needing a re-pull of four thousand items to reproduce.
+    conn.execute(
+        "CREATE TABLE recording_tracks("
+        "  identifier TEXT NOT NULL REFERENCES recordings(identifier) ON DELETE CASCADE,"
+        "  idx INTEGER NOT NULL,"
+        "  name TEXT NOT NULL,"
+        "  title TEXT NOT NULL,"
+        "  length_raw TEXT NOT NULL,"
+        "  seconds REAL,"
+        "  PRIMARY KEY (identifier, idx))")
+    # electric / acoustic / mixed / alterego, per date. A tag and never a deletion -- see
+    # catalog/showtypes.py for why, at length. Stored so that every consumer can decide for
+    # itself: length statistics exclude the acoustic nights, and nothing else has to change.
+    #
+    # `identifier` is the tape the verdict was read off. The design listed three columns; this is
+    # the fourth, because `evidence` without it is a claim with no citation -- "notes describe an
+    # acoustic set" names no notes, and re-finding them means re-scanning every tape of that date.
+    conn.execute(
+        "CREATE TABLE show_types("
+        "  date TEXT PRIMARY KEY,"
+        "  kind TEXT NOT NULL,"
+        "  evidence TEXT,"
+        "  identifier TEXT)")
+
+
 # Forward-only. Never edit a shipped migration; add the next number instead.
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline", _m0001_baseline),
     Migration(2, "corpus", _m0002_corpus),
+    Migration(3, "recordings", _m0003_recordings),
 ]
 
 

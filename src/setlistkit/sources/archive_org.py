@@ -24,11 +24,21 @@ next run lists everything again.
 from the cache without touching the network, which is what ``slkit ingest`` reads. Both halves
 build their cache keys with the same helpers, deliberately -- a reader that guessed at the key
 layout would come back empty on a cache that is in fact full, and say "no data" about it.
+
+The item's ``files`` array is projected TWICE, by :func:`_tracks` and by :func:`duration_tracks`,
+because two consumers want incompatible things from it. The parser wants whichever format lists
+the most files, in whatever order the payload gave them, because it is mining titles out of a flat
+set and density is what completes a setlist. The durations chain wants the most precise format and
+a guaranteed play order, because it walks the tape forward mapping track N to song N. One field
+cannot serve both: picking FLAC for precision would change which setlist the parser reads, and
+leaving the order alone would hand the durations chain a shuffled deck. So they are two functions
+over one payload, and :func:`_tracks` is not touched.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -53,6 +63,26 @@ _MAX_PAGES = 40               # a 20k-item backstop against a runaway loop, not 
 # sometimes split by disc while the MP3 derivative is not, or the other way round.
 _AUDIO_FORMATS = frozenset({"VBR MP3", "MP3", "Flac", "FLAC", "24bit Flac", "Ogg Vorbis",
                             "Shorten", "Apple Lossless Audio"})
+
+# The same formats, ranked by how precisely they state a duration. Lossless derivatives carry
+# float seconds ("575.47"); the lossy ones carry "MM:SS", which rounds every track to the nearest
+# second. Cross-tape agreement is measured at about five seconds, so rounding at one second is
+# error at the scale of the signal -- which is why this list exists and why it is ordered rather
+# than counted. A test asserts it covers _AUDIO_FORMATS exactly: a format added to one and not
+# the other would make every tape carrying only that format silently unmeasurable.
+_DURATION_FORMATS = ("24bit Flac", "Flac", "FLAC", "Apple Lossless Audio", "Shorten",
+                     "VBR MP3", "MP3", "Ogg Vorbis")
+
+# Extensions stripped when asking whether one filename nests under another. See _drop_containers.
+_TRACK_EXT_RE = re.compile(r"\.(flac|mp3|ogg|shn|m4a|wav|aif{1,2})$", re.I)
+
+_DIGITS_RE = re.compile(r"(\d+)")
+
+# How far a container's stated duration may sit from the sum of its parts and still be called the
+# same audio. Tapers' split points are not sample-exact and a lossy derivative rounds, so an exact
+# test would never fire; the proportional term covers a 90-minute set where 2 seconds is noise.
+_CONTAINER_SLACK_SECONDS = 2.0
+_CONTAINER_SLACK_FRACTION = 0.01
 
 # Consecutive item failures before a bulk pull gives up. One failure is a bad tape and is skipped;
 # this many in a row is the host having a bad afternoon, and continuing would mean thousands of
@@ -209,8 +239,8 @@ def _tracks(files: object) -> list[dict]:
     Flac carries float seconds ("575.47") and VBR MP3 carries "09:35", and rounding thirty
     songs a night to the nearest second is real error when a set's runtime is being estimated.
     Changing the choice here would change which setlist the parser reads, so it is not made
-    here on precision grounds -- a consumer that needs better than a second reads the raw
-    payload itself.
+    here on precision grounds -- a consumer that needs better than a second calls
+    :func:`duration_tracks`, which projects the same payload the other way.
     """
     by_format: dict[str, list[dict]] = {}
     for entry in files if isinstance(files, list) else []:
@@ -252,6 +282,125 @@ def track_seconds(value: object) -> float | None:
     return seconds if seconds >= 0 else None
 
 
+def _natural_key(name: str) -> list[tuple[int, object]]:
+    """Sort a filename the way a human reads it: ``s1t02`` before ``s2t01``, ``moe2`` before
+    ``moe10``. Digit runs compare as numbers, everything else as text.
+
+    Each part is tagged with its own kind rather than left bare, so a number never has to compare
+    against a string. ``re.split`` on a capture group alternates text and digits, which keeps the
+    two aligned for filenames of the same shape -- and one tape uploaded under a different naming
+    convention is enough to break that alignment and raise TypeError partway through an ingest of
+    four thousand items. The tag makes the comparison total instead: within a shape nothing moves,
+    and across shapes the numbers simply sort first.
+    """
+    return [(0, int(part)) if part.isdigit() else (1, part.lower())
+            for part in _DIGITS_RE.split(name)]
+
+
+def _ordered(entries: list[dict]) -> list[dict]:
+    """The files of one item in play order.
+
+    archive.org's ``track`` field looks authoritative and is a trap: it RESTARTS at 1 for each set
+    or disc, so on a two-set tape both ``s1t01`` and ``s2t01`` report track 1. Sorting by it
+    interleaves the sets like a shuffled deck -- set 1 track 1, set 2 track 1, set 1 track 2 --
+    and every downstream mapping then lines the taper's tracklist up against a scrambled tape.
+    That silently corrupted 65 of 436 tapes in the previous implementation, and the only reason it
+    was caught at all is that two independent sources disagreed about one night.
+
+    So ``track`` is used only where it is genuinely unique across the whole item. Otherwise the
+    filename decides, because that is where the taper actually encoded the order.
+    """
+    numbers = [str(entry.get("track") or "").strip() for entry in entries]
+    digits = [number for number in numbers if number.isdigit()]
+    if len(digits) == len(entries) and len(set(digits)) == len(entries):
+        return sorted(entries, key=lambda entry: int(str(entry.get("track")).strip()))
+    return sorted(entries, key=lambda entry: _natural_key(str(entry.get("name") or "")))
+
+
+def _stem(name: str) -> str:
+    """A filename with its directory and audio extension removed, for the nesting test below."""
+    return _TRACK_EXT_RE.sub("", name.rsplit("/", 1)[-1])
+
+
+def _drop_containers(tracks: list[dict]) -> list[dict]:
+    """Throw out whole-set files uploaded ALONGSIDE their own split tracks.
+
+    Some tapes ship both::
+
+        moe2023-06-27.s01.flac        62:47      <- the entire first set, in one file
+        moe2023-06-27.s01.t01.flac     6:15
+        moe2023-06-27.s01.t02.flac     4:37      ... t01..t07 sum to exactly 62:47
+
+    ``.s01.flac`` natural-sorts BEFORE ``.s01.t01.flac``, so the container lands in slot 1 and
+    shifts the whole night by one. A song came out at 62 minutes, the next at 102, the next at 78
+    -- numbers no listener would believe for a second, and ones that no aggregate flagged.
+
+    This runs here rather than in the derived layer because the stored ``idx`` IS the play order:
+    an order recomputed later can differ from the one the join was built against, so a bag left
+    sitting in slot 1 would be baked into the mirror.
+
+    The test is arithmetic, not a guess: a file whose duration equals the sum of the files nested
+    under its own name is not a track, it is a bag holding them. Two or more children required, so
+    a taper who split one song across two files cannot trip it. A candidate or child whose length
+    could not be read is left alone -- an unknown does not sum, and guessing it to be zero would
+    make every bag look slightly too long and survive.
+    """
+    stems = [_stem(str(track["name"])) for track in tracks]
+    bags: set[int] = set()
+    for index, prefix in enumerate(stems):
+        whole = tracks[index]["seconds"]
+        if whole is None:
+            continue
+        kids = [other for other, stem in enumerate(stems)
+                if other != index and stem.startswith(prefix) and len(stem) > len(prefix)
+                and not stem[len(prefix)].isalnum()]
+        if len(kids) < 2 or any(tracks[kid]["seconds"] is None for kid in kids):
+            continue
+        parts = sum(tracks[kid]["seconds"] for kid in kids)
+        if abs(parts - whole) <= max(_CONTAINER_SLACK_SECONDS, _CONTAINER_SLACK_FRACTION * whole):
+            bags.add(index)
+    return [track for index, track in enumerate(tracks) if index not in bags]
+
+
+def duration_tracks(files: object) -> tuple[str, list[dict]]:
+    """The item's tracklist for MEASURING, as ``(format, tracks)``: precise, ordered, debagged.
+
+    The other projection of ``files``; see the module docstring for why there are two. Three
+    things differ from :func:`_tracks`, and each of them is a bug that has already been paid for:
+
+    * the format is picked by precision, not by density, so durations arrive as float seconds
+      rather than rounded to "MM:SS";
+    * the files come back in play order, explicitly computed (:func:`_ordered`);
+    * whole-set container files are removed (:func:`_drop_containers`).
+
+    A format present but carrying no readable length at all is passed over for the next one: it
+    would otherwise win the preference order and hand back a tracklist that measures nothing. An
+    individual unreadable length inside the winning format is KEPT, as ``None`` seconds beside the
+    string the source wrote. Dropping it would renumber the tape and hide a parser bug behind a
+    tracklist that merely looks short; keeping it means the bug is diagnosable from the database
+    instead of needing a re-pull.
+
+    ``("", [])`` for an item with no audio at all -- a photo set, a stub, an artwork-only upload.
+    """
+    entries = [dict(entry) for entry in (files if isinstance(files, list) else [])
+               if isinstance(entry, Mapping)]
+    for audio_format in _DURATION_FORMATS:
+        chosen = [entry for entry in entries if entry.get("format") == audio_format]
+        if not any(track_seconds(entry.get("length")) is not None for entry in chosen):
+            continue
+        tracks = [{"name": str(entry.get("name") or ""),
+                   "title": str(entry.get("title") or ""),
+                   "length_raw": str(entry.get("length") or ""),
+                   "seconds": track_seconds(entry.get("length"))}
+                  for entry in _ordered(chosen)]
+        # idx is assigned AFTER the bags come out, so it numbers the tape as it was played
+        # rather than as it was uploaded. Numbering first would leave gaps that every later
+        # reader would have to know to expect.
+        played = _drop_containers(tracks)
+        return audio_format, [dict(track, idx=index) for index, track in enumerate(played)]
+    return "", []
+
+
 def _flat(value: object) -> str:
     """One metadata field as a string, joining the list form.
 
@@ -263,6 +412,19 @@ def _flat(value: object) -> str:
     """
     if isinstance(value, list):
         return " ".join(str(part) for part in value)
+    return str(value or "")
+
+
+def _one(value: object) -> str:
+    """The FIRST value of a possibly-repeated metadata field, for fields that name a person.
+
+    Not :func:`_flat`. Joining a repeated ``uploader`` would mint an identity nobody has --
+    "a@example.org b@example.org" -- and that string then counts as a distinct taper in the
+    credits, and as a distinct ballot when tapes are consolidated by who posted them. A wrong
+    name is recoverable; an invented one is a person who does not exist being thanked.
+    """
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
     return str(value or "")
 
 
@@ -279,10 +441,17 @@ def _item_record(doc: Mapping, payload: Mapping) -> dict:
     because an item with an empty metadata title currently sails through the band filter with no
     title to judge it by. Recorded now so that fix has something to reach for; not claimed as
     load-bearing until it is.
+
+    ``uploader`` is read here and carried, never looked up again later. It is the field whose
+    absence disabled ballot consolidation in the previous implementation for 425 of 425 tapes
+    while working perfectly on the machine it was developed on: the page read it out of the raw
+    metadata cache, and that cache is gitignored, so the publishing server simply had none of it
+    and said so nowhere. Captured at ingest, it travels in the database with everything else.
     """
     meta = payload.get("metadata") or {}
     if not isinstance(meta, Mapping):
         meta = {}
+    audio_format, measured = duration_tracks(payload.get("files"))
     return {
         "identifier": str(doc.get("identifier") or meta.get("identifier") or ""),
         "date": _flat(doc.get("date")),
@@ -292,7 +461,13 @@ def _item_record(doc: Mapping, payload: Mapping) -> dict:
         "venue": _flat(meta.get("venue")),
         "coverage": _flat(meta.get("coverage")),
         "description": _flat(meta.get("description")),
+        "uploader": _one(meta.get("uploader")).strip(),
         "tracks": _tracks(payload.get("files")),
+        # The second projection, beside the first. Both are computed once per item here rather
+        # than by whoever needs them, so no consumer has to re-derive a tracklist from a payload
+        # it would have to go back to the cache for.
+        "audio_format": audio_format,
+        "duration_tracks": measured,
     }
 
 

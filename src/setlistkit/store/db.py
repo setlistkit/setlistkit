@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import __version__
-from . import corpus
+from . import corpus, recordings
 from .migrations import apply_pending, schema_version, transaction
 from .raw_cache import RawCache
 
@@ -29,6 +29,26 @@ VOLATILE_COLUMNS = frozenset({
 })
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Dates are stored as YYYY-MM-DD strings, which sort lexicographically, so a range is a plain
+# string comparison. That only holds for the full shape: `--until 2023` would compare below every
+# date IN 2023 and quietly exclude the year somebody asked for. Checked rather than trusted.
+_DATE_SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# table -> the SQL expression giving a row's date. A table absent from here has no date axis and
+# prints in full under any range, saying so in its header.
+#
+# recording_tracks is the case this map exists for. It carries no date of its own, every row
+# belongs to a dated recording, and it is by a wide margin the largest table in the database --
+# so an unranged dump of it is exactly what a range was reached for to avoid.
+_DATE_EXPR = {
+    "shows": '"date"',
+    "show_entries": '"date"',
+    "recordings": '"date"',
+    "show_types": '"date"',
+    "recording_tracks": ('(SELECT "date" FROM "recordings" '
+                         'WHERE "recordings"."identifier" = "recording_tracks"."identifier")'),
+}
 
 
 def _now() -> str:
@@ -55,13 +75,49 @@ def _quote(name: str) -> str:
     return f'"{_ident(name)}"'
 
 
-def _count_sql(table: str) -> str:
-    return f"SELECT COUNT(*) FROM {_quote(table)}"  # nosec B608
+def _count_sql(table: str, where: str = "") -> str:
+    return f"SELECT COUNT(*) FROM {_quote(table)}{where}"  # nosec B608
 
 
-def _select_sql(table: str, columns: list[str]) -> str:
+def _select_sql(table: str, columns: list[str], where: str = "") -> str:
     select = ", ".join(_quote(c) for c in columns)
-    return f"SELECT {select} FROM {_quote(table)} ORDER BY {select}"  # nosec B608
+    return f"SELECT {select} FROM {_quote(table)}{where} ORDER BY {select}"  # nosec B608
+
+
+def _check_date(value: str | None, flag: str) -> str | None:
+    """Reject a date that is not YYYY-MM-DD, rather than silently answering the wrong question."""
+    if value is None:
+        return None
+    if not _DATE_SHAPE.match(value):
+        raise ValueError(f"{flag} wants a YYYY-MM-DD date, not {value!r}")
+    return value
+
+
+def _where(table: str, since: str | None, until: str | None) -> tuple[str, tuple]:
+    """The date-range clause for one table, as ``(sql, params)``. Empty when it does not apply.
+
+    Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
+    people reach for when they already suspect something is wrong -- an end date that means "up to
+    but not including" is a second thing to be wrong about while debugging the first.
+    """
+    expr = _DATE_EXPR.get(table)
+    if expr is None or (since is None and until is None):
+        return "", ()
+    tests, params = [], []
+    if since is not None:
+        tests.append(f"{expr} >= ?")
+        params.append(since)
+    if until is not None:
+        tests.append(f"{expr} <= ?")
+        params.append(until)
+    return " WHERE " + " AND ".join(tests), tuple(params)
+
+
+def _range_label(since: str | None, until: str | None) -> str:
+    """How a range reads in a table header, in whichever of its three forms was asked for."""
+    if since is not None and until is not None:
+        return f"{since}..{until}"
+    return f"from {since}" if since is not None else f"through {until}"
 
 
 class Store:
@@ -158,6 +214,36 @@ class Store:
         """date -> which source won it, without reading their setlists."""
         return corpus.show_sources(self.conn)
 
+    # --- the recordings mirror ---
+
+    def replace_recordings(self, records) -> tuple[int, int]:
+        """Replace the mirror. Returns ``(recordings, tracks)`` written."""
+        return recordings.replace_recordings(self.conn, records)
+
+    def replace_show_types(self, types) -> int:
+        """Replace every date's electric/acoustic/mixed/alterego tag. Returns how many."""
+        return recordings.replace_show_types(self.conn, types)
+
+    def recording_count(self) -> int:
+        """How many tapes are mirrored, without reading their tracks."""
+        return recordings.recording_count(self.conn)
+
+    def track_count(self) -> int:
+        """How many tracks are mirrored."""
+        return recordings.track_count(self.conn)
+
+    def show_type_counts(self) -> dict[str, int]:
+        """kind -> how many dates carry it."""
+        return recordings.show_type_counts(self.conn)
+
+    def recordings(self) -> list[dict]:
+        """Every mirrored tape with its tracks, by date then identifier, tracks in play order."""
+        return recordings.recordings(self.conn)
+
+    def show_types(self) -> dict[str, str]:
+        """date -> kind."""
+        return recordings.show_types(self.conn)
+
     def table_names(self) -> list[str]:
         """Every non-internal table, alphabetized."""
         rows = self.conn.execute(
@@ -174,24 +260,51 @@ class Store:
 
     # --- plain-text view ---
 
-    def dump(self) -> str:
+    def dump(self, *, since: str | None = None, until: str | None = None) -> str:
         """Render derived state to deterministic plain text, for reviewable diffs.
 
         Volatile timestamp columns are dropped and rows are sorted, so two dumps of the same
         logical state are byte-identical. This is the ``slkit dump`` view: the thing that
         makes a bad write to an otherwise-opaque SQLite blob show up as a text diff.
+
+        ``since`` and ``until`` narrow it to a date range, inclusive at both ends. Whole-database
+        dumps stopped being readable somewhere around the seventy-six-thousandth track, and this
+        is the view someone opens when they already suspect one night is wrong.
+
+        A range never hides anything quietly. Every table's header says whether the range reached
+        it and how many rows it holds in total, so a table with no date axis reads as "all of it,
+        because there is no date to filter on" rather than as a table that happens to look small.
         """
-        lines = [f"# {DB_FILENAME} — contents", ""]
+        since = _check_date(since, "--since")
+        until = _check_date(until, "--until")
+        ranged = since is not None or until is not None
+        lines = [f"# {DB_FILENAME} — contents"
+                 + (f" ({_range_label(since, until)})" if ranged else ""), ""]
         for table in self.table_names():
             cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({_quote(table)})")]
             shown = [c for c in cols if c not in VOLATILE_COLUMNS]
-            count = self.conn.execute(_count_sql(table)).fetchone()[0]
-            lines.append(f"## {table} ({count} rows)")
+            where, params = _where(table, since, until)
+            count = self.conn.execute(_count_sql(table, where), params).fetchone()[0]
+            lines.append(f"## {table} ({self._heading(table, count, ranged, since, until)})")
             if not shown:
                 lines.append("")
                 continue
             lines.append(" | ".join(shown))
-            rows = self.conn.execute(_select_sql(table, shown)).fetchall()
+            rows = self.conn.execute(_select_sql(table, shown, where), params).fetchall()
             lines.extend(" | ".join("" if v is None else str(v) for v in row) for row in rows)
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
+
+    def _heading(self, table: str, count: int, ranged: bool,
+                 since: str | None, until: str | None) -> str:
+        """The parenthesised part of one table's dump header.
+
+        Unchanged from an unranged dump when no range was asked for, so the existing view and its
+        diffs are exactly what they were.
+        """
+        if not ranged:
+            return f"{count} rows"
+        if table not in _DATE_EXPR:
+            return f"{count} rows, no date axis"
+        total = self.conn.execute(_count_sql(table)).fetchone()[0]
+        return f"{count} of {total} rows, {_range_label(since, until)}"

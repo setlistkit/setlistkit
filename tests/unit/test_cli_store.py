@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Tests for the store and dump CLI commands."""
 
-from setlistkit.cli.main import EXIT_OK, main
+from setlistkit.cli.main import EXIT_DIAGNOSTIC, EXIT_OK, main
 from setlistkit.store.migrations import MIGRATIONS
 
 LATEST_SCHEMA = max(m.version for m in MIGRATIONS)
@@ -20,7 +20,9 @@ def test_store_init_then_status(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     assert main(["--config", cfg, "store", "init"]) == EXIT_OK
     out = capsys.readouterr().out
-    assert "applied migrations: 1, 2" in out
+    # Derived, not a literal: this test is about init reporting what it applied, and it has no
+    # opinion about how many migrations have shipped since it was written.
+    assert f"applied migrations: {', '.join(str(m.version) for m in MIGRATIONS)}" in out
     assert f"schema version {LATEST_SCHEMA}" in out
 
     assert main(["--config", cfg, "store", "status"]) == EXIT_OK
@@ -58,3 +60,34 @@ def test_dump_after_init(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "setlistkit.sqlite — contents" in out
     assert "setlistkit_version" in out
+
+
+def test_dump_narrows_to_a_date_range(tmp_path, capsys):
+    """Whole-database dumps stopped being readable around the seventy-six-thousandth track."""
+    from setlistkit.store import Store
+    cfg = _cfg(tmp_path)
+    with Store(tmp_path / "state") as store:
+        store.init()
+        store.replace_recordings([
+            {"identifier": ident, "date": date, "uploader": "t@example.org",
+             "audio_format": "Flac",
+             "duration_tracks": [{"idx": 0, "name": f"{ident}.flac", "title": "x",
+                                  "length_raw": "100.0", "seconds": 100.0}]}
+            for ident, date in (("old", "2023-06-01"), ("new", "2025-06-01"))])
+    capsys.readouterr()
+    assert main(["--config", cfg, "dump", "--since", "2025-01-01"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "new.flac" in out and "old.flac" not in out
+    assert "## recordings (1 of 2 rows, from 2025-01-01)" in out
+
+
+def test_dump_refuses_a_date_that_is_not_a_date(tmp_path, capsys):
+    """`--until 2023` sorts below every date IN 2023 and would print the year as if it were
+    empty, which is the one answer this view exists to make trustworthy."""
+    cfg = _cfg(tmp_path)
+    main(["--config", cfg, "store", "init"])
+    capsys.readouterr()
+    assert main(["--config", cfg, "dump", "--until", "2023"]) == EXIT_DIAGNOSTIC
+    err = capsys.readouterr().err
+    assert "--until wants a YYYY-MM-DD date" in err
+    assert "would print an empty range" in err

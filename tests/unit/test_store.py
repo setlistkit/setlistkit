@@ -84,6 +84,75 @@ def test_ident_rejects_non_identifiers():
         _ident("meta; DROP TABLE meta")
 
 
+# --- the ranged dump ---------------------------------------------------------------------
+#
+# Whole-database dumps stopped being readable somewhere around the seventy-six-thousandth track.
+# What a range must never do is make a table LOOK small, which is why every header below carries
+# both numbers or says why it carries one.
+
+def _three_nights(store):
+    store.init()
+    store.replace_recordings([
+        {"identifier": ident, "date": date, "uploader": "t@example.org", "audio_format": "Flac",
+         "duration_tracks": [{"idx": 0, "name": f"{ident}.flac", "title": "x",
+                              "length_raw": "100.0", "seconds": 100.0}]}
+        for ident, date in (("a", "2023-06-01"), ("b", "2024-06-01"), ("c", "2025-06-01"))])
+    return store
+
+
+def test_a_range_is_inclusive_at_both_ends(tmp_path):
+    """A half-open range is the classic off-by-one, and this is the view someone opens when they
+    already suspect something is wrong. One bug at a time."""
+    with Store(tmp_path) as store:
+        out = _three_nights(store).dump(since="2023-06-01", until="2024-06-01")
+        assert "2023-06-01" in out and "2024-06-01" in out
+        assert "2025-06-01" not in out
+
+
+def test_a_range_says_how_much_of_each_table_it_is_not_showing(tmp_path):
+    """Otherwise a filtered table is indistinguishable from a table that lost most of its rows."""
+    with Store(tmp_path) as store:
+        out = _three_nights(store).dump(since="2024-01-01")
+        assert "## recordings (2 of 3 rows, from 2024-01-01)" in out
+
+
+def test_a_table_with_no_date_axis_prints_in_full_and_says_why(tmp_path):
+    """meta and schema_migrations are not small because the range excluded them."""
+    with Store(tmp_path) as store:
+        out = _three_nights(store).dump(since="2024-01-01")
+        assert "## meta (2 rows, no date axis)" in out
+
+
+def test_tracks_are_filtered_through_the_recording_they_belong_to(tmp_path):
+    """The case the filter map exists for: no date column, and by a wide margin the largest table.
+
+    An unranged dump of recording_tracks is exactly what a range was reached for to avoid.
+    """
+    with Store(tmp_path) as store:
+        out = _three_nights(store).dump(since="2025-01-01")
+        assert "## recording_tracks (1 of 3 rows, from 2025-01-01)" in out
+        assert "c.flac" in out and "a.flac" not in out
+
+
+def test_an_unranged_dump_is_byte_for_byte_what_it_always_was(tmp_path):
+    """The existing view and its diffs must not move because a new flag exists."""
+    with Store(tmp_path) as store:
+        out = _three_nights(store).dump()
+        assert "## recordings (3 rows)" in out
+        assert "no date axis" not in out
+        assert out.startswith("# setlistkit.sqlite — contents\n")
+
+
+def test_a_date_that_is_not_a_date_is_refused_rather_than_compared(tmp_path):
+    """`--until 2023` sorts below every date IN 2023 and would print an empty range as if the
+    year held nothing -- the one answer this view exists to make trustworthy."""
+    with Store(tmp_path) as store:
+        store.init()
+        for bad in ("2023", "2023-6-1", "yesterday", "2023-06-01T00:00"):
+            with pytest.raises(ValueError):
+                store.dump(until=bad)
+
+
 def test_dump_and_counts_handle_reserved_word_identifiers(tmp_path):
     with Store(tmp_path) as store:
         store.init()

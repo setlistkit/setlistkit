@@ -12,6 +12,7 @@ import sqlite3
 import pytest
 
 from setlistkit.store import Store
+from setlistkit.store.migrations import MIGRATIONS
 
 
 def _entry(song, segue=False, non_song=False):
@@ -162,8 +163,12 @@ def test_an_orphaned_entry_row_does_not_invent_a_show(tmp_path):
 
 
 def test_the_migration_is_recorded_and_idempotent(tmp_path):
+    # Against MIGRATIONS rather than against a literal [1, 2]: what this test is about is that
+    # the corpus tables arrive and that a second open does nothing, and neither of those has an
+    # opinion about how many migrations have shipped since. Hardcoding the list makes every
+    # later migration fail a test that was never checking for it.
     with Store(tmp_path) as store:
-        assert store.init() == [1, 2]
-        assert store.schema_version() == 2
+        assert store.init() == [m.version for m in MIGRATIONS]
+        assert store.schema_version() == max(m.version for m in MIGRATIONS)
         assert store.init() == []                # nothing pending on a second open
         assert "shows" in store.table_names() and "show_entries" in store.table_names()

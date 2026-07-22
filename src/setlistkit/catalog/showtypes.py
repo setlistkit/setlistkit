@@ -91,15 +91,26 @@ def _classify(blob: str) -> tuple[str, str] | None:
     return None
 
 
-def show_types(items: Iterable[Mapping]) -> list[ShowType]:
-    """One row per dated item date, sorted by date. A date with no evidence is electric."""
+def show_types(items: Iterable[Mapping], *,
+               dates: Mapping[str, str] | None = None) -> list[ShowType]:
+    """One row per dated item date, sorted by date. A date with no evidence is electric.
+
+    ``dates`` maps identifier -> the date the show actually happened, and callers that have one
+    should pass it. An uploader can type any date they like, so a pack carries corrections; a tag
+    computed off the stated date lands on the wrong night for exactly the tapes whose metadata was
+    already known to be wrong. Without it this falls back to the item's own ``meta_date``, which
+    is honest for a standalone call over raw items and is why the parameter is optional rather
+    than required.
+    """
+    lookup = dates or {}
     found: dict[str, ShowType] = {}
-    dates: set[str] = set()
+    seen: set[str] = set()
     for item in items:
-        date = str(item.get("meta_date") or "")[:10]
+        date = str(lookup.get(str(item.get("identifier") or ""))
+                   or item.get("meta_date") or "")[:10]
         if not date:
             continue
-        dates.add(date)
+        seen.add(date)
         verdict = _classify(_text_of(item))
         if verdict is None:
             continue
@@ -109,4 +120,4 @@ def show_types(items: Iterable[Mapping]) -> list[ShowType]:
             found[date] = ShowType(date=date, kind=kind, evidence=why,
                                    identifier=str(item.get("identifier") or "") or None)
     return [found.get(date, ShowType(date=date, kind=ELECTRIC, evidence=None, identifier=None))
-            for date in sorted(dates)]
+            for date in sorted(seen)]

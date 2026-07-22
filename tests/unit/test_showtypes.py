@@ -106,3 +106,24 @@ def test_the_evidence_and_identifier_are_recorded():
     rows = _by_date(show_types([_item("tape-a", "2025-01-01", title="moe.stly Acoustic")]))
     assert rows["2025-01-01"].identifier == "tape-a"
     assert "moe.stly" in rows["2025-01-01"].evidence
+
+
+def test_a_corrected_date_tags_the_night_the_show_was_actually_played():
+    """An uploader can type any date they like, so a pack carries corrections.
+
+    A tag computed off the stated date lands on the wrong night for exactly the tapes whose
+    metadata was already known to be wrong -- and it lands there as a real row, which reads as
+    a night that was tagged rather than a night that was missed.
+    """
+    items = [{"identifier": "a", "meta_date": "2024-06-14",
+              "description": "a moe.stly duo set"}]
+    tagged, = show_types(items, dates={"a": "2025-06-14"})
+    assert tagged.date == "2025-06-14" and tagged.kind == ACOUSTIC
+
+
+def test_an_item_with_no_correction_still_uses_its_own_date():
+    """The fallback is what keeps a standalone call over raw items honest."""
+    items = [{"identifier": "a", "meta_date": "2024-06-14", "description": ""},
+             {"identifier": "b", "meta_date": "2024-06-15", "description": ""}]
+    tagged = show_types(items, dates={"a": "2025-06-14"})
+    assert [t.date for t in tagged] == ["2024-06-15", "2025-06-14"]
