@@ -220,11 +220,15 @@ NO_DATE = "no_date"                  # no date we can believe, so nothing can be
 DROPPED_DATE = "dropped_date"        # the pack refuses this night, and says why in corpus.json
 # The band under another billing: an acoustic duo, a trio, some other cut of the lineup. Its own
 # reason and not NOT_THIS_BAND, because the two are found in different places and a report that
-# conflated them would lie. A side project announces itself in the TITLE, where the band filter
-# reads it. A billing hides in the description: twelve of moe.'s fourteen acoustic nights are
-# titled "moe. Live at ..." like any other show, and say "Al & Rob moe.stly acoustic" further
-# down. Saying "title names a different band" about those would name a title that says no
-# such thing.
+# conflated them would lie. A billing usually hides in the description: twelve of moe.'s fifteen
+# acoustic nights are titled "moe. Live at ..." like any other show, and say "Al & Rob moe.stly
+# acoustic" further down. Saying "title names a different band" about those would name a title
+# that says no such thing.
+#
+# It is checked BEFORE the band filter, so it also wins for the other three, where the taper put
+# the duo in the title and the band filter would otherwise claim them. Both reasons refuse, so
+# nothing moves in or out of the corpus; what changes is which reason gets reported, and only
+# this one is true of a moe. side project.
 OTHER_BILLING = "other_billing"
 
 # Every field a taper might write a billing into. The same list the show-type classifier reads,
@@ -870,16 +874,18 @@ def _billed_dates(items: list[Mapping[str, Any]], policy: ArchivePolicy) -> dict
     refusing only the tape that says so leaves the show in the corpus with a full setlist read
     off the tape that stayed silent.
 
-    Tapes the band filter already turned away do not vote. Those are a different act's tapes --
-    a co-headline, a guest sit-in, someone else's night entirely -- and letting one of them
-    condemn a date would delete a real show on the strength of a record that was never about it.
+    Tapes the band filter turned away vote too, and are often the BEST witness a night has: a
+    taper sure it was a duo show titles it for the duo, and that title is the very thing the
+    band filter rejects. This used to skip them, fearing a co-headline's tape would condemn a
+    real date. The narrower rule guards that better -- a vote needs a side_project pattern to
+    fire, not merely a title that is not ours. Over the whole 4,614-tape collection exactly two
+    dates have a band-refused tape matching one, and neither costs a show: 2023-10-22 has no
+    other tape, and 2023-12-02's says "moe.stly" itself.
     """
     found: dict[str, str] = {}
     if not policy.side_projects:
         return found
     for item in items:
-        if policy.band_filter is not None and not policy.band_filter(item):
-            continue
         pattern = billed_as_other(item, policy.side_projects)
         if pattern is None:
             continue
@@ -898,14 +904,16 @@ def _parse_item(item: Mapping[str, Any], rules: _Rules, policy: ArchivePolicy,
     """
     billed = billed or {}
     identifier = str(item.get("identifier") or "")
-    if policy.band_filter is not None and not policy.band_filter(item):
-        return Skipped(identifier, NOT_THIS_BAND)
-    # After the band filter and before the date, because this is the same question one step in:
-    # is this tape evidence about the band the corpus is about. Reading the date first would
-    # only mean computing one for an item that is leaving anyway.
+    # Before the band filter, because both refuse and the question is only which reason is TRUE.
+    # A pack pattern is a named billing with a stated why; the band filter is a heuristic on a
+    # title. When both fire the specific one is right: the 2023-10-22 tapes are titled "Al Schnier
+    # & Rob Derhak Live at Globe Hall", and reporting those as "title names a different band"
+    # files a moe. duo night under the same heading as a Dylan tribute act.
     billing = billed_as_other(item, policy.side_projects)
     if billing is not None:
         return Skipped(identifier, OTHER_BILLING, billing=billing.pattern)
+    if policy.band_filter is not None and not policy.band_filter(item):
+        return Skipped(identifier, NOT_THIS_BAND)
     date = _show_date(item, policy.date_overrides)
     if not date:
         return Skipped(identifier, NO_DATE)

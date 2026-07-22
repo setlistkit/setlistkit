@@ -719,11 +719,14 @@ def test_one_tape_naming_the_billing_refuses_the_whole_night():
     assert silent.billing == r"moe\.?stly"
 
 
-def test_a_tape_the_band_filter_already_turned_away_does_not_condemn_the_date():
-    """A different act's tape is not a record about this band's night.
+def test_a_tape_titled_for_the_duo_condemns_the_night_the_band_filter_would_have_muted():
+    """The tape whose TITLE names the billing is the surest witness a night has, so it votes.
 
-    Letting one vote would delete a real show whenever a co-headline or a guest set happened to
-    be filed under the same date.
+    2023-12-02 exactly: "Al and Rob moe.stly Acoustic Live at The Variety Playhouse" beside
+    "moe. Live at Variety Playhouse", one duo show uploaded twice. The band filter turns the
+    first away for its title -- which is the very thing that makes it certain -- and while a
+    turned-away tape could not vote, the night rested on whether the second taper happened to
+    mention the billing too. Here the second says nothing, and both are still refused.
     """
     items = [
         {"identifier": "duo2024-07-21", "meta_date": "2024-07-21",
@@ -736,9 +739,32 @@ def test_a_tape_the_band_filter_already_turned_away_does_not_condemn_the_date():
     result = parse_archive_items(items, normalizer=_StubNormalizer(),
                                  policy=ArchivePolicy(side_projects=DUO,
                                                       band_filter=title_band_filter("moe.")))
+    assert result.shows == []
+    # The duo-titled tape is reported as a BILLING and not as a different band. Both refuse, so
+    # the corpus is the same either way; only one of the two reasons is true of a moe. duo night.
+    assert [(s.identifier, s.reason) for s in result.skipped] == [
+        ("duo2024-07-21", OTHER_BILLING), ("moe2024-07-21", OTHER_BILLING)]
+
+
+def test_a_different_act_on_the_same_date_does_not_condemn_the_night():
+    """The hazard the vote has to stay clear of: a co-headline or a guest set filed under a
+    date the band really played. A vote needs a side-project pattern to fire, and another act's
+    tape does not match one -- so it leaves as NOT_THIS_BAND and the real show survives.
+    """
+    items = [
+        {"identifier": "everyoneorchestra2024-07-21", "meta_date": "2024-07-21",
+         "title": "Everyone Orchestra Live at Globe Hall on 2024-07-21",
+         "description": "Set 1:\n01. Aurora\n"},
+        {"identifier": "moe2024-07-21", "meta_date": "2024-07-21",
+         "title": "moe. Live at Globe Hall on 2024-07-21",
+         "description": "Set 1:\n01. Aurora\n02. Wormhole\n03. Timmy Tucker\n"},
+    ]
+    result = parse_archive_items(items, normalizer=_StubNormalizer(),
+                                 policy=ArchivePolicy(side_projects=DUO,
+                                                      band_filter=title_band_filter("moe.")))
     assert [show["identifier"] for show in result.shows] == ["moe2024-07-21"]
-    assert [(s.identifier, s.reason) for s in result.skipped] == [("duo2024-07-21",
-                                                                   NOT_THIS_BAND)]
+    assert [(s.identifier, s.reason) for s in result.skipped] == [
+        ("everyoneorchestra2024-07-21", NOT_THIS_BAND)]
 
 
 def test_a_single_item_parse_cannot_know_what_the_other_tapes_say():
