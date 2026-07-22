@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo, so ask for nothing. A workflow that cannot push cannot be
+# turned into one that does by a compromised action.
+permissions: read-all
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -14,10 +18,14 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to a commit SHA, not a tag. A tag is a moving pointer the action's
+      # owner can repoint at any time, so `@v7` is a standing agreement to run whatever they
+      # publish next; a SHA is not repointable. The trailing comment carries the human-readable
+      # version, and dependabot (.github/dependabot.yml) rewrites both together.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
 

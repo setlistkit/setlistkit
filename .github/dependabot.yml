@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # Pinning actions to a SHA (.github/workflows/ci.yml) freezes them, which trades a supply-chain
+  # risk for a staleness risk: a pin never picks up the fix to its own CVE. This is the other half
+  # of that trade. Dependabot rewrites the SHA and the trailing `# vX.Y.Z` comment together, so
+  # the pin stays both current and readable, and each bump arrives as a reviewable diff rather
+  # than silently at the next run.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Python deps are declared in pyproject.toml as open lower bounds (jsonschema>=4.0, pytest>=8.0,
+  # and several with no floor at all), so a fresh install already resolves to the newest release
+  # and dependabot has little to raise. It earns its place on the day a bound has to be tightened
+  # or a transitive advisory lands: the ecosystem is already wired up and watching.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
