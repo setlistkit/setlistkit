@@ -55,8 +55,8 @@ dev = [
 slkit = "setlistkit.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/timlnx/setlistkit"
-Repository = "https://github.com/timlnx/setlistkit"
+Homepage = "https://github.com/setlistkit/setlistkit"
+Repository = "https://github.com/setlistkit/setlistkit"
 
 [tool.hatch.version]
 path = "VERSION"
