@@ -359,6 +359,48 @@ def test_a_gear_fragment_with_no_reason_is_rejected(tmp_path):
     assert diag.summary == "gear_patterns entry must say what it is"
 
 
+def test_an_acoustic_pattern_with_no_reason_is_rejected(tmp_path):
+    """It takes every night it matches out of every length distribution. That earns a reason."""
+    diag = _corpus_failure(tmp_path, '{"acoustic_patterns": [{"pattern": "xstly", "why": ""}]}')
+    assert diag.summary == "acoustic_patterns entry must say what it is"
+
+
+def test_an_acoustic_pattern_is_compiled_bare_not_folded_into_the_filters(tmp_path):
+    """The distinction the two compilers exist for.
+
+    A junk or gear fragment is wrapped in the lookarounds the TITLE filters apply and deletes
+    what it matches. An acoustic pattern is searched against a tape's whole free text and only
+    tags a night. Wrapped, a pattern like this could never match the text it is written for.
+    """
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": '{"name": "moe", "version": "1"}', "vocabulary.json": VOCAB,
+        "corpus.json": '{"acoustic_patterns": [{"pattern": "moe\\\\.?stly",'
+                       ' "why": "the band\'s acoustic billing"}]}'})
+    pattern, = pack.corpus.acoustic
+    assert pattern.search("Al and Rob moe.stly Acoustic at The Met") is not None
+    assert pattern.search("percussion, flute, acoustic guitar") is None
+
+
+def test_an_acoustic_pattern_is_case_insensitive(tmp_path):
+    """A filter fragment is matched against squashed text that is already lowercased; these are
+    searched against a tape's metadata as the taper typed it. Without the flag a pack author
+    writes the brand the way it is PRINTED and the rule silently never fires."""
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": '{"name": "moe", "version": "1"}', "vocabulary.json": VOCAB,
+        "corpus.json": '{"acoustic_patterns": [{"pattern": "moe\\\\.?stly",'
+                       ' "why": "the band\'s acoustic billing"}]}'})
+    pattern, = pack.corpus.acoustic
+    for written in ("moe.stly", "Moe.stly", "MOE.STLY", "Moestly"):
+        assert pattern.search(f"Al and Rob {written} Acoustic") is not None, written
+
+
+def test_a_pack_that_declares_no_acoustic_billing_loads_with_none(tmp_path):
+    pack = _load_or_render(tmp_path, **{
+        "pack.json": '{"name": "moe", "version": "1"}', "vocabulary.json": VOCAB,
+        "corpus.json": "{}"})
+    assert pack.corpus.acoustic == ()
+
+
 def test_a_corpus_fragment_has_no_bare_string_form(tmp_path):
     """unlike a classifier: every fragment is free-floating, so none can anchor its way out."""
     diag = _corpus_failure(tmp_path, '{"junk_patterns": ["^umphrey$"]}')

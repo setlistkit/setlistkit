@@ -136,7 +136,7 @@ def ingest(config, args) -> int:
                        songs=sum(count_songs(show["sets"], show["encore"])
                                  for show in merged.shows))
 
-    mirror = _mirror(cached.items, parsed.shows)
+    mirror = _mirror(cached.items, parsed.shows, pack.corpus.acoustic)
 
     with Store(config.data_root) as store:
         store.init()
@@ -162,7 +162,7 @@ def ingest(config, args) -> int:
     return EXIT_OK
 
 
-def _mirror(items, shows) -> _Mirror:
+def _mirror(items, shows, acoustic) -> _Mirror:
     """The tapes to store and the date tags to store, from the items the parser accepted.
 
     Keyed on acceptance rather than on the whole cache, because all three of the parser's
@@ -180,7 +180,7 @@ def _mirror(items, shows) -> _Mirror:
     kept = [item for item in items if str(item.get("identifier") or "") in dates]
     return _Mirror(
         recordings=[dict(item, date=dates[item["identifier"]]) for item in kept],
-        show_types=[asdict(kind) for kind in show_types(kept, dates=dates)])
+        show_types=[asdict(kind) for kind in show_types(kept, dates=dates, acoustic=acoustic)])
 
 
 def _report_mirror(mirror: _Mirror, corpus_dates: set[str]) -> None:

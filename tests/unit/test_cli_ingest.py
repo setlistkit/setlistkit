@@ -635,19 +635,34 @@ def test_show_types_are_stored_for_every_night_and_tallied_in_the_report(tmp_pat
     """A tag and never a deletion -- so it has to be stored somewhere every consumer can read."""
     items = {
         "example2025-07-04": dict(ITEMS["example2025-07-04"], files=FLAC),
-        # The alter-ego rule, not the acoustic one: the acoustic pattern is written against
-        # moe.'s own brand name, so it cannot fire for a pack about a band called The Example.
+        # Alter-ego: a band-agnostic rule, so it lives in code.
         "example2025-08-01": {
             "title": "The Example Live at Northlands on 2025-08-01",
             "date": "2025-08-01", "files": FLAC,
             "description": "Tonight they are performing as The Ghosts of Electricity.\n"
                            "Set 1:\n01. Aurora\n"},
+        # Acoustic: the billing comes from the PACK's acoustic_patterns, which is the whole
+        # point. "Example.stly" is this pack's brand; nothing in the code knows the word.
+        #
+        # The title leads with the band name on purpose. The band filter accepts a title whose
+        # act STARTS WITH the band's name, so an acoustic billing is only ever seen by this
+        # module when it is written as an extension of the band -- "moe.stly Acoustic" is kept
+        # and "Al and Rob moe.stly Acoustic" is turned away as a different act. That is a real
+        # property of the corpus, not a quirk of this fixture.
+        "example2025-08-02": {
+            "title": "The Example.stly Acoustic Live at The Met on 2025-08-02",
+            "date": "2025-08-02", "files": FLAC,
+            "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
     }
     _cache(tmp_path, items)
     main(["--config", _cfg(tmp_path), "ingest"])
-    assert "show types: {'alterego': 1, 'electric': 1}" in capsys.readouterr().out
+    assert "show types: {'acoustic': 1, 'alterego': 1, 'electric': 1}" in capsys.readouterr().out
     with Store(tmp_path / "state") as store:
-        assert store.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego"}
+        assert store.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego",
+                                      "2025-08-02": "acoustic"}
+        evidence = store.conn.execute(
+            "SELECT evidence FROM show_types WHERE date = '2025-08-02'").fetchone()[0]
+        assert evidence == r"tape metadata matches /example\.?stly/"
 
 
 def test_the_show_type_of_a_corrected_night_lands_on_the_night_it_was_played(tmp_path):

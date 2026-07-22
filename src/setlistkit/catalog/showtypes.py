@@ -28,21 +28,29 @@ DETECTING ONE
 On the brand name, never on the bare word "acoustic". Tapers list their gear in the
 description, and "percussion, MalletKat, flute, acoustic guitar" is not an acoustic show.
 Matching the bare word swept in New Year's Eve and six other full electric nights.
+
+WHICH IS WHY THE ACOUSTIC PATTERN COMES FROM THE PACK
+That brand name is one band's. "moe.stly" is a fact about moe., exactly like a drop date or an
+alias, and it was sitting hardcoded in a layer whose entire premise is that it knows no band --
+so this module could never have tagged an acoustic night for anybody else's pack, and would
+have reported every one of them electric while running clean.
+
+The two rules that stay in code are the ones that are genuinely band-agnostic: "performing as"
+is how every scene writes an alter-ego billing, and the mixed-set rule is a shape, not a name.
+A pack that declares no acoustic pattern simply gets no acoustic tag, which is the same refusal
+to guess the band filter makes when it is given no band name.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 ELECTRIC = "electric"
 ACOUSTIC = "acoustic"
 MIXED = "mixed"
 ALTEREGO = "alterego"
-
-# The show brand, dot optional. Unambiguous, unlike "acoustic", which is also a kind of guitar.
-_ACOUSTIC_RE = re.compile(r"moe\.?stly", re.I)
 
 # The band occasionally takes the stage as somebody else. An alter-ego night is an improv
 # vehicle rather than a normal show, and its long single-track "songs" are most of a set
@@ -80,19 +88,22 @@ def _text_of(item: Mapping) -> str:
     return _TAG_RE.sub(" ", blob)
 
 
-def _classify(blob: str) -> tuple[str, str] | None:
+def _classify(blob: str, acoustic: Sequence[re.Pattern]) -> tuple[str, str] | None:
     """The kind this text is evidence of, with the reason, or None for no evidence at all."""
     if _ALTEREGO_RE.search(blob):
         return ALTEREGO, "the band played this one as somebody else"
-    if _ACOUSTIC_RE.search(blob):
-        return ACOUSTIC, "'moe.stly' in tape metadata"
+    for pattern in acoustic:
+        if pattern.search(blob):
+            # The pattern itself, not a fixed sentence. It is the pack's own words, and it is
+            # the only thing that tells a later reader WHICH rule fired on a night they doubt.
+            return ACOUSTIC, f"tape metadata matches /{pattern.pattern}/"
     if _MIXED_RE.search(blob):
         return MIXED, "notes describe an acoustic set inside an electric show"
     return None
 
 
-def show_types(items: Iterable[Mapping], *,
-               dates: Mapping[str, str] | None = None) -> list[ShowType]:
+def show_types(items: Iterable[Mapping], *, dates: Mapping[str, str] | None = None,
+               acoustic: Sequence[re.Pattern] = ()) -> list[ShowType]:
     """One row per dated item date, sorted by date. A date with no evidence is electric.
 
     ``dates`` maps identifier -> the date the show actually happened, and callers that have one
@@ -101,6 +112,10 @@ def show_types(items: Iterable[Mapping], *,
     already known to be wrong. Without it this falls back to the item's own ``meta_date``, which
     is honest for a standalone call over raw items and is why the parameter is optional rather
     than required.
+
+    ``acoustic`` is the pack's own patterns for its acoustic billing -- ``moe.stly`` for one band,
+    something else entirely for the next. Empty means no acoustic tag is ever produced, which is
+    honest: this layer knows no band, and a brand name is not something it can derive.
     """
     lookup = dates or {}
     found: dict[str, ShowType] = {}
@@ -111,7 +126,7 @@ def show_types(items: Iterable[Mapping], *,
         if not date:
             continue
         seen.add(date)
-        verdict = _classify(_text_of(item))
+        verdict = _classify(_text_of(item), acoustic)
         if verdict is None:
             continue
         kind, why = verdict

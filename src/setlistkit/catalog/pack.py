@@ -183,6 +183,10 @@ _CORPUS_SCHEMA = {
         },
         "junk_patterns": _FRAGMENTS_SCHEMA,
         "gear_patterns": _FRAGMENTS_SCHEMA,
+        # Same SHAPE as a filter fragment and a different job, which is why it is not compiled by
+        # the same function: a fragment is folded into an alternation and DELETES what it matches,
+        # while this is searched in a tape's free text and only TAGS the night it names.
+        "acoustic_patterns": _FRAGMENTS_SCHEMA,
     },
 }
 
@@ -287,6 +291,11 @@ class CorpusPolicy:
     date_overrides: Mapping[str, Mapping[str, str]] = field(default_factory=dict, hash=False)
     junk: tuple[Rule, ...] = ()
     gear: tuple[Rule, ...] = ()
+    # The band's own acoustic billing -- "moe.stly" for one band, something else for the next.
+    # Compiled bare, because these are searched in a tape's free text rather than folded into
+    # the filter alternation, and they tag a night rather than deleting anything from it.
+    # Empty means no acoustic tag is ever produced. See catalog/showtypes.py.
+    acoustic: tuple[re.Pattern, ...] = ()
     # date -> the whole show someone confirmed by ear, already canonicalized through this pack's
     # normalizer, so a caller hands them straight to `merge_shows(overrides=...)`.
     overrides: Mapping[str, Mapping] = field(default_factory=dict, hash=False)
@@ -462,6 +471,38 @@ def _compile_fragments(entries: list, src: JSONSource, *, key: str) -> tuple[Rul
     return tuple(rules)
 
 
+def _compile_evidence(entries: list, src: JSONSource, *, key: str) -> tuple[re.Pattern, ...]:
+    """Compile one list of evidence patterns -- rules that TAG a night rather than filter it.
+
+    Deliberately not :func:`_compile_fragments`. That one wraps each pattern in the lookarounds
+    the title filters apply and hands back a :class:`Rule` carrying lint's notion of a rule that
+    drops tokens. Neither is true here: these are searched against a tape's whole free text, so a
+    wrapped pattern could never match, and nothing is deleted when one fires.
+
+    ``why`` is still required by the schema and still checked, even though the runtime does not
+    carry it. The reason is the same as everywhere else in this pack: the tag it produces changes
+    which nights a length distribution is built from, and a later reader disagreeing with a call
+    has nothing but the stated reason to check it against.
+    """
+    patterns: list[re.Pattern] = []
+    for index, entry in enumerate(entries):
+        if not entry["why"].strip():
+            _fail(src, f"{key} entry must say what it is",
+                  src.positions.get((key, index, "why")),
+                  detail=(f'"{entry["pattern"]}" tags a night as acoustic, which takes it out of\n'
+                          "every length distribution downstream. Say what the billing is, so a\n"
+                          "later reader can tell a brand name from a word a taper happened to use."),
+                  caption="empty")
+        # Case-insensitive, unlike a filter fragment. A fragment is matched against `squash`ed
+        # text, which has already lowercased it; these are searched against a tape's raw metadata
+        # exactly as the taper typed it, and "Example.stly", "example.stly" and "EXAMPLE.STLY"
+        # are one billing. Without this a pack author writes the brand the way it is printed and
+        # it silently never fires.
+        patterns.append(_compile(entry["pattern"],
+                                 src.positions.get((key, index, "pattern")), src, re.IGNORECASE))
+    return tuple(patterns)
+
+
 def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
     """Load ``corpus.json`` and ``overrides.json``, both optional, both stating their evidence.
 
@@ -504,6 +545,8 @@ def _load_corpus(pack_dir: Path, normalizer: Normalizer) -> CorpusPolicy:
         date_overrides={ident: dict(entry) for ident, entry in date_overrides.items()},
         junk=_compile_fragments(data.get("junk_patterns", []), src, key="junk_patterns"),
         gear=_compile_fragments(data.get("gear_patterns", []), src, key="gear_patterns"),
+        acoustic=_compile_evidence(data.get("acoustic_patterns", []), src,
+                                   key="acoustic_patterns"),
         overrides=overrides,
     )
 
@@ -513,10 +556,11 @@ def _justify_detail(pattern: str) -> str:
             f"Either anchor it (^{pattern}$) or give a reason and a counter-example.")
 
 
-def _compile(pattern: str, pattern_pos: Pos | None, src: JSONSource) -> re.Pattern:
+def _compile(pattern: str, pattern_pos: Pos | None, src: JSONSource,
+             flags: int = 0) -> re.Pattern:
     """Compile a pattern, pointing a caret *inside* the string at a bad char on failure."""
     try:
-        return re.compile(pattern)
+        return re.compile(pattern, flags)
     except re.error as err:
         pos = None
         if pattern_pos is not None and src.text is not None:

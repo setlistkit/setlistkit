@@ -23,5 +23,12 @@
       "pattern": "zoomf\\d",
       "why": "A recorder this scene uses, written into the lineage preamble. Every taper scene has its own shorthand and setlistkit ships only the gear words everyone writes, so the local dialect goes here."
     }
+  ],
+
+  "acoustic_patterns": [
+    {
+      "pattern": "example\\.?stly",
+      "why": "This band's own billing for an acoustic duo night. Matched on the BRAND name and never on the bare word 'acoustic', because tapers list their gear in the description and 'percussion, flute, acoustic guitar' is not an acoustic show -- the bare word swept in New Year's Eve and six other full electric nights. A night tagged acoustic is left out of every length distribution, so the tag is a real exclusion and the brand name is what earns it."
+    }
   ]
 }
