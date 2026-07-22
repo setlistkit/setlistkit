@@ -3,6 +3,10 @@
   "generated": {
     "corpus_shows": 2,
     "recordings_read": 3,
+    "window": {
+      "since": null,
+      "until": null
+    },
     "date_range": [
       "2025-07-04",
       "2025-07-05"

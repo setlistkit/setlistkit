@@ -172,17 +172,24 @@ def _withheld(performances: Iterable[Mapping]) -> dict[str, int]:
 
 def bundle(concluded: Concluded, features: Iterable[SongFeature],
            tapers: Mapping[str, int], *,
-           corpus_shows: int, recordings_read: int) -> dict:
+           corpus_shows: int, recordings_read: int,
+           since: str | None = None, until: str | None = None) -> dict:
     """The whole tape measure as one JSON-ready mapping.
 
     Row order is whatever the store handed over, which is sorted by content rather than by rowid
     for exactly this reason: the bundle is diffed between runs by a person, and a diff that moves
     ten thousand rows because insertion order changed is a diff nobody reads.
+
+    ``window`` is what was ASKED for and ``date_range`` is what was found, kept as two fields
+    because they answer different questions. A bundle whose window opens in 1990 and whose data
+    starts in 1992 is complete; one whose window was never narrowed at all is a different claim
+    again, and a consumer that only had ``date_range`` could not tell either from a gap.
     """
     return {
         "schema": SCHEMA,
         "generated": {"corpus_shows": corpus_shows,
                       "recordings_read": recordings_read,
+                      "window": {"since": since, "until": until},
                       "date_range": _date_range(concluded.performances)},
         "songs": _songs(concluded.stats, features),
         "performances": [_published(row) for row in concluded.performances],

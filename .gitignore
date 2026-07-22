@@ -47,6 +47,10 @@ htmlcov/
 /data/
 *.sqlite
 *.sqlite-journal
+# `slkit export tapemeasure` defaults --out to the current directory, so running it from a checkout
+# drops an eighteen-megabyte generated file next to the source. It is output, never input.
+/tapemeasure.json
+/tapemeasure.json.partial
 *.sqlite-wal
 *.sqlite-shm
 

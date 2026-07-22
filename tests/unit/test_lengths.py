@@ -467,3 +467,55 @@ def test_a_zero_length_track_is_not_a_performance_of_zero_seconds():
     votes, edges = L.observations_of(tape, reading, _Pack())
     assert [v.slot.song for v in votes] == ["Meat"]
     assert [e.kind for e in edges] == ["zero_length_track"]
+
+
+# --- as_row / from_row -------------------------------------------------------------------------
+
+
+def _performance(**kw):
+    """A performance with every optional part populated, so a round trip has something to lose."""
+    base = dict(
+        slot=L.Slot(date="2023-01-19", set_label="2", position=4, song="Rebubula"),
+        seconds=612.5,
+        consensus=L.Consensus(n_tapes=3, n_tapes_seen=5, n_ballots=7, spread_seconds=4.5,
+                              spread_all_tapes=91.0, suspect=False, resolved_by="finest_tape"),
+        segued=True, show_type=L.ELECTRIC, excluded=None,
+        sandwich=L.Sandwich(parts=2, total_seconds=980.0, is_longest_part=True),
+    )
+    return L.Performance(**{**base, **kw})
+
+
+def test_from_row_is_the_exact_inverse_of_as_row():
+    """The pair is only correct together, so it is tested together."""
+    for performance in (_performance(),
+                        _performance(sandwich=None),
+                        _performance(excluded="hand_excluded"),
+                        _performance(show_type="acoustic"),
+                        _performance(consensus=L.Consensus(1, 1, 1, 0.0, 0.0, True))):
+        assert L.from_row(L.as_row(performance)) == performance
+
+
+def test_a_rehydrated_performance_recomputes_the_withheld_it_was_stored_with():
+    """``withheld`` is a property over four other fields, and ``from_row`` deliberately does not
+    read the stored column. That is only safe if the two always agree -- if they can diverge, a
+    ranged export would hold back a different set of performances than the stored tally explains.
+    """
+    for performance in (_performance(),
+                        _performance(show_type="acoustic"),
+                        _performance(excluded="hand_excluded"),
+                        _performance(sandwich=L.Sandwich(2, 980.0, is_longest_part=False)),
+                        _performance(consensus=L.Consensus(1, 4, 4, 200.0, 200.0, True))):
+        row = L.as_row(performance)
+        assert L.from_row(row).withheld == row["withheld"]
+
+
+def test_song_stats_over_rehydrated_rows_matches_stats_over_the_originals():
+    """What the ranged export relies on: a performance that has been through the store and back
+    votes exactly as it did before, so a window changes the population and never the method."""
+    performances = [
+        _performance(slot=L.Slot("2023-01-19", "1", n, "Rebubula"), seconds=600.0 + n)
+        for n in range(1, 6)
+    ] + [_performance(slot=L.Slot("2023-01-20", "1", 1, "Plane Crash"), seconds=1200.0)]
+    direct = L.song_stats(performances)
+    round_tripped = L.song_stats([L.from_row(L.as_row(p)) for p in performances])
+    assert [vars(s) for s in direct] == [vars(s) for s in round_tripped]

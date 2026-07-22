@@ -145,6 +145,14 @@ def _add_export(sub) -> None:
         "tapemeasure", help="song lengths, features, credits and caveats as one JSON bundle")
     tapemeasure_cmd.add_argument("--out", metavar="PATH", default="tapemeasure.json",
                                  help="where to write the bundle (default: %(default)s)")
+    # Spelled and bounded exactly as `slkit dump` spells them -- inclusive at both ends, same
+    # YYYY-MM-DD, same two names. A range that means one thing in one command and something a day
+    # wider in another is a range nobody can check a published number against.
+    tapemeasure_cmd.add_argument("--since", metavar="YYYY-MM-DD",
+                                 help="only performances on or after this date (song statistics "
+                                      "are recomputed over the window, not read whole-corpus)")
+    tapemeasure_cmd.add_argument("--until", metavar="YYYY-MM-DD",
+                                 help="only performances on or before this date")
     _add_dry_run(tapemeasure_cmd, "build the bundle and report it, but write no file")
 
 
@@ -283,14 +291,31 @@ def _cmd_dump(config, args) -> int:
         with Store(config.data_root) as store:
             print(store.dump(since=args.since, until=args.until), end="")
     except ValueError as exc:
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary=str(exc),
-            detail="Dates are stored and compared as YYYY-MM-DD text, so a shorter one does not\n"
-                   "mean what it looks like: `--until 2023` sorts below every date in 2023 and\n"
-                   "would print an empty range rather than the year you asked for.",
-        )) from exc
+        raise _malformed_date(exc, "print") from exc
     return EXIT_OK
+
+
+def _malformed_date(exc: ValueError, verb: str) -> DiagnosticError:
+    """The refusal both ranged commands give, so they cannot explain the same trap differently."""
+    return DiagnosticError(Diagnostic(
+        severity=ERROR,
+        summary=str(exc),
+        detail="Dates are stored and compared as YYYY-MM-DD text, so a shorter one does not\n"
+               "mean what it looks like: `--until 2023` sorts below every date in 2023 and\n"
+               f"would {verb} an empty range rather than the year you asked for.",
+    ))
+
+
+def _cmd_export(config, args) -> int:
+    """`slkit export`, with the same refusal ``dump`` gives a date it cannot compare.
+
+    Wrapped here rather than inside the exporter because a malformed flag is a CLI fault: the
+    exporter's job starts once the window is known to mean what it says.
+    """
+    try:
+        return export(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "write") from exc
 
 
 def _cmd_pull(config, args) -> int:
@@ -423,7 +448,7 @@ _COMMANDS = {
     "pull": _cmd_pull,
     "ingest": ingest,
     "derive": derive,
-    "export": export,
+    "export": _cmd_export,
     "dump": _cmd_dump,
 }
 

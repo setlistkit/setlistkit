@@ -22,7 +22,9 @@ test that has been switched off.
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
+from statistics import median
 
 import pytest
 
@@ -196,3 +198,106 @@ def test_a_tape_that_could_not_be_read_reaches_the_bundle_as_a_review_row(tmp_pa
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert any(row["identifier"] == "example2025-07-04.c" for row in payload["review"])
     assert all(row["url"].startswith("https://archive.org/details/") for row in payload["review"])
+
+
+# --- the date window ---------------------------------------------------------------------------
+#
+# The fixture is two nights: 2025-07-04 carries two tapes and 2025-07-05 carries one, so a window
+# of just the second night changes every song's n from 2 to 1 and moves every median. A test that
+# only checked row counts would pass just as happily against a bundle publishing whole-corpus
+# statistics beside windowed performances, which is the failure these are here for.
+
+
+def test_a_window_narrows_every_dated_section(tmp_path):
+    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert {row["date"] for row in payload["performances"]} == {"2025-07-05"}
+    assert payload["generated"]["date_range"] == ["2025-07-05", "2025-07-05"]
+    assert all(row["date"] >= "2025-07-05" for row in payload["review"])
+    assert all(row["date"] >= "2025-07-05" for row in payload["abandoned"])
+    assert all(row["date"] >= "2025-07-05" for row in payload["edges"])
+
+
+def test_song_statistics_describe_the_window_and_not_the_corpus(tmp_path):
+    """THE POINT OF THE WINDOW. The stored statistics are computed over every year a song was
+    played, so publishing them beside a narrowed performance list would put two populations in one
+    file under one heading -- a median drawn from nights the reader cannot see."""
+    # Read each bundle before running the next export: both calls write to the same
+    # tmp_path/bundle.json, so holding the two Paths and reading them at the end compares the
+    # second bundle with itself -- which passes the interesting assertion for the wrong reason.
+    _code, whole = _export(tmp_path)
+    whole_n = {s["song"]: s["n"] for s in json.loads(whole.read_text(encoding="utf-8"))["songs"]}
+    _code, windowed = _export(tmp_path, None, "--since", "2025-07-05")
+    windowed_n = {s["song"]: s["n"]
+                  for s in json.loads(windowed.read_text(encoding="utf-8"))["songs"]}
+    # Both nights played all five songs, so the corpus counts each twice and the window once.
+    assert set(whole_n) == set(windowed_n)
+    assert all(whole_n[song] == 2 for song in whole_n)
+    assert all(windowed_n[song] == 1 for song in windowed_n)
+
+
+def test_the_bundle_is_self_consistent_inside_its_window(tmp_path):
+    """Every published median is the median of performances published in the SAME file.
+
+    Asserted against the bundle's own rows rather than against expected numbers, because what
+    matters is not which median is right in the abstract -- it is that a consumer joining `songs`
+    to `performances` cannot find them describing different sets of nights.
+    """
+    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    counted = Counter(row["song"] for row in payload["performances"] if row["withheld"] is None)
+    for stat in payload["songs"]:
+        seconds = [row["seconds"] for row in payload["performances"]
+                   if row["song"] == stat["song"] and row["withheld"] is None]
+        assert stat["n"] == counted[stat["song"]] == len(seconds)
+        assert stat["median_seconds"] == pytest.approx(median(seconds), abs=0.05)
+        assert stat["min_seconds"] == pytest.approx(min(seconds), abs=0.05)
+        assert stat["max_seconds"] == pytest.approx(max(seconds), abs=0.05)
+
+
+def test_an_unwindowed_bundle_still_reads_the_stored_statistics(tmp_path):
+    """The recomputation is for the ranged case only. With no window the export keeps its promise
+    to publish exactly what derive stored, and the golden file above is the proof of the shape."""
+    _code, out = _export(tmp_path)
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["generated"]["window"] == {"since": None, "until": None}
+
+
+def test_the_window_asked_for_is_recorded_beside_the_range_found(tmp_path):
+    """Two fields because they answer different questions: a window opening before the data starts
+    is complete, and a consumer with only `date_range` could not tell that from a gap."""
+    _code, out = _export(tmp_path, None, "--since", "2020-01-01", "--until", "2025-07-04")
+    generated = json.loads(out.read_text(encoding="utf-8"))["generated"]
+    assert generated["window"] == {"since": "2020-01-01", "until": "2025-07-04"}
+    assert generated["date_range"] == ["2025-07-04", "2025-07-04"]
+
+
+def test_credits_cover_only_the_tapes_in_the_window(tmp_path):
+    """Crediting a taper for a reel the reader cannot see names them for absent work."""
+    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    credited = {row["uploader"] for row in json.loads(out.read_text(encoding="utf-8"))["credits"]}
+    # two@example.org taped only 2025-07-04, so the window must not credit them.
+    assert len(credited) == 1
+
+
+def test_an_empty_window_is_not_reported_as_an_empty_store(tmp_path, capsys):
+    """`derive` would cheerfully rewrite a correct table to prove a point about a year the band
+    did not tour, so the two emptinesses must not share a message."""
+    code, _out = _export(tmp_path, None, "--since", "2099-01-01")
+    assert code == EXIT_NOTHING
+    printed = capsys.readouterr().out
+    assert "from 2099-01-01" in printed
+    assert "Run `slkit derive" not in printed
+
+
+def test_a_malformed_window_date_is_refused_rather_than_compared(tmp_path):
+    """`--until 2023` sorts below every date IN 2023. Refused for the same reason `dump` refuses
+    it: it returns rows, and the rows are wrong."""
+    _cache(tmp_path, TAPES)
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    out = tmp_path / "bundle.json"
+    code = main(["--config", config, "export", "tapemeasure", "--out", str(out), "--until", "2025"])
+    assert code != EXIT_OK
+    assert not out.exists()

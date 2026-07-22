@@ -24,6 +24,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping
 
+from . import daterange
 from .migrations import transaction
 
 
@@ -143,9 +144,12 @@ def listing_readings(conn: sqlite3.Connection) -> dict[str, int]:
         "SELECT reading, COUNT(*) AS n FROM recording_listings GROUP BY reading ORDER BY reading")}
 
 
-def recording_count(conn: sqlite3.Connection) -> int:
+def recording_count(conn: sqlite3.Connection, since: str | None = None,
+                    until: str | None = None) -> int:
     """How many tapes are mirrored, without reading their tracks."""
-    return conn.execute("SELECT COUNT(*) FROM recordings").fetchone()[0]
+    where, params = daterange.clause('"date"', since, until)
+    return conn.execute(
+        f"SELECT COUNT(*) FROM recordings{where}", params).fetchone()[0]  # nosec B608
 
 
 def track_count(conn: sqlite3.Connection) -> int:
@@ -189,7 +193,8 @@ def recordings(conn: sqlite3.Connection) -> list[dict]:
     return list(out.values())
 
 
-def uploader_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def uploader_counts(conn: sqlite3.Connection, since: str | None = None,
+                    until: str | None = None) -> dict[str, int]:
     """who posted -> how many of their tapes we hold, most prolific first.
 
     The credits. Counted in SQL rather than tallied from :func:`recordings` because the export
@@ -199,10 +204,16 @@ def uploader_counts(conn: sqlite3.Connection) -> dict[str, int]:
     Tapes whose uploader is blank are absent rather than grouped under "": an unknown taper is
     not a taper, and a credits list with a nameless entry at the top invites someone to read it
     as one.
+
+    ``since``/``until`` narrow to an inclusive window, so a ranged export credits the tapers whose
+    tapes are actually in it. Crediting someone for a 1998 reel on a page covering 2010 onward
+    names them for work the reader cannot see, which is a worse failure than omitting them.
     """
+    where, params = daterange.clause('"date"', since, until)
+    joiner = "AND" if where else "WHERE"
     return {row["uploader"]: row["n"] for row in conn.execute(
-        "SELECT uploader, COUNT(*) AS n FROM recordings WHERE TRIM(uploader) <> '' "
-        "GROUP BY uploader ORDER BY n DESC, uploader")}
+        f"SELECT uploader, COUNT(*) AS n FROM recordings{where} "  # nosec B608
+        f"{joiner} TRIM(uploader) <> '' GROUP BY uploader ORDER BY n DESC, uploader", params)}
 
 
 def show_types(conn: sqlite3.Connection) -> dict[str, str]:

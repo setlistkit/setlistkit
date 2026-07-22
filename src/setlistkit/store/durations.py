@@ -27,6 +27,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 
+from . import daterange
 from .migrations import transaction
 
 # The columns of one performance row, in insert order, named once so the writer and the reader
@@ -143,24 +144,34 @@ def replace_durations(conn: sqlite3.Connection,
 
 
 def _read(conn: sqlite3.Connection, table: str, columns: Sequence[str],
-          order: str) -> list[dict]:
-    """Rows back as mappings keyed by column name, booleans restored to bools."""
+          order: str, *, since: str | None = None, until: str | None = None) -> list[dict]:
+    """Rows back as mappings keyed by column name, booleans restored to bools.
+
+    ``since``/``until`` narrow to an inclusive window on the table's own ``date`` column. Every
+    table read through here has one; the clause is built by :mod:`setlistkit.store.daterange`, the
+    same place ``slkit dump`` gets its range from, so the two commands cannot disagree about what
+    "on or after" means.
+    """
+    where, params = daterange.clause('"date"', since, until)
     return [{column: (bool(row[column]) if column in _BOOLEAN_COLUMNS and row[column] is not None
                       else row[column])
              for column in columns}
             for row in conn.execute(
-                f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}")]   # nosec B608
+                f"SELECT {', '.join(columns)} FROM {table}{where} "  # nosec B608
+                f"ORDER BY {order}", params)]
 
 
-def performances(conn: sqlite3.Connection) -> list[dict]:
-    """Every stored performance, in play order.
+def performances(conn: sqlite3.Connection, since: str | None = None,
+                 until: str | None = None) -> list[dict]:
+    """Every stored performance, in play order, optionally narrowed to a date window.
 
     Ordered rather than left to rowid order, for the reason the mirror is: this is what the export
     reads, and a bundle whose row order depends on insertion order is one whose golden-file test
     passes or fails on something that is not the data.
     """
     return _read(conn, "performance_durations", _PERFORMANCE_COLUMNS,
-                 "date, set_label, position")
+                 "date, set_label, position",
+                 since=since, until=until)
 
 
 def song_length_stats(conn: sqlite3.Connection) -> list[dict]:
@@ -168,17 +179,22 @@ def song_length_stats(conn: sqlite3.Connection) -> list[dict]:
     return _read(conn, "song_length_stats", _STAT_COLUMNS, "median_seconds DESC, song")
 
 
-def duration_review(conn: sqlite3.Connection) -> list[dict]:
+def duration_review(conn: sqlite3.Connection, since: str | None = None,
+                    until: str | None = None) -> list[dict]:
     """Tapes we hold and could not time, worst mismatch first."""
-    return _read(conn, "duration_review", _REVIEW_COLUMNS, "date, identifier")
+    return _read(conn, "duration_review", _REVIEW_COLUMNS, "date, identifier",
+                 since=since, until=until)
 
 
-def duration_abandoned(conn: sqlite3.Connection) -> list[dict]:
+def duration_abandoned(conn: sqlite3.Connection, since: str | None = None,
+                       until: str | None = None) -> list[dict]:
     """Tapes with one track holding a whole set. Nothing to do about them, but they are held."""
-    return _read(conn, "duration_abandoned", _ABANDONED_COLUMNS, "date, identifier")
+    return _read(conn, "duration_abandoned", _ABANDONED_COLUMNS, "date, identifier",
+                 since=since, until=until)
 
 
-def duration_edges(conn: sqlite3.Connection) -> list[dict]:
+def duration_edges(conn: sqlite3.Connection, since: str | None = None,
+                   until: str | None = None) -> list[dict]:
     """Every edge case recorded, with its detail back as the mapping it went in as.
 
     Ordered by what the row SAYS rather than by ``id``, though the id is right there. Insertion
@@ -187,7 +203,8 @@ def duration_edges(conn: sqlite3.Connection) -> list[dict]:
     export's row order depend on a decision made two modules away, and a golden file that fails
     when that decision changes is a golden file that fails for the wrong reason.
     """
-    rows = _read(conn, "duration_edges", _EDGE_COLUMNS, "kind, date, identifier, song")
+    rows = _read(conn, "duration_edges", _EDGE_COLUMNS, "kind, date, identifier, song",
+                 since=since, until=until)
     for row in rows:
         row["detail"] = json.loads(row.pop("detail_json"))
     return rows

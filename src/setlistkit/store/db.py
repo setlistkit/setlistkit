@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import __version__
-from . import corpus, durations, recordings
+from . import corpus, daterange, durations, recordings
 from .migrations import apply_pending, schema_version, transaction
 from .raw_cache import RawCache
 
@@ -29,11 +29,6 @@ VOLATILE_COLUMNS = frozenset({
 })
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-# Dates are stored as YYYY-MM-DD strings, which sort lexicographically, so a range is a plain
-# string comparison. That only holds for the full shape: `--until 2023` would compare below every
-# date IN 2023 and quietly exclude the year somebody asked for. Checked rather than trusted.
-_DATE_SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # table -> the SQL expression giving a row's date. A table absent from here has no date axis and
 # prints in full under any range, saying so in its header.
@@ -96,40 +91,17 @@ def _select_sql(table: str, columns: list[str], where: str = "") -> str:
     return f"SELECT {select} FROM {_quote(table)}{where} ORDER BY {select}"  # nosec B608
 
 
-def _check_date(value: str | None, flag: str) -> str | None:
-    """Reject a date that is not YYYY-MM-DD, rather than silently answering the wrong question."""
-    if value is None:
-        return None
-    if not _DATE_SHAPE.match(value):
-        raise ValueError(f"{flag} wants a YYYY-MM-DD date, not {value!r}")
-    return value
-
-
 def _where(table: str, since: str | None, until: str | None) -> tuple[str, tuple]:
     """The date-range clause for one table, as ``(sql, params)``. Empty when it does not apply.
 
-    Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
-    people reach for when they already suspect something is wrong -- an end date that means "up to
-    but not including" is a second thing to be wrong about while debugging the first.
+    The table's date axis is looked up here; the comparison itself is built by
+    :mod:`setlistkit.store.daterange`, which is also what ``export`` narrows a bundle with. A table
+    absent from the map has no date axis and is left whole.
     """
     expr = _DATE_EXPR.get(table)
-    if expr is None or (since is None and until is None):
+    if expr is None:
         return "", ()
-    tests, params = [], []
-    if since is not None:
-        tests.append(f"{expr} >= ?")
-        params.append(since)
-    if until is not None:
-        tests.append(f"{expr} <= ?")
-        params.append(until)
-    return " WHERE " + " AND ".join(tests), tuple(params)
-
-
-def _range_label(since: str | None, until: str | None) -> str:
-    """How a range reads in a table header, in whichever of its three forms was asked for."""
-    if since is not None and until is not None:
-        return f"{since}..{until}"
-    return f"from {since}" if since is not None else f"through {until}"
+    return daterange.clause(expr, since, until)
 
 
 class _Namespace:
@@ -187,9 +159,9 @@ class _Corpus(_Namespace):
         """Replace the whole corpus with ``shows``, in one transaction. Returns how many."""
         return corpus.replace_shows(self.conn, shows)
 
-    def shows(self) -> list[dict]:
+    def shows(self, *, since: str | None = None, until: str | None = None) -> list[dict]:
         """Every stored show, by date, sets and encore in the order they were played."""
-        return corpus.shows(self.conn)
+        return corpus.shows(self.conn, since, until)
 
     def show_count(self) -> int:
         """How many shows are stored, without reading their setlists."""
@@ -227,9 +199,10 @@ class _Tapes(_Namespace):
         """Replace every tape's written tracklist. Returns ``(listings, entries)`` written."""
         return recordings.replace_listings(self.conn, by_tape)
 
-    def recording_count(self) -> int:
+    def recording_count(self, *, since: str | None = None,
+                        until: str | None = None) -> int:
         """How many tapes are mirrored, without reading their tracks."""
-        return recordings.recording_count(self.conn)
+        return recordings.recording_count(self.conn, since, until)
 
     def track_count(self) -> int:
         """How many tracks are mirrored."""
@@ -255,9 +228,10 @@ class _Tapes(_Namespace):
         """reading -> how many tapes it explained, including the ones that did not line up."""
         return recordings.listing_readings(self.conn)
 
-    def uploader_counts(self) -> dict[str, int]:
+    def uploader_counts(self, *, since: str | None = None,
+                        until: str | None = None) -> dict[str, int]:
         """who posted -> how many of their tapes we hold, most prolific first."""
-        return recordings.uploader_counts(self.conn)
+        return recordings.uploader_counts(self.conn, since, until)
 
 
 class _Durations(_Namespace):
@@ -270,25 +244,27 @@ class _Durations(_Namespace):
         """Replace every durations table in one transaction. Returns a count per table."""
         return durations.replace_durations(self.conn, performance_rows, stat_rows, **kwargs)
 
-    def performances(self) -> list[dict]:
+    def performances(self, *, since: str | None = None,
+                     until: str | None = None) -> list[dict]:
         """Every stored performance, in play order."""
-        return durations.performances(self.conn)
+        return durations.performances(self.conn, since, until)
 
     def song_length_stats(self) -> list[dict]:
         """Every song's length statistics, longest first."""
         return durations.song_length_stats(self.conn)
 
-    def review(self) -> list[dict]:
+    def review(self, *, since: str | None = None, until: str | None = None) -> list[dict]:
         """Tapes we hold and could not time."""
-        return durations.duration_review(self.conn)
+        return durations.duration_review(self.conn, since, until)
 
-    def abandoned(self) -> list[dict]:
+    def abandoned(self, *, since: str | None = None,
+                  until: str | None = None) -> list[dict]:
         """Tapes with one track holding a whole set."""
-        return durations.duration_abandoned(self.conn)
+        return durations.duration_abandoned(self.conn, since, until)
 
-    def edges(self) -> list[dict]:
+    def edges(self, *, since: str | None = None, until: str | None = None) -> list[dict]:
         """Every edge case recorded, with its detail as a mapping."""
-        return durations.duration_edges(self.conn)
+        return durations.duration_edges(self.conn, since, until)
 
     def withheld_counts(self) -> dict[str, int]:
         """reason -> how many stored performances do not vote for their song's nominal length."""
@@ -403,11 +379,11 @@ class Store:
         it and how many rows it holds in total, so a table with no date axis reads as "all of it,
         because there is no date to filter on" rather than as a table that happens to look small.
         """
-        since = _check_date(since, "--since")
-        until = _check_date(until, "--until")
+        since = daterange.check_date(since, "--since")
+        until = daterange.check_date(until, "--until")
         ranged = since is not None or until is not None
         lines = [f"# {DB_FILENAME} — contents"
-                 + (f" ({_range_label(since, until)})" if ranged else ""), ""]
+                 + (f" ({daterange.label(since, until)})" if ranged else ""), ""]
         for table in self.table_names():
             cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({_quote(table)})")]
             shown = [c for c in cols if c not in VOLATILE_COLUMNS]
@@ -435,4 +411,4 @@ class Store:
         if table not in _DATE_EXPR:
             return f"{count} rows, no date axis"
         total = self.conn.execute(_count_sql(table)).fetchone()[0]
-        return f"{count} of {total} rows, {_range_label(since, until)}"
+        return f"{count} of {total} rows, {daterange.label(since, until)}"

@@ -676,3 +676,41 @@ def as_row(performance: Performance) -> dict:
         "sandwich_total_seconds": None if sandwich is None else sandwich.total_seconds,
         "is_longest_part": None if sandwich is None else sandwich.is_longest_part,
     }
+
+
+def from_row(row: Mapping) -> Performance:
+    """A stored row back as a :class:`Performance`. The exact inverse of :func:`as_row`.
+
+    Beside its inverse so the two are read together, because they are only correct as a pair and
+    every field of a Performance is a stored column precisely so this can exist.
+
+    ``export`` needs it to answer a ranged request: song statistics are computed over every year a
+    song was played, so the stored ones are the wrong answer for a window and there is nothing in
+    the database to read instead. The alternative was to re-aggregate the stored rows directly,
+    which would mean a second reading of ``withheld`` -- a priority ordering over four columns --
+    and two implementations of "why was this held back" is the drift that property exists to
+    prevent. Rebuilding the type and handing it to :func:`song_stats` keeps one of each.
+
+    ``withheld`` is deliberately NOT read off the row. It is recomputed by the property from the
+    fields it derives from, which makes the stored column redundant here on purpose: if the two
+    ever disagree, the stored one is stale, and a test asserts they do not.
+    """
+    sandwich = None
+    if row["double_play_parts"] is not None:
+        sandwich = Sandwich(parts=row["double_play_parts"],
+                            total_seconds=row["sandwich_total_seconds"],
+                            is_longest_part=bool(row["is_longest_part"]))
+    return Performance(
+        slot=Slot(date=row["date"], set_label=row["set_label"],
+                  position=row["position"], song=row["song"]),
+        seconds=row["seconds"],
+        consensus=Consensus(
+            n_tapes=row["n_tapes"], n_tapes_seen=row["n_tapes_seen"],
+            n_ballots=row["n_ballots"], spread_seconds=row["spread_seconds"],
+            spread_all_tapes=row["spread_all_tapes"], suspect=bool(row["suspect"]),
+            resolved_by=row["resolved_by"]),
+        segued=bool(row["segued"]),
+        show_type=row["show_type"],
+        excluded=row["excluded"],
+        sandwich=sandwich,
+    )

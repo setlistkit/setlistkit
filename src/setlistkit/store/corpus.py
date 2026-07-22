@@ -29,6 +29,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping
 
+from . import daterange
 from .migrations import transaction
 
 # The sections of a night, as stored. Sets are numbered from 1 in the order they were played;
@@ -81,16 +82,23 @@ def replace_shows(conn: sqlite3.Connection, records: Iterable[Mapping]) -> int:
     return len(rows)
 
 
-def shows(conn: sqlite3.Connection) -> list[dict]:
+def shows(conn: sqlite3.Connection, since: str | None = None,
+          until: str | None = None) -> list[dict]:
     """Every stored show, by date, with its sets and encore in the order they were played.
 
     Returns the record shape the merge produced, minus what was never stored: no ``year`` and no
     ``n_songs``. A caller that wants those asks the catalog for them, which is the layer that
     owns both answers. ``reason`` is present only where one was recorded, so a plain merged show
     and a manual override are still distinguishable after a round trip.
+
+    ``since``/``until`` narrow to an inclusive window. Only the header query is filtered: entries
+    are attached by date to a show already in ``out`` and anything outside the window has no show
+    to attach to, so the existing orphan skip below does the rest.
     """
+    where, params = daterange.clause('"date"', since, until)
     out: dict[str, dict] = {}
-    for row in conn.execute("SELECT date, source, identifier, reason FROM shows ORDER BY date"):
+    for row in conn.execute("SELECT date, source, identifier, reason FROM shows"  # nosec B608
+                            f"{where} ORDER BY date", params):
         record = {"date": row["date"], "source": row["source"], "identifier": row["identifier"],
                   "sets": [], "encore": []}
         if row["reason"] is not None:
