@@ -62,3 +62,26 @@ api_key_file = "~/.config/setlistkit/setlistfm.api_key"
 # Only used when setlistkit[report] is installed.
 out_dir = "../site"
 templates = "../templates"
+
+[reports.songbook]
+# Settled 2026-07-22 (docs/plans/2026-07-22-songbook-design.md, "The publishing window is a
+# choice, not a limitation"): the Songbook publishes roughly 2020 onward, not the full corpus
+# -- its tiers are SHARE OF SHOWS IN THE WINDOW, so a wider window flattens every percentage by
+# construction, which is not true of the Tape Measure and is the reason the two pages do not
+# share one window.
+#
+# anchor = "last_show" rather than a literal date: the window is a pure function of the data,
+# so two runs over the same store agree (the golden-file test depends on this) and the window
+# slides forward on its own as new shows are ingested, with nobody editing this file to do it.
+[reports.songbook.window]
+anchor = "last_show"
+# Six years is the outer edge of the range slice 3 retuned the tier thresholds against
+# (docs/plans/2026-07-22-songbook-slice-3-tuning-plan.md). Worked example: anchor 2026-06-14
+# minus P6Y resolves to 2020-06-14. Verify with:
+#   slkit export --config slkit.toml --explain
+#
+# PROVISIONAL as of 2026-07-22: approved pending Task 7's real-data acceptance checks (>=10
+# top-tier songs at this window, >=7 at an 18-month window), run against a real songbook.json.
+# Not settled until those pass -- see Task 6's GATE note. If they fail, this value changes.
+since_back = "P6Y"
+# until omitted: the window's end is the anchor itself.
