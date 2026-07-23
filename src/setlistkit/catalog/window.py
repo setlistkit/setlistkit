@@ -30,6 +30,7 @@ months is not (see the CLAMPING section of this module and the design doc's "The
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 
 import isodate
 
@@ -79,3 +80,28 @@ def parse_offset(text: str):
             "(see the offset grammar in docs/plans/2026-07-22-songbook-design.md)"
         )
     return isodate.parse_duration(text)
+
+
+def _apply_offset(anchor: date, text: str) -> tuple[date, str | None]:
+    """``anchor - offset``, plus a human-readable note when clamping fired.
+
+    Subtracting a calendar month from March 31st has no honest answer -- February has no 31st --
+    and `isodate.Duration`'s date arithmetic gives the same answer `dateutil.relativedelta` does:
+    take the last valid day of the target month (see the module docstring's CLAMPING section).
+    That is a real information loss, not arithmetic, so this function reports it rather than
+    letting a caller discover it by comparing days itself. A day/week offset (`isodate` returns a
+    plain `timedelta` for those) is exact and can never clamp, so the note is always `None` there.
+    """
+    offset = parse_offset(text)
+    result = anchor - offset
+    if isinstance(offset, timedelta) or result.day == anchor.day:
+        return result, None
+    return result, (f"{anchor.isoformat()} - {text} clamped to {result.isoformat()} "
+                    f"({result.strftime('%B')} has no {anchor.day}{_ordinal(anchor.day)})")
+
+
+def _ordinal(n: int) -> str:
+    """"31" -> "st", for the clamp note's "February has no 31st"."""
+    if 11 <= n % 100 <= 13:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
