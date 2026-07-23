@@ -173,7 +173,7 @@ def _canonical_per_show(kept: list[Mapping],
 
 
 def _assemble(per_show: list[tuple[str, list[str]]],
-              norm_to_canon: Mapping[str, str]) -> tuple[list[str], list[int], list[dict], list]:
+              norm_to_canon: Mapping[str, str]) -> tuple[list[str], list[int], list[dict], list[str]]:
     """Turn canonicalized per-show titles into the bundle's ``vocab``/``unknown``/``shows`` arrays.
 
     Split from :func:`bundle` for the same reason as :func:`_floor_shows` and
