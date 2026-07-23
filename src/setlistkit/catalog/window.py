@@ -243,3 +243,35 @@ def _describe_offset(text: str) -> str:
     parts = [f"{count} calendar {_UNIT_NAME[unit]}{'' if count == '1' else 's'}"
              for count, unit in re.findall(r"(\d+)([YMD])", text)]
     return " and ".join(parts) + " before the anchor"
+
+
+_WINDOW_KEYS = {"anchor", "since_back", "until_back", "since_from"}
+
+
+def window_spec_from_config(config, report_name: str) -> WindowSpec | None:
+    """`[reports.<report_name>.window]` as a `WindowSpec`, or `None` if the stanza is absent.
+
+    `Config.section()` already returns `{}` for a missing path, which is indistinguishable from
+    an explicit empty stanza -- both mean "no configured window here", and every caller falls
+    back the same way (to open flags, or to "nothing to explain") either way.
+
+    Shape is checked here (unknown keys); whether the shape is INTERNALLY consistent (both
+    `since_back` and `since_from` set, or neither) is checked in `resolve()`/`resolve_explained()`
+    instead, the same lazy-validation pattern `config.py` already uses for everything past
+    `data_root`/`user_agent` -- a report's config is only as broken as resolving it proves it to
+    be, and a report nobody has asked to resolve yet should not block the whole config from
+    loading.
+    """
+    raw = config.section("reports", report_name, "window")
+    if not raw:
+        return None
+    extra = set(raw) - _WINDOW_KEYS
+    if extra:
+        raise WindowError(
+            f"[reports.{report_name}.window] has unknown key(s): {', '.join(sorted(extra))} "
+            f"(want any of {', '.join(sorted(_WINDOW_KEYS))})"
+        )
+    return WindowSpec(anchor=str(raw.get("anchor", "last_show")),
+                      since_back=raw.get("since_back"),
+                      until_back=raw.get("until_back"),
+                      since_from=raw.get("since_from"))

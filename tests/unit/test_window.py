@@ -9,11 +9,13 @@ section, is.
 """
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from setlistkit.catalog.window import (WindowError, WindowSpec, _apply_offset, parse_offset,
-                                       resolve, resolve_explained)
+                                       resolve, resolve_explained, window_spec_from_config)
+from setlistkit.config import Config
 
 # design doc: docs/plans/2026-07-22-songbook-design.md, "The offset grammar"
 ACCEPT = ["P18M", "P3Y6M", "P2W", "P1Y", "P1Y6M", "P30D", "P3Y"]
@@ -173,3 +175,45 @@ def test_resolve_explained_reports_a_since_from_truncation_in_words():
     resolved = resolve_explained(spec, first="2020-01-01", last="2026-06-14")
     assert resolved.since.value == "2026-01-01"
     assert resolved.since.words == "start of the anchor's year"
+
+
+def _config(reports=None):
+    return Config(data_root=Path("/unused"), user_agent="x", source_path=Path("/unused.toml"),
+                  raw={"reports": reports or {}})
+
+
+def test_a_report_with_no_window_stanza_returns_none():
+    assert window_spec_from_config(_config(), "songbook") is None
+
+
+def test_a_configured_window_becomes_a_windowspec():
+    config = _config({"songbook": {"window": {"since_back": "P18M"}}})
+    spec = window_spec_from_config(config, "songbook")
+    assert spec == WindowSpec(anchor="last_show", since_back="P18M")
+
+
+def test_anchor_defaults_to_last_show_when_omitted():
+    config = _config({"ytd": {"window": {"since_from": "year"}}})
+    spec = window_spec_from_config(config, "ytd")
+    assert spec.anchor == "last_show"
+
+
+def test_an_explicit_anchor_is_carried_through():
+    config = _config({"r": {"window": {"anchor": "2023-01-01", "since_back": "P1M"}}})
+    assert window_spec_from_config(config, "r").anchor == "2023-01-01"
+
+
+def test_an_unknown_key_in_a_window_stanza_is_a_config_error():
+    config = _config({"songbook": {"window": {"since_back": "P18M", "oops": "typo"}}})
+    with pytest.raises(WindowError, match="oops"):
+        window_spec_from_config(config, "songbook")
+
+
+def test_only_the_named_report_is_read():
+    """A malformed sibling report's window must not break reading THIS report's window -- each
+    report's config errors are that report's problem, discovered when it is actually resolved."""
+    config = _config({
+        "songbook": {"window": {"since_back": "P18M"}},
+        "broken": {"window": {"nonsense_key": True}},
+    })
+    assert window_spec_from_config(config, "songbook").since_back == "P18M"
