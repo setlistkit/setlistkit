@@ -30,6 +30,7 @@ months is not (see the CLAMPING section of this module and the design doc's "The
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 import isodate
@@ -105,3 +106,140 @@ def _ordinal(n: int) -> str:
     if 11 <= n % 100 <= 13:
         return "th"
     return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+# design doc: "since_from = 'year' # start of the anchor's year"
+_TRUNCATE_UNITS = ("year", "quarter", "month")
+
+_UNIT_NAME = {"Y": "year", "M": "month", "D": "day"}
+
+# A literal YYYY-MM-DD anchor, checked the same way store/daterange.py checks --since/--until:
+# a prefix like "2023" sorts below every date IN 2023 and would answer a question nobody asked.
+_ANCHOR_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@dataclass(frozen=True)
+class WindowSpec:
+    """One `[reports.<name>.window]` stanza, validated in shape but not yet resolved to dates.
+
+    `since_back`/`until_back` are offset literals (Task 2's grammar); `since_from` is the one
+    truncation this project accepts ("year"/"quarter"/"month") as an alternative way to spell a
+    window's start. Exactly one of `since_back`/`since_from` must be set -- see `resolve()`.
+    `until_back` is optional: omitted, `until` is the anchor itself, which is what lets the
+    simplest report ("everything back to N months ago") skip a key entirely.
+    """
+
+    anchor: str = "last_show"
+    since_back: str | None = None
+    until_back: str | None = None
+    since_from: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedEndpoint:
+    """One resolved date, plus how it was produced -- what `--explain` restates in words."""
+
+    value: str                    # YYYY-MM-DD
+    words: str                    # "18 calendar months before the anchor", "the anchor itself"
+    clamp_note: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedWindow:
+    """A window's two endpoints, each carrying its own explanation."""
+
+    since: ResolvedEndpoint
+    until: ResolvedEndpoint
+
+    def as_dates(self) -> tuple[str, str]:
+        """What `resolve()` returns -- the plain answer, with the explanation dropped."""
+        return self.since.value, self.until.value
+
+
+def resolve_explained(spec: WindowSpec, *, first: str, last: str) -> ResolvedWindow:
+    """A window's two endpoints, each resolved INDEPENDENTLY from the anchor, with its own words.
+
+    `first`/`last` are the corpus's earliest/latest stored show dates (YYYY-MM-DD), needed only
+    when `spec.anchor` is `last_show`/`first_show`. Never chained: `until` is computed straight
+    from `anchor`, never from the already-resolved `since` -- see the module docstring's CLAMPING
+    section and the design doc's "resolve every endpoint independently from the anchor."
+
+    This is the one true resolution path; `resolve()` is a thin wrapper over it, so the plain
+    answer and the `--explain` answer can never drift apart from each other.
+    """
+    if spec.since_back is not None and spec.since_from is not None:
+        raise WindowError("a window stanza may set since_back or since_from, not both")
+    if spec.since_back is None and spec.since_from is None:
+        raise WindowError("a window stanza needs since_back or since_from")
+
+    anchor_date = _resolve_anchor(spec.anchor, first=first, last=last)
+
+    if spec.since_back is not None:
+        value, clamp = _apply_offset(anchor_date, spec.since_back)
+        since = ResolvedEndpoint(value.isoformat(), _describe_offset(spec.since_back), clamp)
+    else:
+        value = _truncate(anchor_date, spec.since_from)
+        since = ResolvedEndpoint(value.isoformat(), f"start of the anchor's {spec.since_from}")
+
+    if spec.until_back is not None:
+        value, clamp = _apply_offset(anchor_date, spec.until_back)
+        until = ResolvedEndpoint(value.isoformat(), _describe_offset(spec.until_back), clamp)
+    else:
+        until = ResolvedEndpoint(anchor_date.isoformat(), "the anchor itself")
+
+    return ResolvedWindow(since=since, until=until)
+
+
+def resolve(spec: WindowSpec, *, first: str, last: str) -> tuple[str, str]:
+    """The window's two endpoints as plain `(since, until)` strings, both inclusive.
+
+    See `resolve_explained()` for the version that also says HOW each endpoint was produced --
+    that is what `--explain` prints.
+    """
+    return resolve_explained(spec, first=first, last=last).as_dates()
+
+
+def _resolve_anchor(anchor: str, *, first: str, last: str) -> date:
+    """`last_show`/`first_show`/an explicit date, as a `datetime.date`.
+
+    `today` is deliberately not a branch here: the design doc refuses it explicitly, because an
+    anchor tied to wall-clock time makes the resolved window depend on WHEN a report is built
+    rather than only on what the store holds, and two runs over an identical store could then
+    disagree. Falling through to the "not a valid anchor" error is what rejects it -- `"today"`
+    matches neither keyword and does not match `_ANCHOR_DATE`, so no special case is needed to
+    reject it, but a test pins the rejection explicitly anyway, since the doc calls it out by name.
+    """
+    if anchor == "last_show":
+        return date.fromisoformat(last)
+    if anchor == "first_show":
+        return date.fromisoformat(first)
+    if _ANCHOR_DATE.match(anchor):
+        return date.fromisoformat(anchor)
+    raise WindowError(
+        f"{anchor!r} is not a valid window anchor -- want last_show, first_show, or YYYY-MM-DD. "
+        "'today' is deliberately not accepted: it would make a window depend on wall-clock time "
+        "instead of only on the store, and two runs over the same data could then disagree."
+    )
+
+
+def _truncate(anchor: date, unit: str) -> date:
+    """The start of `anchor`'s year/quarter/month -- what `since_from` spells."""
+    if unit == "year":
+        return anchor.replace(month=1, day=1)
+    if unit == "quarter":
+        return anchor.replace(month=3 * ((anchor.month - 1) // 3) + 1, day=1)
+    if unit == "month":
+        return anchor.replace(day=1)
+    raise WindowError(
+        f"{unit!r} is not a valid since_from (want one of {', '.join(_TRUNCATE_UNITS)})"
+    )
+
+
+def _describe_offset(text: str) -> str:
+    """`"P18M"` -> `"18 calendar months before the anchor"`. Precondition: already validated."""
+    if text.endswith("W"):
+        count = text[1:-1]
+        return f"{count} calendar week{'' if count == '1' else 's'} before the anchor"
+    parts = [f"{count} calendar {_UNIT_NAME[unit]}{'' if count == '1' else 's'}"
+             for count, unit in re.findall(r"(\d+)([YMD])", text)]
+    return " and ".join(parts) + " before the anchor"

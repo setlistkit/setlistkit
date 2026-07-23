@@ -12,7 +12,8 @@ from datetime import date
 
 import pytest
 
-from setlistkit.catalog.window import WindowError, _apply_offset, parse_offset
+from setlistkit.catalog.window import (WindowError, WindowSpec, _apply_offset, parse_offset,
+                                       resolve, resolve_explained)
 
 # design doc: docs/plans/2026-07-22-songbook-design.md, "The offset grammar"
 ACCEPT = ["P18M", "P3Y6M", "P2W", "P1Y", "P1Y6M", "P30D", "P3Y"]
@@ -83,3 +84,92 @@ def test_clamping_does_not_round_trip():
     is where an earlier `-P1M` step (see Task 4's independence test) came from."""
     once, _ = _apply_offset(date(2026, 2, 28), "P1M")
     assert once == date(2026, 1, 28)
+
+
+def test_anchor_last_show_uses_the_latest_stored_date():
+    since, until = resolve(WindowSpec(since_back="P1M"), first="2020-01-01", last="2026-06-14")
+    assert until == "2026-06-14"
+    assert since == "2026-05-14"
+
+
+def test_anchor_first_show_uses_the_earliest_stored_date():
+    spec = WindowSpec(anchor="first_show", since_from="year")
+    since, until = resolve(spec, first="2020-03-14", last="2026-06-14")
+    assert until == "2020-03-14"
+    assert since == "2020-01-01"
+
+
+def test_anchor_accepts_an_explicit_literal_date():
+    spec = WindowSpec(anchor="2023-01-01", since_back="P30D")
+    since, until = resolve(spec, first="2020-01-01", last="2026-01-01")
+    assert until == "2023-01-01"
+    assert since == "2022-12-02"
+
+
+def test_today_is_not_an_accepted_anchor():
+    """Deliberate, per the design doc: an anchor must be a pure function of the stored data, or
+    two runs over the same store could disagree."""
+    spec = WindowSpec(anchor="today", since_back="P1M")
+    with pytest.raises(WindowError, match="today"):
+        resolve(spec, first="2020-01-01", last="2026-01-01")
+
+
+def test_an_unrecognized_anchor_is_rejected():
+    spec = WindowSpec(anchor="not-a-date", since_back="P1M")
+    with pytest.raises(WindowError):
+        resolve(spec, first="2020-01-01", last="2026-01-01")
+
+
+def test_until_defaults_to_the_anchor_itself_when_until_back_is_omitted():
+    spec = WindowSpec(since_back="P18M")
+    _since, until = resolve(spec, first="2020-01-01", last="2026-06-14")
+    assert until == "2026-06-14"
+
+
+def test_a_stanza_needs_since_back_or_since_from():
+    with pytest.raises(WindowError):
+        resolve(WindowSpec(), first="2020-01-01", last="2026-01-01")
+
+
+def test_since_back_and_since_from_together_is_a_config_error():
+    spec = WindowSpec(since_back="P1M", since_from="year")
+    with pytest.raises(WindowError):
+        resolve(spec, first="2020-01-01", last="2026-01-01")
+
+
+def test_endpoints_resolve_independently_from_the_anchor_never_chained():
+    """A test that would FAIL if `until` were computed by extending FROM `since` instead of
+    independently from the anchor.
+
+    `since_back="P1M"` from anchor `2026-03-31` clamps to `2026-02-28` (February has no 31st), so
+    `since`'s day-of-month is no longer 31 -- three days were lost to the clamp. A chained
+    implementation computing `until = since - P2M`-worth-of-remaining-offset from that
+    ALREADY-CLAMPED date would land on `2026-01-28` (see Task 3's non-invertibility test:
+    `2026-02-28 - P1M -> 2026-01-28`). Resolving `until` independently, straight from the
+    original anchor (`2026-03-31 - P2M`), lands on `2026-01-31` instead, because January has a
+    31st and the anchor's own day survives when nothing forces a clamp on THAT subtraction. The
+    two answers disagree -- which is what makes this test meaningful rather than passing no
+    matter which way it was implemented. See the design doc's "resolve every endpoint
+    independently from the anchor, and never chain offsets."
+    """
+    spec = WindowSpec(anchor="2026-03-31", since_back="P1M", until_back="P2M")
+    since, until = resolve(spec, first="1990-01-01", last="2030-01-01")
+    assert since == "2026-02-28"
+    assert until == "2026-01-31"   # NOT "2026-01-28", which chaining through `since` would give
+
+
+def test_resolve_explained_carries_the_words_and_clamp_note_resolve_does_not():
+    spec = WindowSpec(since_back="P18M")
+    resolved = resolve_explained(spec, first="2020-01-01", last="2026-06-14")
+    assert resolved.since.value == "2024-12-14"
+    assert resolved.since.words == "18 calendar months before the anchor"
+    assert resolved.until.value == "2026-06-14"
+    assert resolved.until.words == "the anchor itself"
+    assert resolved.as_dates() == ("2024-12-14", "2026-06-14")
+
+
+def test_resolve_explained_reports_a_since_from_truncation_in_words():
+    spec = WindowSpec(since_from="year")
+    resolved = resolve_explained(spec, first="2020-01-01", last="2026-06-14")
+    assert resolved.since.value == "2026-01-01"
+    assert resolved.since.words == "start of the anchor's year"
