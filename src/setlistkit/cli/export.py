@@ -10,37 +10,52 @@ directory for seven files and a raw cache, and so it could only ever run on the 
 the pipeline.
 
 LIKE ``derive``, IT READS THE STORE AND NEVER THE CACHE, for the same reason and with the same test
-holding it. It reads only tables ``derive`` wrote, plus the corpus, so an export is a view of the
-last derivation and cannot quietly recompute a number that disagrees with the stored one.
+holding it: the raw cache is gitignored, so anything reading it works on a workstation and comes
+back empty in production.
 
-The one thing it computes rather than reads is the structural features, because they are a function
-of the setlists alone and there is no features table to read them from. They come from the STORED
-shows, so this stays true either way.
+The rule that matters is not "reads only tables derive wrote" -- the Songbook bundle disproves
+that on its first day, computed ENTIRELY at export time from the corpus, with no ``derive`` pass
+behind it at all. The rule is: NEVER PUBLISH A NUMBER THAT DISAGREES WITH A STORED ONE.
+``features.py`` already lived under that rule before the Songbook did -- there has never been a
+features table, and nothing in ``derive`` computes one -- so a windowed Tape Measure's structural
+profiles were always computed here, from the stored shows, the one thing this module has always
+computed rather than read. The ranged Tape Measure's statistics live under the same rule:
+recomputed, yes, but by calling the same function ``derive`` itself calls
+(:func:`~setlistkit.catalog.lengths.song_stats`), so a ranged bundle and the stored table can
+differ in population but never in method -- see :func:`_stats_for`.
+
+The Songbook has no stored table to differ from at all -- there is no play-frequency number
+``derive`` has ever published -- so for it the rule above is a design constraint, not something
+any unit test can check: it PASSES whether or not the bundle is right. What actually holds a
+Songbook export accountable is the golden file locking its shape and the intersection parity gate
+checking its numbers against a second, independent pipeline (see
+``scripts/songbook_parity.py``). Do not point at this docstring later as evidence that anything
+here was tested; it wasn't, and by its nature it can't be.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
+from ..catalog import songbook
 from ..catalog.features import song_features
 from ..catalog.lengths import from_row, song_stats
+from ..catalog.pack import load_pack
 from ..catalog.tapemeasure import Concluded, SCHEMA, bundle
 from ..store import Store, daterange
+from . import exportio
+from .common import resolve_pack_dir
 
 EXIT_OK = 0
 EXIT_NOTHING = 1
 
-# Written with a trailing newline and stable key order so the file is diffable and a change to the
-# data reads as a change to the data. Indented for the same reason: this is a file people open.
-_JSON = {"indent": 2, "sort_keys": False, "ensure_ascii": False, "default": str}
-
 
 def export(config, args) -> int:
-    """`slkit export tapemeasure`, defaulting to tapemeasure.
+    """`slkit export tapemeasure|songbook`, defaulting to tapemeasure.
 
-    Defaulting rather than requiring the noun, the way ``derive`` does. There is one bundle today.
+    Defaulting rather than requiring the noun, the way ``derive`` does. There are two bundles now,
+    and a bare `slkit export` still means the one that existed before the second one did.
     """
+    if getattr(args, "export_action", None) == "songbook":
+        return _songbook(config, args)
     return _tapemeasure(config, args)
 
 
@@ -78,7 +93,7 @@ def _tapemeasure(config, args) -> int:
     if getattr(args, "dry_run", False):
         print("dry run: nothing written")
         return EXIT_OK
-    out = _write(payload, getattr(args, "out", None) or "tapemeasure.json")
+    out = exportio.write_bundle(payload, getattr(args, "out", None) or "tapemeasure.json")
     print(f"  wrote {out} ({out.stat().st_size / 1024:.0f} KiB)")
     return EXIT_OK
 
@@ -121,20 +136,74 @@ def _nothing_message(since: str | None, until: str | None) -> str:
             "The store may hold others outside it -- `slkit store status` counts them all.")
 
 
-def _write(payload: dict, out: str) -> Path:
-    """Serialize the bundle to ``out``, creating its directory.
+def _nothing_songbook(since: str | None, until: str | None) -> str:
+    """Why an empty bundle was refused before the show floor even ran."""
+    if since is None and until is None:
+        return "nothing to export: no shows are stored. Run `slkit ingest` first."
+    return (f"nothing to export: no shows fall in {daterange.label(since, until)}. "
+            "The store may hold others outside it -- `slkit store status` counts them all.")
 
-    Written whole and replaced whole. A consumer polling this file should see the previous bundle
-    or the next one, never four megabytes of a bundle that is still being written -- which is what
-    a reader hitting a partial file gets, and it fails as a JSON parse error somewhere far from
-    here.
+
+def _nothing_songbook_below_floor(n_shows_seen: int, since: str | None,
+                                  until: str | None) -> str:
+    """Why an empty bundle was refused AFTER the show floor ran -- a different emptiness from
+    :func:`_nothing_songbook`, which fires before the floor gets a look at anything."""
+    where = "the whole corpus" if since is None and until is None else daterange.label(since, until)
+    return (f"nothing to export: all {n_shows_seen} show(s) in {where} fall below the "
+            f"{songbook.MIN_SHOW_SONGS}-entry floor (protection against truncated parses). "
+            "Nothing was written.")
+
+
+def _report_songbook(payload: dict) -> None:
+    """What went in the bundle, in the terms the page will show it in."""
+    generated = payload["generated"]
+    print(f"export songbook ({payload['schema']})")
+    window = generated["window"]
+    if window["since"] is not None or window["until"] is not None:
+        print(f"  window {daterange.label(window['since'], window['until'])}")
+    print(f"  {generated['n_shows']} show(s), {generated['first']} to {generated['last']}")
+    print(f"  {len(payload['vocab'])} distinct name(s) in this window "
+          f"({generated['catalog']} in the pack's own vocabulary)")
+    if payload["unknown"]:
+        print(f"  {len(payload['unknown'])} of them are not in the pack -- kept and flagged, "
+              "not dropped")
+    if generated["below_floor"]:
+        print(f"  {generated['below_floor']} show(s) below the {songbook.MIN_SHOW_SONGS}-entry "
+              "floor, excluded")
+    if generated["deduped"]:
+        print(f"  {generated['deduped']} repeat play(s) within a show, collapsed to one index "
+              "each")
+
+
+def _songbook(config, args) -> int:
+    """`slkit export songbook`: every show's songs, over one inclusive window.
+
+    Unlike `_tapemeasure`, nothing here is read from a `derive`-written table -- there is none.
+    The bundle is a pure function of the stored corpus and the pack's vocabulary (see
+    `catalog.songbook.bundle`), so this handler's only jobs are: resolve the window, load the
+    pack, read the corpus, and hand both to the pure function untouched.
     """
-    path = Path(out).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    scratch = path.with_name(path.name + ".partial")
-    scratch.write_text(json.dumps(payload, **_JSON) + "\n", encoding="utf-8")
-    scratch.replace(path)
-    return path
+    since = daterange.check_date(getattr(args, "since", None), "--since")
+    until = daterange.check_date(getattr(args, "until", None), "--until")
+    pack = load_pack(resolve_pack_dir(getattr(args, "pack", None), args.config))
+    with Store(config.data_root) as store:
+        store.init()
+        shows = store.corpus.shows(since=since, until=until)
+        if not shows:
+            print(_nothing_songbook(since, until))
+            return EXIT_NOTHING
+        payload = songbook.bundle(shows, normalizer=pack.normalizer, since=since, until=until,
+                                  fingerprint=exportio.fingerprint(store))
+    if payload["generated"]["n_shows"] == 0:
+        print(_nothing_songbook_below_floor(len(shows), since, until))
+        return EXIT_NOTHING
+    _report_songbook(payload)
+    if getattr(args, "dry_run", False):
+        print("dry run: nothing written")
+        return EXIT_OK
+    out = exportio.write_bundle(payload, getattr(args, "out", None) or "songbook.json")
+    print(f"  wrote {out} ({out.stat().st_size / 1024:.0f} KiB)")
+    return EXIT_OK
 
 
 def _report(payload: dict) -> None:
