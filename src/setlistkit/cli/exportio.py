@@ -22,6 +22,9 @@ import hashlib
 import json
 from pathlib import Path
 
+from ..catalog import window
+from ..store import daterange
+
 # Written with a trailing newline and stable key order so the file is diffable and a change to the
 # data reads as a change to the data. Indented for the same reason: this is a file people open.
 _JSON = {"indent": 2, "sort_keys": False, "ensure_ascii": False, "default": str}
@@ -54,3 +57,25 @@ def fingerprint(store) -> str:
     dates = store.corpus.show_sources().keys()
     basis = f"{count}:{max(dates) if dates else ''}"
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
+
+def resolve_window(config, report_name: str, *, since_flag: str | None, until_flag: str | None,
+                   first: str, last: str) -> tuple[str | None, str | None]:
+    """The effective `(since, until)` for one report: an explicit flag beats a configured window.
+
+    Per endpoint, not all-or-nothing -- `--since` alone overrides only the configured start, so a
+    one-off "just push the end date back a bit" run does not also have to retype the start. See
+    the design doc's "flags still win when present, because the one-off case is real."
+
+    `first`/`last` are the corpus's earliest/latest stored show dates, needed only when the
+    configured window's anchor is `last_show`/`first_show` (see `catalog.window.resolve`). A
+    report with no `[reports.<name>.window]` stanza and no flags returns `(None, None)` -- the
+    same unbounded window `slkit export` has always defaulted to.
+    """
+    spec = window.window_spec_from_config(config, report_name)
+    cfg_since = cfg_until = None
+    if spec is not None:
+        cfg_since, cfg_until = window.resolve(spec, first=first, last=last)
+    since = daterange.check_date(since_flag, "--since") if since_flag is not None else cfg_since
+    until = daterange.check_date(until_flag, "--until") if until_flag is not None else cfg_until
+    return since, until
