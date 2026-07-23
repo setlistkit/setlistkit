@@ -95,7 +95,17 @@ def _explain(config, _args) -> int:
 
 
 def _explain_one(store, config, name: str, first: str, last: str) -> None:
-    """One report's window: its literals restated in words, its resolved dates, its show count."""
+    """One report's window: its literals restated in words, its resolved dates, its show count.
+
+    The page-level header above prints ``anchor: last_show = {last}`` exactly once, because
+    `last_show` is the default every report inherits unless it says otherwise. A report that
+    overrides its anchor (an explicit date, or `first_show`) resolves everything below against a
+    DIFFERENT date, so its own anchor is restated here whenever it disagrees with that header --
+    otherwise the header's anchor and this block's resolved dates read as consistent when they
+    are not, and the report's real anchor would be visible nowhere unless it happened to also
+    turn up inside a clamp note (which does not fire for every offset, and says nothing when it
+    does not).
+    """
     spec = report_window.window_spec_from_config(config, name)
     if spec is None:
         print(f"{name}\n  (no [reports.{name}.window] configured)\n")
@@ -103,6 +113,8 @@ def _explain_one(store, config, name: str, first: str, last: str) -> None:
     resolved = report_window.resolve_explained(spec, first=first, last=last)
     since, until = resolved.as_dates()
     print(name)
+    if resolved.anchor != last:
+        print(f"  anchor: {_anchor_words(spec.anchor, resolved.anchor)}")
     since_key = "since_back" if spec.since_back is not None else "since_from"
     _explain_endpoint(since_key, spec.since_back or spec.since_from, resolved.since)
     until_key = "until_back" if spec.until_back is not None else "until"
@@ -111,6 +123,20 @@ def _explain_one(store, config, name: str, first: str, last: str) -> None:
     days = (date.fromisoformat(until) - date.fromisoformat(since)).days + 1
     print(f"  window: {since} .. {until}  inclusive  ·  {days} days  ·  "
           f"{len(shows)} shows\n")
+
+
+def _anchor_words(configured: str, resolved: str) -> str:
+    """How to state a report's own anchor: `"first_show = 2020-03-14"`, or just the date itself.
+
+    `configured` is `spec.anchor` -- either the keyword `last_show`/`first_show`, or an explicit
+    `YYYY-MM-DD` literal (see `catalog.window.WindowSpec`). A keyword is restated next to what it
+    resolved to, the same shape the page-level header already uses (`anchor: last_show = ...`);
+    a literal date IS its own resolution, so repeating it twice (`anchor: 2025-03-31 =
+    2025-03-31`) would say nothing a single date does not already say.
+    """
+    if configured in ("first_show", "last_show"):
+        return f"{configured} = {resolved}"
+    return resolved
 
 
 def _explain_endpoint(key: str, literal: str | None, endpoint) -> None:

@@ -146,10 +146,21 @@ class ResolvedEndpoint:
 
 @dataclass(frozen=True)
 class ResolvedWindow:
-    """A window's two endpoints, each carrying its own explanation."""
+    """A window's two endpoints, each carrying its own explanation.
+
+    `anchor` is the resolved anchor date (YYYY-MM-DD), carried alongside the two endpoints for
+    the same reason each endpoint carries its own `words`: a caller printing this window (see
+    `--explain`) needs to be able to STATE the anchor a report actually resolved against, not
+    just show endpoints computed from it. Without this, a report configured with its own
+    `anchor = "2025-03-31"` or `anchor = "first_show"` had no way to say so next to a page-level
+    header that only ever prints the *default* `last_show` anchor -- the two could read as
+    consistent when they were not, with the report's real anchor visible nowhere at all unless it
+    happened to also appear inside a clamp note (which does not fire for every offset).
+    """
 
     since: ResolvedEndpoint
     until: ResolvedEndpoint
+    anchor: str
 
     def as_dates(self) -> tuple[str, str]:
         """What `resolve()` returns -- the plain answer, with the explanation dropped."""
@@ -187,7 +198,7 @@ def resolve_explained(spec: WindowSpec, *, first: str, last: str) -> ResolvedWin
     else:
         until = ResolvedEndpoint(anchor_date.isoformat(), "the anchor itself")
 
-    return ResolvedWindow(since=since, until=until)
+    return ResolvedWindow(since=since, until=until, anchor=anchor_date.isoformat())
 
 
 def resolve(spec: WindowSpec, *, first: str, last: str) -> tuple[str, str]:

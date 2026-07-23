@@ -461,6 +461,25 @@ def test_explain_prints_a_clamp_note_only_when_clamping_actually_fires(tmp_path,
     assert "clamped to 2025-02-28" in printed
 
 
+def test_explain_states_a_reports_own_anchor_when_it_differs_from_last_show(tmp_path, capsys):
+    """The header states `anchor: last_show = <last>` once, globally. A report configured with
+    its OWN anchor resolves against a different date entirely, and that date must appear as an
+    explicit anchor line inside that report's own block -- not left to show up only by accident
+    inside a clamp note, which does not fire for every offset and says nothing when it does not.
+
+    `since_back="P10D"` is a plain day offset -- no clamp ever fires for it -- so this isolates
+    the anchor-statement bug from the clamp-note coincidence that was masking it: before the fix,
+    'anchor: 2025-03-31' appears nowhere in this report's block at all.
+    """
+    _cache(tmp_path, TAPES)
+    clamps = _cfg_with_reports(
+        tmp_path, '[reports.clampy.window]\nanchor = "2025-03-31"\nsince_back = "P10D"\n')
+    assert main(["--config", clamps, "ingest"]) == EXIT_OK
+    main(["--config", clamps, "export", "--explain"])
+    printed = capsys.readouterr().out
+    assert "anchor: 2025-03-31" in printed
+
+
 def test_explain_stays_quiet_about_clamping_when_it_did_not_fire(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
