@@ -36,6 +36,7 @@ from setlistkit.cli.main import EXIT_OK, main
 from test_cli_derive import LENGTHS, SETLIST, SONGS, _cache, _cfg, _tape
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "tapemeasure.json"
+GOLDEN_SONGBOOK = Path(__file__).resolve().parent / "golden" / "songbook.json"
 
 # Two nights and three tapes: enough for a second date, a second taper, a consolidated pair of
 # uploads and a song with n=2, which is every column the bundle has a way of getting wrong.
@@ -79,6 +80,18 @@ def test_the_bundle_matches_the_golden_file(tmp_path):
                           encoding="utf-8")
         pytest.skip("golden file regenerated -- read the diff")
     assert produced == json.loads(GOLDEN.read_text(encoding="utf-8"))
+
+
+def test_the_songbook_bundle_matches_the_golden_file(tmp_path):
+    """The shape another repository reads. See this module's docstring before regenerating."""
+    _code, out = _export_songbook(tmp_path)
+    produced = json.loads(out.read_text(encoding="utf-8"))
+    if os.environ.get("SLKIT_UPDATE_GOLDEN"):
+        GOLDEN_SONGBOOK.parent.mkdir(parents=True, exist_ok=True)
+        GOLDEN_SONGBOOK.write_text(json.dumps(produced, indent=2, ensure_ascii=False) + "\n",
+                                   encoding="utf-8")
+        pytest.skip("golden file regenerated -- read the diff")
+    assert produced == json.loads(GOLDEN_SONGBOOK.read_text(encoding="utf-8"))
 
 
 def test_the_bundle_carries_its_schema_version(tmp_path):

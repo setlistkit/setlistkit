@@ -1,0 +1,47 @@
+{
+  "schema": "setlistkit.songbook/1",
+  "generated": {
+    "catalog": 5,
+    "first": "2025-07-04",
+    "last": "2025-07-05",
+    "n_shows": 2,
+    "window": {
+      "since": null,
+      "until": null,
+      "spec": null
+    },
+    "below_floor": 0,
+    "deduped": 0,
+    "corpus": "1d50b3045048535f"
+  },
+  "vocab": [
+    "Aurora",
+    "Jamboree",
+    "Sound Asleep",
+    "The Long One",
+    "Wormhole"
+  ],
+  "unknown": [],
+  "shows": [
+    {
+      "d": "2025-07-04",
+      "s": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "d": "2025-07-05",
+      "s": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ]
+}
