@@ -1,0 +1,32 @@
+# EditorConfig — https://editorconfig.org
+# Recognized by VS Code (EditorConfig.EditorConfig extension), Emacs
+# (editorconfig package), and Vim (editorconfig-vim plugin), among others.
+# Keeps max line length at 120 across the languages in this repo.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+[*.{js,json,yml,yaml,toml}]
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+[*.md]
+# Markdown treats trailing spaces as a hard line break, so leave them alone.
+trim_trailing_whitespace = false
+max_line_length = 120
+
+[Makefile]
+indent_style = tab
