@@ -12,12 +12,18 @@ Everything is a rate in [0,1] with an ``n_plays`` beside it. A 1.00 encore rate 
 nothing, and a consumer needs the n to know that. The six rates live together in ``Rates``
 because they share that denominator; ``mean_slot`` does not share it and so does not join them.
 
-Computed over the WHOLE corpus, not a recent window. The version this was ported from used
-2023-01-01 onward on the argument that a song's 2019 habits are not evidence about 2026, which
-was reasonable when the corpus started at 2023. It now runs to 1992. ``first_seen``,
-``last_seen`` and ``n_plays`` are emitted so a consumer can window or recency-weight for
-itself; doing it here would bake one model's opinion into the catalog layer, which is the
-layer that is supposed to be useful to someone who never touches prediction.
+Computed over whatever ``shows`` the caller hands in -- this module has no opinion about a window
+and takes none. The version this was ported from used 2023-01-01 onward unconditionally, on the
+argument that a song's 2019 habits are not evidence about 2026, which was reasonable when the
+corpus started at 2023 and stopped being reasonable once it ran back to 1992. Baking a window in
+here would have made that argument permanent for the wrong reason.
+
+So the choice moved outward: an unwindowed caller gets whole-corpus features, and the ranged Tape
+Measure export (``cli/export.py``) already hands this a windowed ``shows`` and gets windowed
+features back, correctly -- the Songbook does the same. ``first_seen``, ``last_seen`` and
+``n_plays`` are still emitted so a windowed caller can tell how much history a rate rests on, and
+doing THAT here -- rather than silently narrowing -- is what keeps the opinion out of the catalog
+layer.
 """
 
 from __future__ import annotations
