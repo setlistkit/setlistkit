@@ -145,6 +145,19 @@ def song_count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM show_entries WHERE non_song = 0").fetchone()[0]
 
 
+def first_and_last(conn: sqlite3.Connection) -> tuple[str, str] | None:
+    """The earliest and latest stored show date, or `None` for an empty corpus.
+
+    What a `last_show`/`first_show` report window anchor resolves against -- see
+    `catalog/window.py`. One `MIN`/`MAX` query rather than two separate ones, since both answers
+    come from the same single pass over one indexed column.
+    """
+    row = conn.execute('SELECT MIN("date"), MAX("date") FROM shows').fetchone()
+    if row[0] is None:
+        return None
+    return row[0], row[1]
+
+
 def show_sources(conn: sqlite3.Connection) -> dict[str, str]:
     """date -> which source won it. What a run needs to report the dates that changed their mind.
 

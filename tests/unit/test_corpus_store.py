@@ -162,6 +162,19 @@ def test_an_orphaned_entry_row_does_not_invent_a_show(tmp_path):
         assert "Ghost" not in str(store.corpus.shows())
 
 
+def test_first_and_last_spans_every_stored_show(store):
+    store.corpus.replace_shows([
+        {**SHOW, "date": "2020-01-08"},
+        {**SHOW, "date": "2026-06-14"},
+        {**SHOW, "date": "2023-03-03"},
+    ])
+    assert store.corpus.first_and_last() == ("2020-01-08", "2026-06-14")
+
+
+def test_first_and_last_is_none_for_an_empty_corpus(store):
+    assert store.corpus.first_and_last() is None
+
+
 def test_the_migration_is_recorded_and_idempotent(tmp_path):
     # Against MIGRATIONS rather than against a literal [1, 2]: what this test is about is that
     # the corpus tables arrive and that a second open does nothing, and neither of those has an

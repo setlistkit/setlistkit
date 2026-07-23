@@ -175,6 +175,10 @@ class _Corpus(_Namespace):
         """date -> which source won it, without reading their setlists."""
         return corpus.show_sources(self.conn)
 
+    def first_and_last(self) -> tuple[str, str] | None:
+        """The earliest and latest stored show date, or `None` for an empty corpus."""
+        return corpus.first_and_last(self.conn)
+
 
 class _Tapes(_Namespace):
     """The recordings mirror: every tape of every night, its tracks, its listing, its date's kind.
