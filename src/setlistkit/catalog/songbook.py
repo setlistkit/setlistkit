@@ -25,6 +25,49 @@ each is wrong for a reason worth keeping straight:
 - It does not number ``vocab`` by first appearance. Sorted canonically, the way
   ``tapemeasure.py`` already sorts its own rows, so ingesting one early show does not renumber
   every index in the file and turn the whole bundle into one diff.
+
+ROTATION FORMULA, PUBLISHED HERE SO AN IMPLEMENTATION IS CHECKABLE AGAINST A STATED CONTRACT
+Three implementations compute "how overdue is this song": this bundle's own consumer, the
+Songbook's browser JS (bin/songbook/logic.js, dueRatio(), called from aggregateWindow());
+setlistkit's scorer (setlistkit.model.scores.overdue_ratio / rotation); and the Scorecard's POC
+ancestor. None of
+them import from either of the others -- Python cannot share code with browser JS, and this
+module imports nothing from setlistkit by design (see "The bundle" in
+docs/plans/2026-07-22-songbook-design.md). So the formula is written down here, once, as the
+thing all three are checked against, rather than checked against each other.
+
+Everything below operates in SHOW-INDEX SPACE: index 0 is the oldest show in the exported
+window, index n-1 the newest. "gap" and "mean gap" count shows, never days.
+
+    n           the number of shows in the window
+    lastIdx     the index of this song's most recent appearance in the window
+    gaps        the shows-apart distance between each pair of consecutive appearances --
+                appearances at indices 2, 5, 9 give gaps = [3, 4]
+
+    gap       = n - 1 - lastIdx                          (0 if played in the newest show)
+    meanGap   = mean(gaps)              if gaps is non-empty
+              = n                       otherwise -- a song played exactly once has no
+                                        interval of its own yet, so its "typical gap" is the
+                                        window itself. Identical across every implementation;
+                                        this is not the fallback below.
+    ratio     = gap / meanGap           if meanGap is non-zero
+              = OVERDUE_FALLBACK_RATIO  otherwise -- meanGap is zero only for an empty
+                                        window. See setlistkit.model.scores for the current
+                                        value and why it is a named constant rather than a
+                                        literal typed twice.
+
+A STRUCTURAL CONSEQUENCE, NOT A BUG: because meanGap falls back to n for a single-play song,
+and lastIdx <= n-1 always, ratio = gap/n < 1 for every single-play song, in every window, no
+matter where in it the one play landed. A single-play song can therefore never register as
+"overdue." The POC's due-filter facet counts had to be patched around exactly this
+(script.js:219-222 records the bug); setlistkit.model.scores pins it as a test instead
+(test_a_single_play_song_can_never_be_overdue).
+
+setlistkit.model.scores calls this ratio gap_ratio; the Songbook's own browser JS calls the
+same quantity due, before any further transform is applied to it. The Scorecard's separate
+"due boost" (1 + gap_weight * clamp(ratio - 1, 0, gap_cap - 1)) is a different, later number
+that only the Scorecard computes -- this bundle's page never does, which is why "Why the
+derived numbers cannot be precomputed" above says the page computes gap and due itself.
 """
 
 from __future__ import annotations

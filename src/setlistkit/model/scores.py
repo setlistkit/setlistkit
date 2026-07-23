@@ -58,6 +58,15 @@ Two limits on all of the above. The evaluation window is recent shows only, so n
 grades the deep corpus. And at a 200-day half-life everything before 2020 carries under a
 hundredth of one percent of the total weight, which means 87% of the corpus cannot reach this
 scorer at all -- a fact about the configuration, not about the corpus.
+
+THE ROTATION FORMULA IS PUBLISHED, NOT JUST IMPLEMENTED
+overdue_ratio() and rotation() below are this project's one Python definition of "how overdue
+is this song" -- the same computation the Songbook's browser JS performs independently and
+that the Scorecard's own ancestor once wrote a third time. The full formula, stated in terms
+an implementation can be checked against rather than guessed at, is published in
+setlistkit.catalog.songbook's module docstring; this module is where it is enforced.
+tests/unit/test_rotation_parity.py pins this Python side against a maintained copy of the JS
+side for the cases that formula calls out.
 """
 
 from __future__ import annotations
