@@ -142,24 +142,52 @@ def _add_derive(sub) -> None:
                  "read, reconcile and report in full, but write nothing to the database")
 
 
+def _add_export_common(parser: argparse.ArgumentParser, help_text: str) -> None:
+    """Add --since/--until to one export sub-verb's parser, each carrying its own explanation.
+
+    Mirrors ``_add_dry_run``'s idiom: one implementation, called once per sub-verb with the text
+    that explains what narrowing means for THAT bundle, because the two do not mean the same
+    thing (the Tape Measure recomputes statistics over the window; the Songbook floors and
+    dedupes over it). NOT added to the parent ``export`` parser: argparse would then require
+    ``slkit export --since ... songbook``, and ``slkit export songbook --help`` would not list the
+    flag at all -- the same recursive-help complaint ``_add_dry_run`` already exists to avoid.
+
+    Spelled and bounded exactly as ``slkit dump`` spells them -- inclusive at both ends, same
+    YYYY-MM-DD, same two names. A range that means one thing in one command and something a day
+    wider in another is a range nobody can check a published number against.
+    """
+    parser.add_argument("--since", metavar="YYYY-MM-DD",
+                        help=f"only {help_text}, on or after this date")
+    parser.add_argument("--until", metavar="YYYY-MM-DD",
+                        help=f"only {help_text}, on or before this date")
+
+
 def _add_export(sub) -> None:
     """The ``slkit export`` parser."""
     export_cmd = sub.add_parser(
         "export", help="write what was derived as one file, for something else to draw")
     export_sub = export_cmd.add_subparsers(dest="export_action")
+
     tapemeasure_cmd = export_sub.add_parser(
         "tapemeasure", help="song lengths, features, credits and caveats as one JSON bundle")
     tapemeasure_cmd.add_argument("--out", metavar="PATH", default="tapemeasure.json",
                                  help="where to write the bundle (default: %(default)s)")
-    # Spelled and bounded exactly as `slkit dump` spells them -- inclusive at both ends, same
-    # YYYY-MM-DD, same two names. A range that means one thing in one command and something a day
-    # wider in another is a range nobody can check a published number against.
-    tapemeasure_cmd.add_argument("--since", metavar="YYYY-MM-DD",
-                                 help="only performances on or after this date (song statistics "
-                                      "are recomputed over the window, not read whole-corpus)")
-    tapemeasure_cmd.add_argument("--until", metavar="YYYY-MM-DD",
-                                 help="only performances on or before this date")
+    _add_export_common(tapemeasure_cmd,
+                       "performances (song statistics are recomputed over the window, not "
+                       "read whole-corpus)")
     _add_dry_run(tapemeasure_cmd, "build the bundle and report it, but write no file")
+
+    songbook_cmd = export_sub.add_parser(
+        "songbook", help="every show's songs, sorted into a vocabulary, as one JSON bundle")
+    songbook_cmd.add_argument("--out", metavar="PATH", default="songbook.json",
+                              help="where to write the bundle (default: %(default)s)")
+    songbook_cmd.add_argument(
+        "--pack", metavar="PATH",
+        help="pack directory to canonicalize song names with (overrides [catalog] pack)")
+    _add_export_common(songbook_cmd,
+                       "shows (below-floor shows and out-of-vocabulary songs are still "
+                       "counted and reported, never silently dropped)")
+    _add_dry_run(songbook_cmd, "build the bundle and report it, but write no file")
 
 
 def _add_pack(sub) -> None:
