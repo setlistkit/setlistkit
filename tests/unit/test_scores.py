@@ -180,3 +180,20 @@ def test_rotation_is_public_and_still_correct():
             (dt.date(2026, 1, 3), ["A"])]
     since, typical = rotation(past)
     assert since["A"] == 0 and typical["A"] == 2.0
+
+
+@pytest.mark.parametrize("play_on_day", [1, 4, 8])
+def test_a_single_play_song_can_never_be_overdue(play_on_day):
+    """meanGap falls back to the window length itself for a song with exactly one play, so
+    ratio = gap/n is always < 1 -- structurally, regardless of where in the window the one
+    play landed, not by tuning. The POC's due-filter facet counts had to be patched around
+    exactly this (script.js:219-222 records the bug); pinning it here turns a recurring
+    surprise into a documented, checked property."""
+    shows = []
+    for day in range(1, 9):
+        if day == play_on_day:
+            shows.append(_show(f"2026-05-{day:02d}", "Once", "F0", "F1", "F2", "F3", "F4"))
+        else:
+            shows.append(_filler(f"2026-05-{day:02d}", tag=f"G{day}"))
+    rows = _by_song(song_scores(shows, ScoreConfig(), asof="2026-06-01"))
+    assert rows["Once"].gap_ratio < 1.0
