@@ -490,6 +490,25 @@ def test_explain_states_a_reports_own_anchor_when_it_differs_from_last_show(tmp_
     assert "anchor: 2025-03-31" in printed
 
 
+def test_explain_skips_scalar_reports_keys_like_out_dir_and_templates(tmp_path, capsys):
+    """`[reports]` carries render globals (out_dir, templates) beside the report subtables. Those
+    are settings, not reports, so --explain iterates the tables and leaves the scalars alone --
+    otherwise it prints a phantom `out_dir` / `templates` block, each `(no window configured)`,
+    which is the opposite of what --explain is for.
+    """
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(
+        tmp_path,
+        '[reports]\nout_dir = "site"\ntemplates = "templates"\n\n'
+        '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "export", "--explain"]) == EXIT_OK
+    printed = capsys.readouterr().out
+    assert "songbook" in printed        # the real report is still explained
+    assert "out_dir" not in printed     # the render globals are settings, not reports
+    assert "templates" not in printed
+
+
 def test_explain_stays_quiet_about_clamping_when_it_did_not_fire(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')

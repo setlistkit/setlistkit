@@ -76,7 +76,13 @@ def _explain(config, _args) -> int:
     this run happens to build, because the failure this exists for is a wrong unit discovered on
     the WRONG report months later.
     """
-    reports = config.section("reports")
+    # A report is a SUBTABLE under [reports] -- its own [reports.<name>] carrying a window (and,
+    # further out, tiers/bundle/etc.). [reports] also holds top-level SCALAR settings that are not
+    # reports: out_dir, templates, and whatever render globals a report builder reads. Iterate the
+    # tables, not every key -- explaining a scalar as a report would print a phantom
+    # "(no window configured)" line for out_dir and one for templates, which is the opposite of
+    # what --explain is for.
+    reports = [name for name, value in config.section("reports").items() if isinstance(value, dict)]
     with Store(config.data_root) as store:
         store.init()
         span = store.corpus.first_and_last()
