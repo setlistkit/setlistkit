@@ -23,7 +23,7 @@
 function aggregateWindow(n, lastIdx, gaps, fallback) {
   const gap = n - 1 - lastIdx;
   const meanGap = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : n;
-  const ratio = meanGap ? gap / meanGap : fallback;  // dueRatio(gap, meanGap)
+  const ratio = meanGap > 0 ? gap / meanGap : fallback;  // dueRatio(gap, meanGap)
   return { gap, meanGap, ratio };
 }
 
