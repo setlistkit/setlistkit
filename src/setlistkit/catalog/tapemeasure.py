@@ -172,7 +172,7 @@ def _withheld(performances: Iterable[Mapping]) -> dict[str, int]:
 
 def bundle(concluded: Concluded, features: Iterable[SongFeature],
            tapers: Mapping[str, int], *,
-           corpus_shows: int, recordings_read: int,
+           corpus_shows: int, recordings_read: int, corpus: str,
            since: str | None = None, until: str | None = None) -> dict:
     """The whole tape measure as one JSON-ready mapping.
 
@@ -190,7 +190,8 @@ def bundle(concluded: Concluded, features: Iterable[SongFeature],
         "generated": {"corpus_shows": corpus_shows,
                       "recordings_read": recordings_read,
                       "window": {"since": since, "until": until},
-                      "date_range": _date_range(concluded.performances)},
+                      "date_range": _date_range(concluded.performances),
+                      "corpus": corpus},
         "songs": _songs(concluded.stats, features),
         "performances": [_published(row) for row in concluded.performances],
         "review": [dict(row) for row in concluded.review],

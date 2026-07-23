@@ -83,6 +83,16 @@ def test_the_bundle_matches_the_golden_file(tmp_path):
     assert produced == json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 
+def test_the_tapemeasure_bundle_carries_the_store_fingerprint(tmp_path):
+    """generated.corpus is the same store fingerprint the Songbook bundle carries, computed by
+    the one shared exportio.fingerprint() -- so the two published bundles can be compared for
+    which store state produced them, which is the whole point of publishing a fingerprint at
+    all (slice 4, Task 5)."""
+    _code, out = _export(tmp_path)
+    generated = json.loads(out.read_text(encoding="utf-8"))["generated"]
+    assert generated.get("corpus")
+
+
 def test_the_songbook_bundle_matches_the_golden_file(tmp_path):
     """The shape another repository reads. See this module's docstring before regenerating."""
     _code, out = _export_songbook(tmp_path)

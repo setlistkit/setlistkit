@@ -207,6 +207,7 @@ def _tapemeasure(config, args) -> int:
                          store.tapes.uploader_counts(**window),
                          corpus_shows=len(shows),
                          recordings_read=store.tapes.recording_count(**window),
+                         corpus=exportio.fingerprint(store),
                          since=since, until=until)
     _report(payload)
     if getattr(args, "dry_run", False):
