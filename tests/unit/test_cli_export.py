@@ -28,6 +28,7 @@ from statistics import median
 
 import pytest
 
+from setlistkit.catalog.songbook import SCHEMA as SONGBOOK_SCHEMA
 from setlistkit.catalog.tapemeasure import SCHEMA
 from setlistkit.cli.export import EXIT_NOTHING
 from setlistkit.cli.main import EXIT_OK, main
@@ -55,6 +56,16 @@ def _export(tmp_path, tapes=None, *args):
     assert main(["--config", config, "derive", "durations"]) == EXIT_OK
     out = tmp_path / "bundle.json"
     code = main(["--config", config, "export", "tapemeasure", "--out", str(out), *args])
+    return code, out
+
+
+def _export_songbook(tmp_path, tapes=None, *args):
+    """Ingest, then export songbook -- no derive step, because the bundle needs none."""
+    _cache(tmp_path, tapes if tapes is not None else TAPES)
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    code = main(["--config", config, "export", "songbook", "--out", str(out), *args])
     return code, out
 
 
@@ -301,3 +312,91 @@ def test_a_malformed_window_date_is_refused_rather_than_compared(tmp_path):
     code = main(["--config", config, "export", "tapemeasure", "--out", str(out), "--until", "2025"])
     assert code != EXIT_OK
     assert not out.exists()
+
+
+# --- `slkit export songbook` -------------------------------------------------------------------
+#
+# `TAPES` reused unchanged from the top of this file: two nights, all five songs from
+# `examples/packs/example/vocabulary.json`, no repeats, no out-of-vocabulary titles. That gives a
+# clean, minimal golden fixture -- exactly the tapemeasure golden file's own scenario, reused
+# rather than reinvented. Floor/dedupe/unknown arithmetic is pinned directly against
+# `catalog/songbook.py` in `test_catalog_songbook.py`; what is tested here is CLI wiring.
+
+
+def test_the_songbook_bundle_carries_its_schema_version(tmp_path):
+    _code, out = _export_songbook(tmp_path)
+    assert json.loads(out.read_text(encoding="utf-8"))["schema"] == SONGBOOK_SCHEMA
+
+
+def test_export_songbook_before_ingesting_says_so_rather_than_writing_an_empty_bundle(tmp_path):
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "store", "init"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    assert main(["--config", config, "export", "songbook", "--out", str(out)]) == EXIT_NOTHING
+    assert not out.exists()
+
+
+def test_export_songbook_a_dry_run_reports_the_bundle_and_writes_nothing(tmp_path):
+    _code, out = _export_songbook(tmp_path, None, "--dry-run")
+    assert not out.exists()
+
+
+def test_export_songbook_is_replaced_whole_rather_than_written_in_place(tmp_path):
+    _code, out = _export_songbook(tmp_path)
+    assert out.exists()
+    assert not out.with_name(out.name + ".partial").exists()
+
+
+def test_export_songbook_a_window_narrows_the_shows_included(tmp_path):
+    _code, out = _export_songbook(tmp_path, None, "--since", "2025-07-05")
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert [row["d"] for row in payload["shows"]] == ["2025-07-05"]
+    assert payload["generated"]["window"] == {"since": "2025-07-05", "until": None, "spec": None}
+    assert payload["generated"]["first"] == payload["generated"]["last"] == "2025-07-05"
+
+
+def test_a_malformed_window_date_is_refused_for_songbook_too(tmp_path):
+    """`--until 2023` sorts below every date IN 2023. Refused the same way `dump` and
+    `export tapemeasure` refuse it -- through `cli.main._cmd_export`'s shared `_malformed_date`."""
+    _cache(tmp_path, TAPES)
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    code = main(["--config", config, "export", "songbook", "--out", str(out), "--until", "2025"])
+    assert code != EXIT_OK
+    assert not out.exists()
+
+
+def test_export_songbook_uses_the_pack_flag_to_pick_the_vocabulary(tmp_path):
+    """A pack with none of these songs in it should flag all five as unknown."""
+    empty_pack = tmp_path / "empty_pack"
+    empty_pack.mkdir()
+    (empty_pack / "pack.json").write_text(
+        json.dumps({"name": "empty", "version": "1.0.0"}), encoding="utf-8")
+    (empty_pack / "vocabulary.json").write_text(json.dumps(["Some Other Song"]), encoding="utf-8")
+    _cache(tmp_path, TAPES)
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    assert main(["--config", config, "export", "songbook", "--out", str(out),
+                "--pack", str(empty_pack)]) == EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert len(payload["unknown"]) == len(payload["vocab"]) == len(SONGS)
+    assert payload["generated"]["catalog"] == 1     # the empty pack's own vocabulary size
+
+
+def test_export_songbook_the_fingerprint_is_stable_across_two_runs_over_the_same_corpus(tmp_path):
+    _code, out1 = _export_songbook(tmp_path)
+    fp1 = json.loads(out1.read_text(encoding="utf-8"))["generated"]["corpus"]
+    _code, out2 = _export_songbook(tmp_path)
+    fp2 = json.loads(out2.read_text(encoding="utf-8"))["generated"]["corpus"]
+    assert fp1 == fp2
+
+
+def test_export_songbook_the_fingerprint_changes_when_the_corpus_changes(tmp_path):
+    _code, out1 = _export_songbook(tmp_path)
+    fp1 = json.loads(out1.read_text(encoding="utf-8"))["generated"]["corpus"]
+    extra = _tape("example2025-08-01", "2025-08-01")
+    _code, out2 = _export_songbook(tmp_path, TAPES + [extra])
+    fp2 = json.loads(out2.read_text(encoding="utf-8"))["generated"]["corpus"]
+    assert fp1 != fp2
