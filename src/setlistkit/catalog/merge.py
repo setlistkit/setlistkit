@@ -130,7 +130,7 @@ def pick_show(candidates: Iterable[Mapping], policy: MergePolicy | None = None) 
 
     Ties break on song count and then on identifier, so two runs over the same candidates agree
     regardless of the order the sources were read in. Candidates sharing an identifier are
-    genuinely indistinguishable to this rule, and fall back to the order they arrived in.
+    actually indistinguishable to this rule, and fall back to the order they arrived in.
 
     Every candidate is expected to have at least one song; ``merge_shows`` drops the stubs
     before it gets here.
@@ -155,7 +155,7 @@ def pick_show(candidates: Iterable[Mapping], policy: MergePolicy | None = None) 
 # It exists because of a bug that shipped this far: a pack holds two unrelated kinds of override,
 # one that moves a show to a different night and one that says what was played, and a single
 # rebound local name fed the first kind in here as the second. The result was a "show" made of a
-# date and a paragraph of prose, which replaced the genuine record for that night and entered the
+# date and a paragraph of prose, which replaced the real record for that night and entered the
 # corpus with no setlist, no source and no identifier. Nothing downstream could tell.
 _OVERRIDE_KEYS = ("date", "sets", "encore", "source", "identifier")
 

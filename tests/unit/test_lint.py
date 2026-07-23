@@ -443,7 +443,7 @@ def test_a_classifier_that_fires_on_an_annotated_title_is_not_reported_dead(tmp_
         "classifiers.json": '{"non_song": ["^setbreak$", "^neveroccurs$"]}'})
     found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Set Break [crowd noise]\n")])
     assert not any("/^setbreak$/ matches nothing" in s for s in _summaries(found))
-    # ...and the genuinely dead one beside it is still caught, so this is not just "the check
+    # ...and the actually dead one beside it is still caught, so this is not just "the check
     # got deleted".
     assert any("/^neveroccurs$/ matches nothing" in s for s in _summaries(found))
 

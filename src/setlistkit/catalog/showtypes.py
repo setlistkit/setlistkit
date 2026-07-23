@@ -41,7 +41,7 @@ alias, and it was sitting hardcoded in a layer whose entire premise is that it k
 so this module could never have tagged an acoustic night for anybody else's pack, and would
 have reported every one of them electric while running clean.
 
-The two rules that stay in code are the ones that are genuinely band-agnostic: "performing as"
+The two rules that stay in code are the ones that are actually band-agnostic: "performing as"
 is how every scene writes an alter-ego billing, and the mixed-set rule is a shape, not a name.
 A pack that declares no acoustic pattern simply gets no acoustic tag, which is the same refusal
 to guess the band filter makes when it is given no band name.

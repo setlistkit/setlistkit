@@ -118,7 +118,7 @@ def _song_titles(show: Mapping) -> list[str]:
 
 
 def _in_vocab(canon: str, norm_to_canon: Mapping[str, str]) -> bool:
-    """Is ``canon`` a name the pack's vocabulary already recognises?
+    """Is ``canon`` a name the pack's vocabulary already recognizes?
 
     ``canon`` MUST already be a :meth:`Normalizer.canonicalize` result, never a raw title tested
     directly -- see :func:`bundle` for why re-canonicalizing an already-canonical name is not

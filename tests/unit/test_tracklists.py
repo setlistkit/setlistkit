@@ -51,7 +51,7 @@ def test_every_numbering_style_one_taper_or_another_uses():
     """Disc prefixes, encore prefixes, and a separator that is punctuation, a space, or nothing.
 
     "10.Wurm" is the one with no space at all, and that single missing character once hid an
-    entire fully-labelled show.
+    entire fully-labeled show.
     """
     desc = ("d1t01. Aurora\n2) Rebubula\n3 - Wormhole\n4 Bearsong\n10.Wurm\n")
     listing = _read(desc, 5)
@@ -120,7 +120,7 @@ def test_a_pack_gear_word_is_dropped_too():
 # --- what decides between the readings -------------------------------------------------------
 
 def test_the_file_count_picks_the_reading_and_nothing_else_does():
-    """A numbering restart is genuinely ambiguous: footnotes, or set two renumbered?
+    """A numbering restart is really ambiguous: footnotes, or set two renumbered?
 
     Both readings are produced and the tape decides. Here the tape has 5 files, so the truncated
     reading is the right one -- the trailing "1." and "2." were footnotes.
@@ -274,7 +274,7 @@ def test_a_title_the_corpus_saw_once_does_not_get_to_vouch_for_anything():
     """The corpus is parser OUTPUT, not a curated list, and its singletons are its accidents.
 
     Feeding all of them back makes the vocabulary a laundering channel: junk certifies junk. The
-    cost is a genuinely-once-played song going unrecognised, which leaves the tape unmatched and
+    cost is a once-played song going unrecognized, which leaves the tape unmatched and
     unused -- the safe direction, unlike a junk-inflated listing that MATCHES.
     """
     shows = [{"sets": [[{"song": "Setlist"}]], "encore": []}]

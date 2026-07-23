@@ -270,7 +270,7 @@ def test_date_overrides_are_not_setlist_overrides(tmp_path):
 
     date_overrides moves a show to a different night; overrides says what was played. Fed in as
     each other, a date correction becomes a "show" made of a date and a paragraph of prose --
-    and since an override always wins, it REPLACES the genuine record for that night and enters
+    and since an override always wins, it REPLACES the real record for that night and enters
     the corpus with no setlist, no source and no identifier. Nothing downstream can tell.
     """
     pack = _load_or_render(tmp_path, **{

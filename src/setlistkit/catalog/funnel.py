@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 # stage -> node -> the edges leaving it. Every branch of a decision appears here, including the
 # ones that continue down the ladder, because "how many got through" is exactly the number an
-# unlabelled diagram leaves you guessing at.
+# unlabeled diagram leaves you guessing at.
 #
 # The three-tuple is (edge id, edge label, destination). The label is what the diagram prints
 # before the count, so it matches the prose on the page rather than the identifier in the code.
@@ -107,7 +107,7 @@ EDGES: dict[str, dict[str, tuple[tuple[str, str, str], ...]]] = {
 
 # Every id, flattened. The generator imports this; a test asserts it covers what the parser
 # increments, so an edge added to one side without the other fails loudly instead of silently
-# rendering an unlabelled arrow.
+# rendering an unlabeled arrow.
 EDGE_IDS: tuple[str, ...] = tuple(
     edge_id
     for stage in EDGES.values()

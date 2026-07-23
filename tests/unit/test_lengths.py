@@ -112,7 +112,7 @@ def test_an_observation_records_which_source_named_it():
 
 def test_songs_nobody_claimed_on_a_believed_tape_are_reported_not_swallowed():
     """This is where the next alias comes from: either the taper spelled it in a way we do not
-    recognise, or it was folded into a neighbour's file."""
+    recognize, or it was folded into a neighbor's file."""
     pack = _Pack(non_songs=[r"^intro$"])
     night = D.Night.of(_show([_entry("Intro"), _entry("Moth"), _entry("Meat")]), pack)
     reading = D.Reading(rows=(D.Row("1", 2, "Moth", 600.0, "02 Moth.flac"),),
@@ -168,7 +168,7 @@ def test_ballots_that_already_agree_have_no_outlier_to_drop():
 
 
 def test_a_tie_is_not_a_consensus():
-    """Two against two means we genuinely cannot say which pair is right. Deciding it by whichever
+    """Two against two means we really cannot say which pair is right. Deciding it by whichever
     tape happens to sort first is a coin flip published as a measurement."""
     tapes = [_obs("Moth", 300.0, "a"), _obs("Moth", 305.0, "b"),
              _obs("Moth", 600.0, "c"), _obs("Moth", 605.0, "d")]
@@ -231,7 +231,7 @@ def test_dropping_an_outlier_can_narrow_a_dispute_without_settling_it():
     """Partial progress is reported as partial.
 
     The cluster is built by breaking the chain at gaps wider than the tolerance, so its members
-    are each within 45s of their NEIGHBOUR while the run as a whole drifts 120s end to end. One
+    are each within 45s of their NEIGHBOR while the run as a whole drifts 120s end to end. One
     reel plainly failed and is dropped; the four survivors still do not agree, and there is
     nothing to choose between them. Setting resolved_by while leaving suspect set is the honest
     description of that, and it is why the two are separate fields.
@@ -307,7 +307,7 @@ def test_an_acoustic_performance_is_measured_and_still_does_not_vote():
 
 def test_a_performance_a_human_ruled_out_is_kept_tagged_and_silent():
     """Neither a tape that cut off mid-song nor a two-minute reprise is detectable from metadata,
-    because both look exactly like a genuinely unusual performance. Nothing is deleted."""
+    because both look exactly like a really unusual performance. Nothing is deleted."""
     performance = _only([_obs("Moth", 247.0, "a")],
                         exclusions={(DATE, "1", 1): {"song": "Moth", "reason": "truncated"}})
     assert performance.seconds == 247.0

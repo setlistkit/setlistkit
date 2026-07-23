@@ -307,7 +307,7 @@ def _ordered(entries: list[dict]) -> list[dict]:
     That silently corrupted 65 of 436 tapes in the previous implementation, and the only reason it
     was caught at all is that two independent sources disagreed about one night.
 
-    So ``track`` is used only where it is genuinely unique across the whole item. Otherwise the
+    So ``track`` is used only where it is actually unique across the whole item. Otherwise the
     filename decides, because that is where the taper actually encoded the order.
     """
     numbers = [str(entry.get("track") or "").strip() for entry in entries]
@@ -440,7 +440,7 @@ def _item_record(doc: Mapping, payload: Mapping) -> dict:
     the metadata ``title``. It is kept because it is raw provenance we have already paid for, and
     because an item with an empty metadata title currently sails through the band filter with no
     title to judge it by. Recorded now so that fix has something to reach for; not claimed as
-    load-bearing until it is.
+    essential until it is.
 
     ``uploader`` is read here and carried, never looked up again later. It is the field whose
     absence disabled ballot consolidation in the previous implementation for 425 of 425 tapes
@@ -583,7 +583,7 @@ class ArchiveOrgClient:
                     # ...but a run of failures is not a bad tape, it is a bad afternoon for the
                     # host. Past this point "keep going" stops being resilience and turns into
                     # thousands of requests at something already answering badly, which is the
-                    # one behaviour the etiquette rules exist to forbid. Stop asking.
+                    # one behavior the etiquette rules exist to forbid. Stop asking.
                     raise
                 continue
             consecutive = 0

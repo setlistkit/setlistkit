@@ -82,7 +82,7 @@ def lint(pack_dir, items: Iterable[Mapping] = ()) -> list[Diagnostic]:
     """Load the pack in ``pack_dir`` and return every conformance finding.
 
     Loading enforces structure and raises :class:`~setlistkit.diagnostics.DiagnosticError` on
-    a malformed pack; that is the caller's to catch. Once loaded, the behavioural checks here
+    a malformed pack; that is the caller's to catch. Once loaded, the behavioral checks here
     never raise -- they accumulate diagnostics so a CI run sees all of them at once.
 
     ``items`` are raw source items, as :meth:`ArchiveOrgClient.cached_items` returns them. Given
@@ -149,7 +149,7 @@ def _dead_rule_findings(pack: Pack, pack_dir: Path, census) -> list[Diagnostic]:
 
     A pack author cannot discover this alone: a rule that matches nothing also breaks nothing, so
     it survives every test and every review. It costs a line of a file and a little doubt about
-    which rules are load-bearing, and the doubt is the expensive part -- the next person to read
+    which rules are essential, and the doubt is the expensive part -- the next person to read
     the pack cannot tell the dead ones from the ones holding the corpus together.
     """
     out: list[Diagnostic] = []
@@ -165,7 +165,7 @@ def _dead_rule_findings(pack: Pack, pack_dir: Path, census) -> list[Diagnostic]:
                    "That may be right -- it may be defending against something that has not\n"
                    "happened yet -- but if it came from an older tool and nobody can say what it\n"
                    "was for, delete it. A rule nobody can justify and nobody can observe is a\n"
-                   "rule that only costs doubt about which of its neighbours matter.",
+                   "rule that only costs doubt about which of its neighbors matter.",
         ))
     return out
 
@@ -255,7 +255,7 @@ def _spelt(variants: Counter) -> str:
 
 
 def _unknown_titles(pack: Pack, census) -> tuple[Counter, dict[str, Counter]]:
-    """Every title the corpus kept that the pack's vocabulary does not recognise.
+    """Every title the corpus kept that the pack's vocabulary does not recognize.
 
     Shared by :func:`_unknown_title_findings` and :func:`_near_miss_title_findings`, which ask
     two different questions of the same set -- which of these are common enough to be worth a
@@ -265,7 +265,7 @@ def _unknown_titles(pack: Pack, census) -> tuple[Counter, dict[str, Counter]]:
 
     Returns ``(plays, spellings)``: ``plays`` maps a normalized unknown key to how many times it
     was played, ``spellings`` maps the same key to every raw spelling that reached it and how
-    often, for :func:`_spelt` to summarise.
+    often, for :func:`_spelt` to summarize.
     """
     normalize = pack.normalizer.normalize
     _, norm_to_canon = pack.normalizer.build_vocab()
@@ -317,7 +317,7 @@ def _unknown_title_findings(pack: Pack, census) -> list[Diagnostic]:
         summary=f"{len(frequent)} title(s) played {_UNKNOWN_TITLE_FLOOR}+ times are not in the "
                 f"vocabulary",
         detail="Each of these was kept as a song and canonicalized to itself, because nothing in\n"
-               "the pack recognised it. Every play scatters across that spelling instead of\n"
+               "the pack recognized it. Every play scatters across that spelling instead of\n"
                "joining a song, which is silent, permanent, and indistinguishable from a song\n"
                "nobody played.\n\n"
                "They are not all songs. Expect three kinds: real titles missing from\n"
@@ -362,7 +362,7 @@ def _near_miss_title_findings(pack: Pack, census) -> list[Diagnostic]:
         detail="Within one or two characters of a name in vocabulary.json, reported at every\n"
                "play count -- frequency is the wrong filter here, because a splinter only has\n"
                "to be minted once to publish a wrong number beside a real song's.\n\n"
-               "Add the ones that are genuinely the same song to aliases.json. Not all of them\n"
+               "Add the ones that are actually the same song to aliases.json. Not all of them\n"
                "will be: a near string match is a candidate for a human to rule on, not a\n"
                "verdict.\n\n"
                f"{lines}",

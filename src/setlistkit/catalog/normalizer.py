@@ -181,7 +181,7 @@ def clean_song(song: str) -> str:
     A SPOKEN MOMENT KEEPS ITS QUOTES, because they are not decoration on a name -- they are the
     only thing saying it is not a song. Everything downstream asks :meth:`Normalizer.is_non_song`
     about the CLEANED entry, so stripping them here hands the classifier '"Penguin Joke"' with
-    nothing left to recognise, and twenty-six announcements, dedications and jokes get timed and
+    nothing left to recognize, and twenty-six announcements, dedications and jokes get timed and
     published with median lengths.
     """
     text = str(song).strip()
@@ -262,7 +262,7 @@ def _canonicalize(raw: str, norm_to_canon: dict[str, str], aliases: dict[str, st
                   cutoff: float = 0.9, sink=None) -> tuple[str | None, bool]:
     """Map a raw song string to a canonical display name + segue flag."""
     # The display form gets the same annotations stripped as the normalized one. Otherwise a song
-    # we do NOT recognise falls through to `disp` still carrying its credit -- "Rebubula II (UM)"
+    # we do NOT recognize falls through to `disp` still carrying its credit -- "Rebubula II (UM)"
     # entered the vocabulary with the (UM) attached even though normalize() had already removed
     # it, so the fallback re-created exactly the split this is here to prevent.
     disp, seg = strip_segue(raw)

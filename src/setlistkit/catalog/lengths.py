@@ -60,7 +60,7 @@ from .normalizer import Normalizer
 # 45 seconds lands within half a second of the standalone third quartile, and that is the useful
 # place for this line. Crossing it is not a verdict -- it is where a performance stops being taken
 # on trust and goes to the resolution below. A quarter of multi-taper performances get that
-# scrutiny (2,579) and three quarters of those come out settled (1,935), leaving 644 genuinely
+# scrutiny (2,579) and three quarters of those come out settled (1,935), leaving 644 actually
 # disputed out of 22,214.
 #
 # A SEGUED song is a different object. There is no objective boundary inside a segue: where the
@@ -288,7 +288,7 @@ def unclaimed_songs(tape: Tape, reading: Reading, night: Night,
                     normalizer: Normalizer) -> list[Edge]:
     """Songs nobody claimed on a tape we otherwise believed.
 
-    Either the taper spelled it in a way we do not recognise yet, or it was folded into a
+    Either the taper spelled it in a way we do not recognize yet, or it was folded into a
     neighbor's file. Worth a look either way: this is where the next alias comes from.
     """
     return [Edge("song_not_found_on_named_tape", tape.date, tape.identifier, song,
@@ -308,7 +308,7 @@ def ballots(observations: Iterable[Observation],
     2023-04-27 is the case in point -- one taper's two mic feeds and the matrix built from them
     are three archive.org items with a single set of track splits between them.
 
-    A tape whose uploader we do not know votes as itself, which is the behaviour we would have
+    A tape whose uploader we do not know votes as itself, which is the behavior we would have
     had anyway. That is a weaker consolidation, not a wrong one, and the caller is expected to
     say how often it happens rather than let it degrade quietly.
     """
@@ -326,7 +326,7 @@ def largest_cluster(observations: Sequence[Observation], limit: float,
     longest run is the night's consensus; anything outside it is a reel that failed, not a reading
     with a case.
 
-    A TIE IS NOT A CONSENSUS. Two against two means we genuinely cannot say which pair is right,
+    A TIE IS NOT A CONSENSUS. Two against two means we really cannot say which pair is right,
     so the performance stays disputed rather than being decided by whichever tape happens to sort
     first -- which would be a coin flip published as a measurement.
     """
@@ -538,7 +538,7 @@ def _mark_sandwiches(performances: Sequence[Performance]) -> tuple[list[Performa
                        "seconds": out[index].seconds} for index in indexes],
             "total_seconds": total,
             "note": "same song more than once in one night -- a sandwich, a reprise, or a "
-                    "genuine repeat play. The longest part is kept as the song's length and "
+                    "real repeat play. The longest part is kept as the song's length and "
                     "the rest are set aside; overrule in the pack's durations ledger."}))
     return out, edges
 
@@ -563,7 +563,7 @@ def reconcile(observations: Iterable[Observation], shows: Mapping[str, Mapping],
 
     ``exclusions`` is the pack's ledger of performances a human has ruled out by listening --
     a tape that cut off mid-song, a two-minute reprise of a song played in full earlier. Neither
-    is detectable from metadata, because both look exactly like a genuinely unusual performance,
+    is detectable from metadata, because both look exactly like a really unusual performance,
     which is what a statistic cannot tell them from. Excluded rows are still measured and still
     returned, tagged with their reason. They simply do not vote.
 

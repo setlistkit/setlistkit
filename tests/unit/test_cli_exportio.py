@@ -4,7 +4,7 @@
 sub-verb now shares.
 
 `write_bundle` moved here verbatim from `cli/export.py`'s old `_write` -- its atomic-replace
-behaviour is already exercised by every test in `test_cli_export.py` that reads a bundle back off
+behavior is already exercised by every test in `test_cli_export.py` that reads a bundle back off
 disk, so what is pinned here is only that the move did not change it. `fingerprint` is new.
 """
 

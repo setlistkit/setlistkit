@@ -272,7 +272,7 @@ def test_one_bad_tape_does_not_cost_a_run_that_is_hours_deep(tmp_path):
 
 def test_a_run_of_failures_stops_asking(tmp_path):
     """Resilience past this point is thousands of requests at a host already answering badly,
-    which is the one behaviour the etiquette rules exist to forbid."""
+    which is the one behavior the etiquette rules exist to forbid."""
     from setlistkit.sources.client import SourceError
     transport = FakeTransport(_page(20, *[f"i{n}" for n in range(20)]),
                               *[Response(500, {}, b"") for _ in range(200)])
@@ -428,7 +428,7 @@ def test_cached_items_distinguishes_no_pull_from_an_empty_collection(tmp_path):
     """`pages` is what separates the two, and they are not the same fact.
 
     Without it, an ingest reading a full cache under the wrong min_year gets the identical
-    value a genuinely empty cache returns, publishes nothing, and reports success.
+    value an actually empty cache returns, publishes nothing, and reports success.
     """
     transport = FakeTransport(_page(1, "a"), _json_response(_meta()))
     _archive(tmp_path, transport).pull("moe", min_year=2020)

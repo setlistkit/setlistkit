@@ -249,7 +249,7 @@ def test_cleaning_leaves_a_spoken_moment_its_quotes():
     """the quotes ARE the classification, so cleaning them off destroys it.
 
     Everything downstream asks is_non_song about the CLEANED entry. Strip the quotes here and the
-    classifier is handed 'Penguin Joke' with nothing to recognise -- which is how a knock-knock
+    classifier is handed 'Penguin Joke' with nothing to recognize -- which is how a knock-knock
     joke came to be published with a median length of 4m45s."""
     assert clean_song('"Penguin Joke"') == '"Penguin Joke"'
     assert clean_song('  "thank you very much everybody..."  ') == '"thank you very much everybody..."'

@@ -26,7 +26,7 @@ between the second song and the third.
 The line between TAG and DROP, since everything below is on one side of it:
 
     TAG      something that happened on the stage and is not music. Tuning, banter, a drum
-             solo, a note about who sat in. It belongs in the record, labelled.
+             solo, a note about who sat in. It belongs in the record, labeled.
     DROP     text that was never a setlist entry at all. The gear lineage, the venue name, a
              credit line, a checksum table, a URL. Nothing happened; a parser just found words.
 
@@ -121,7 +121,7 @@ SETMARK = re.compile(SETHEADER.pattern + r"|encore|\benc\b|\be:\s", re.I)
 # First numbered track ("01. ", "1) "). The dot-or-paren plus whitespace requirement avoids
 # matching version numbers ("1.2.1") and durations. This finds where the setlist starts when a
 # taper numbered the songs but wrote no "Set N" header -- without it, a later "Enc:" marker
-# becomes the first thing we recognise and the whole main set is thrown away.
+# becomes the first thing we recognize and the whole main set is thrown away.
 FIRST_NUMTRACK = re.compile(r"(?:^|[\n\s])0*[1-9]\d?[\.\)]\s+\S")
 
 # Tapers paste a checksum verification table at the end of the description:
@@ -161,7 +161,7 @@ CHECKSUM_TAIL = re.compile(r"^[ \t]*(shntool|shn\s*tool|md5|ffp|sha1|checksums?)
 # is a real song and a pattern that cut at "Band:" anywhere is one taper's colon away from eating
 # a setlist. And the trailing class is [^\S\n], not [ \t]: tapers paste from web pages, so the
 # character after the colon is routinely a non-breaking space, and a [ \t]*$ tail compiles
-# perfectly and then never fires -- the worst way for a defence to be wrong.
+# perfectly and then never fires -- the worst way for a defense to be wrong.
 _CREDIT_TAIL_BASE = (r"total\s+time\s*[:\[]", r"check\s+out\s+tour\s+dates",
                      r"(?:band|band\s+members|line-?up|personnel|musicians)\s*:[^\S\n]*$")
 
@@ -344,7 +344,7 @@ class ArchivePolicy:
         Extra regex fragments for the lineage filter, in the same shape -- the tape-utility
         shorthand one scene uses and the next has never heard of.
     ``band_name``
-        Used to recognise the press-bio and credit block the band's own name introduces
+        Used to recognize the press-bio and credit block the band's own name introduces
         ("About moe", "thanks to moe", "moe.:").
     """
 
@@ -532,7 +532,7 @@ def title_band_filter(band_name: str) -> Callable[[Mapping[str, Any]], bool]:
 
     We should not try to infer the band from the setlist, and we do not have to: archive.org
     puts it in the title of every item. Only a title that names a DIFFERENT band is rejected --
-    an unrecognised title shape is left alone, because being unable to read a title is not
+    an unrecognized title shape is left alone, because being unable to read a title is not
     evidence that a show is fake.
     """
     wanted = squash(band_name)
@@ -577,7 +577,7 @@ def clean_html(value: object) -> str:
 def _claimed(token: str, rules: _Rules) -> bool:
     """Does the pack say this token IS a song? The one guard every DROP rule defers to.
 
-    A whole cleaned token that the vocabulary or ``protected_titles`` recognises is a song the
+    A whole cleaned token that the vocabulary or ``protected_titles`` recognizes is a song the
     band is known to play, and no rule in this module is allowed to delete one. That principle
     was already stated twice -- on shape, and on venue words -- and applied in only those two
     places, so the annotation, credit and crew-role filters could each still delete a real
@@ -665,7 +665,7 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
         non_song = not rules.funnel.branch(
             "s2.nonsong", not rules.normalizer.is_non_song(canon))
         # An unknown title we are keeping AS A SONG has to look like one: short, no digits.
-        # Non-songs skip this gate because they are already labelled for what they are.
+        # Non-songs skip this gate because they are already labeled for what they are.
         if not non_song and rules.normalizer.normalize(canon) not in rules.vocab:
             if len(canon.split()) > 5 or re.search(r"\d", canon):
                 rules.funnel.hit("s2.unknown.fail")
@@ -865,7 +865,7 @@ def _show_date(item: Mapping[str, Any], overrides: Mapping[str, str]) -> str:
     """
     stated = str(item.get("meta_date") or item.get("date") or "")[:10]
     date = overrides.get(str(item.get("identifier") or ""), stated)
-    # \Z, not the default re.match prefix behaviour and not $. An override is not sliced to ten
+    # \Z, not the default re.match prefix behavior and not $. An override is not sliced to ten
     # characters the way `stated` is, so a trailing newline or a time component would otherwise
     # sail through and become the show's date -- and `$` would have let the newline through too.
     return date if _DATE_SHAPE.match(date) else ""

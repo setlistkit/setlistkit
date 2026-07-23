@@ -3,7 +3,7 @@
 """What every export bundle needs and none of them should have to write for itself.
 
 Two things, both pulled out of ``cli/export.py`` once a second bundle needed them: writing the
-file (``write_bundle``, moved verbatim -- the atomic-replace behaviour and its reasoning are
+file (``write_bundle``, moved verbatim -- the atomic-replace behavior and its reasoning are
 unchanged, only its address) and fingerprinting the store that produced it (``fingerprint``, new).
 
 ``fingerprint`` exists for the day setlistkit publishes more than one bundle from one store and a

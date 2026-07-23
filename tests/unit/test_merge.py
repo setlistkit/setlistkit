@@ -277,7 +277,7 @@ def test_a_date_correction_cannot_be_applied_as_a_setlist_override():
 
     corpus.json's date_overrides move a show to another night; overrides.json says what was
     played. Fed in here as the second, a date correction becomes a "show" made of a date and a
-    paragraph of prose -- and since an override always wins, it replaces the genuine record for
+    paragraph of prose -- and since an override always wins, it replaces the real record for
     that night. This shipped once, from a single rebound local name.
     """
     shows = [_record("2026-01-31", "description", _named(14))]

@@ -55,7 +55,7 @@ XDG_CONFIG_RELPATH = Path("setlistkit") / "config.toml"
 class Config:
     """A resolved configuration.
 
-    ``data_root`` is absolute. ``raw`` is the full parsed TOML so sections not yet modelled
+    ``data_root`` is absolute. ``raw`` is the full parsed TOML so sections not yet modeled
     (``[sources.*]``, ``[report]``) remain reachable by later layers without this type
     having to grow a field per phase. ``source_path`` records which file was loaded, which
     matters for error messages and for resolving relative paths within the config.

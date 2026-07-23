@@ -295,7 +295,7 @@ def test_a_lineup_heading_followed_by_a_non_breaking_space_still_cuts():
     r"""Tapers paste from web pages, so the character after the colon is routinely \xa0.
 
     A [ \t]*$ tail compiles perfectly and then never fires, which is the worst way for a
-    defence to be wrong: there is nothing to see. This is the real byte from the real tape.
+    defense to be wrong: there is nothing to see. This is the real byte from the real tape.
     """
     record = _parse(_item(description=("Set 1:\n01. Rebubula\n02. Meat\n03. Ophelia\n"
                                        "Band:\xa0\nAl Schnier - electric guitar\nPercussion\n")),
@@ -560,7 +560,7 @@ def test_a_greeting_is_tagged_rather_than_dropped():
 
 
 def test_no_drop_rule_can_delete_a_song_the_pack_claims():
-    """The invariant every DROP rule in this module defers to, asserted rule by rule.
+    """What every DROP rule in this module defers to, asserted rule by rule.
 
     Each of these once deleted a real title. The shape gate and the venue check already asked
     the pack first; the annotation filter, the credit-line filter and the crew-role filter did

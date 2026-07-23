@@ -38,7 +38,7 @@ _PROGRESS_EVERY = 25
 
 # Seconds per item, for the estimate a dry run prints. MEASURED against archive.org (94 items in
 # 2m25s, then 4614 more), not computed from the configured delay: the delay is only the half we
-# control, and the round trip is the other half. An estimate, and labelled as one -- but a real
+# control, and the round trip is the other half. An estimate, and labeled as one -- but a real
 # one, and the difference between "4222 items" and "about two hours" is the whole decision.
 _SECONDS_PER_ITEM = 1.5
 

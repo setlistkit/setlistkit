@@ -58,7 +58,7 @@ _MAX_LISTED = 8
 class _Timed:
     """Everything the per-tape reading pass produced, before any tape is compared to another.
 
-    Mutable and accumulated, unlike most of the types in this codebase, because it is genuinely a
+    Mutable and accumulated, unlike most of the types in this codebase, because it is really a
     tally being built -- and one type rather than five parallel lists so that a pass which forgets
     to record a refusal cannot typecheck.
     """

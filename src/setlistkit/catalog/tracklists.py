@@ -2,12 +2,12 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Read the taper's own tracklist out of a tape's description: one entry per FILE, in play order.
 
-The tapers wrote down what every track is. The job here is not to discover it, only to RECOGNISE
+The tapers wrote down what every track is. The job here is not to discover it, only to RECOGNIZE
 it -- a lesson this pipeline has had to learn three separate times, once for filenames, once for
 numbered listings and once here, because each time the reflex was to invent a pattern the taper
 was supposed to have followed instead of reading what they actually wrote.
 
-THE SECOND PROJECTION OF A DESCRIPTION, and the direct analogue of ``duration_tracks`` beside
+THE SECOND PROJECTION OF A DESCRIPTION, and the direct analog of ``duration_tracks`` beside
 ``_tracks`` one layer down. :mod:`setlistkit.catalog.parse` reads the same text into a SETLIST --
 what was played, grouped into sets and an encore -- and that is a different object from a
 TRACKLIST, which is what is on the tape. A tracklist has exactly as many entries as the tape has
@@ -68,7 +68,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 # A numbered line. The index may carry a disc/set prefix (d1t01, s2t08) or an encore prefix
 # (E01), and the separator may be punctuation, whitespace, or -- because one taper wrote
-# "10.Wurm" -- nothing at all. That single missing space once hid an entire fully-labelled show.
+# "10.Wurm" -- nothing at all. That single missing space once hid an entire fully-labeled show.
 _NUMBERED = re.compile(
     r"^\s*(?:([ds])(\d{1,2}))?\s*(e)?\s*t?(\d{1,3})\s*(?:[.):\-]\s*|\s+)(.+?)\s*$", re.I)
 
@@ -149,7 +149,7 @@ class Tracklist:
 
 @dataclass(frozen=True)
 class SongVocabulary:
-    """What a tracklist line is recognised against, in the two forms recognition needs.
+    """What a tracklist line is recognized against, in the two forms recognition needs.
 
     ``normalized`` is the pack's own normalized key for every song it knows -- articles dropped,
     punctuation flattened, aliases folded in. Recognition tries this FIRST and it is the reason
@@ -190,8 +190,8 @@ def song_vocabulary(normalizer: Normalizer, shows: Iterable[Mapping] = (),
     91.8%. Junk is overwhelmingly a singleton -- a parser accident happens once -- while real
     repertoire repeats.
 
-    The cost is real and is the right way round. A song genuinely played once and never again is
-    not recognised, so a tape whose listing depends on it fails to line up and is not used. That
+    The cost is real and is the right way round. A song actually played once and never again is
+    not recognized, so a tape whose listing depends on it fails to line up and is not used. That
     is the safe failure: an unmatched listing is refused, while a junk-inflated one MATCHES and
     writes a wrong duration that looks exactly like a right one.
 
@@ -209,7 +209,7 @@ def song_vocabulary(normalizer: Normalizer, shows: Iterable[Mapping] = (),
     known |= {normalize(name) for name in names}
     known |= {normalize(value) for value in aliases.values()}
     # Tagged non-songs are left out rather than counted. They are not repertoire, and a bare
-    # listing recognises them through the pack's classifiers anyway -- see _is_interstitial --
+    # listing recognizes them through the pack's classifiers anyway -- see _is_interstitial --
     # so putting them here would only give tuning a second, less careful way in.
     played: Counter[str] = Counter(
         str(entry.get("song") or "")
@@ -342,7 +342,7 @@ def _read_numbered(lines: Iterable[str], normalizer: Normalizer) -> list[TrackEn
 
 def _read_bare(lines: Iterable[str], vocab: SongVocabulary, normalizer: Normalizer,
                gear: re.Pattern) -> list[TrackEntry]:
-    """No numbers -- just the songs. Found by recognising them."""
+    """No numbers -- just the songs. Found by recognizing them."""
     hits: list[TrackEntry] = []
     for line in lines:
         if _SET_HEADER.match(line) or len(line) > _MAX_TITLE or gear.search(line):
@@ -358,7 +358,7 @@ def _read_bare(lines: Iterable[str], vocab: SongVocabulary, normalizer: Normaliz
 def _truncate_at_restart(rows: Sequence[TrackEntry]) -> list[TrackEntry]:
     """The listing up to the point its numbering goes backwards.
 
-    A restart is genuinely ambiguous and must not be guessed at::
+    A restart is really ambiguous and must not be guessed at::
 
         19. Godzilla            |    08. Kyle's Song
          1. Part of the Lowell  |    01. Along For The Ride     <- set two, renumbered
@@ -422,7 +422,7 @@ def read_tracklist(description: object, n_tracks: int, *, vocab: SongVocabulary,
     1. the numbered listing as written
     2. ...cut where its numbering restarts, if that restart was footnotes rather than a new set
     3. ...or just its leading run, for a listing that carries on past the tape
-    4. the bare listing, recognised by name
+    4. the bare listing, recognized by name
     5. ...cut at a restart in the same way
     6. ...with segue runs broken into one entry per song, for a taper who wrote a setlist
     7. ...and the same for the numbered listing

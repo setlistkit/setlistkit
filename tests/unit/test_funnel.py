@@ -3,7 +3,7 @@
 """Tests for the ingest funnel: one counter per edge, and the arithmetic that has to close.
 
 Two things are pinned here, both quoted from the module's own docstring. First, the
-RECONCILIATION INVARIANT: at every node, what arrived equals what left, over every stage. It is
+RECONCILIATION RULE: at every node, what arrived equals what left, over every stage. It is
 the test that already caught a real bug once while the profiler was being built -- the
 unknown-title gate only examined titles the vocabulary did NOT know, and counting only the
 examined ones left the node short by every known song in the corpus. Second, EDGE COVERAGE:
@@ -121,7 +121,7 @@ def test_edge_ids_flattens_every_edge_in_the_registry_with_no_duplicates():
     assert len(set(EDGE_IDS)) == len(EDGE_IDS)
 
 
-# --- a real parse: the invariant held against production code ------------------------------
+# --- a real parse: the rule held against production code ------------------------------
 
 _VOCAB = ["Rebubula", "Meat", "Ophelia", "Aurora"]
 
@@ -191,7 +191,7 @@ def test_a_realistic_parse_reconciles_at_every_node():
 def test_a_weak_description_retry_still_reconciles():
     """A description too thin to count as a setlist falls back to the tracklist, and the
     scratch funnel from that attempt is folded in only if it wins -- exactly the merge path
-    :meth:`Funnel.merge` exists for. The invariant has to survive it.
+    :meth:`Funnel.merge` exists for. The rule has to survive it.
     """
     item = dict(_item("w1", "2026-01-31", "a lovely night, thanks all"),
                 tracks=[{"title": "Meat"}, {"title": "Aurora"}, {"title": "Rebubula"},

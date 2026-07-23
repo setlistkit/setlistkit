@@ -10,7 +10,7 @@ here is statistical, and nothing there parses text.
 
 HOW A TRACK IS MATCHED TO A SONG
 Not by parsing the filename. The setlist is already known, so a song does not have to be
-DISCOVERED, only RECOGNISED. Both sides are squashed to bare ``[a-z0-9]`` and the question is
+DISCOVERED, only RECOGNIZED. Both sides are squashed to bare ``[a-z0-9]`` and the question is
 whether tonight's song appears in this filename:
 
     "moe. 2023-01-19 Neumann AK40/01 Stranger Than Fiction.flac" -> strangerthanfiction
@@ -26,10 +26,10 @@ Squashing does reopen substring collisions ("bud" sits inside "buddy"), so short
 up with whole words. Every such call is recorded as an edge rather than trusted quietly.
 
 NAMELESS TAPES ARE NOT GUESSED AT
-A taper who numbers tracks without naming them gives nothing to recognise. Zipping tracks to
+A taper who numbers tracks without naming them gives nothing to recognize. Zipping tracks to
 songs by position is available and is refused: tapers also put a 40-second tuning track at t01,
 so ``track[i]`` becomes ``song[i-1]`` and the whole night shifts by one, quietly teaching the
-model that every song is the length of its neighbour. A 5-minute jam vehicle is the tell, and it
+model that every song is the length of its neighbor. A 5-minute jam vehicle is the tell, and it
 is indistinguishable from a real observation once it is in the table. Nameless tapes go to the
 review queue with a link, for a human to read.
 """
@@ -59,7 +59,7 @@ _MAX_RUN_WORDS = 6
 #
 # The obvious test -- "did it name 60% of tonight's setlist?" -- is the wrong question, and it
 # silently threw away every PARTIAL recording. A taper who only caught set two names half the
-# night and fails, even though every track they have is correctly labelled and unambiguous.
+# night and fails, even though every track they have is correctly labeled and unambiguous.
 #
 # The right question is how much of THE TAPE was explained. Six tracks, six songs found, is a
 # tape read completely. A tape of bare indexes explains nothing and is still rejected, and a tape
@@ -87,7 +87,7 @@ DESCRIPTION_MARGIN = 2
 # published a 78:55 song.
 #
 # Set at 60 minutes, deliberately conservative. Bands really do play a 28-minute jam, so the
-# threshold has to clear the longest genuine performance by a wide margin; the tapes this catches
+# threshold has to clear the longest real performance by a wide margin; the tapes this catches
 # are 45 minutes and up. Dropping it to 30 would catch seven more, all merged the same way, but 30
 # minutes is close enough to a real jam that the rule would stop being obviously correct -- and a
 # rule you have to argue about on every tape is not a blanket rule.
@@ -154,7 +154,7 @@ class Tape:
 
 @dataclass(frozen=True)
 class Night:
-    """Tonight's setlist, flattened, with the spellings each slot can be recognised by.
+    """Tonight's setlist, flattened, with the spellings each slot can be recognized by.
 
     The two are computed together and used together on every track of every tape of the night.
     Keeping them in one object is what stops the forms being rebuilt per tape -- the
@@ -167,7 +167,7 @@ class Night:
 
     @classmethod
     def of(cls, show: Mapping, normalizer: Normalizer) -> Night:
-        """Flatten a stored show and compute its recognisable spellings once."""
+        """Flatten a stored show and compute its recognizable spellings once."""
         setlist = tuple(flatten_setlist(show))
         return cls(setlist, setlist_forms(setlist, normalizer))
 
@@ -375,7 +375,7 @@ def claims_in(text: str, night: Night, normalizer: Normalizer) -> list[tuple[int
     #
     # The whole-word rule stops "bud" matching "buddy"; it cannot stop "Time" matching a real word
     # in a longer title. When two matched songs overlap this way, the longer title is the one the
-    # taper meant. (Genuinely distinct songs in one file -- "Time > Breathe Reprise" -- do not
+    # taper meant. (Actually distinct songs in one file -- "Time > Breathe Reprise" -- do not
     # overlap, so a real segue pair is untouched.)
     if len(hits) > 1:
         matched = [form for _, form, _ in hits]
@@ -583,7 +583,7 @@ def best_reading(tape: Tape, night: Night, normalizer: Normalizer) -> Reading:
     A description offset by a block still matches nearly everything. The setlist runs in the same
     order as the files, so shifting it by one lines song N up against track N+1 and scores almost
     as well as the truth -- sometimes better, when the shift happens to skate past a song whose
-    filename is unrecognised. One tape's description opens with a date header, so every song sits
+    filename is unrecognized. One tape's description opens with a date header, so every song sits
     one track late, and the shifted reading beat the correct one 13 to 12. Taking the winner on raw
     count booked a song at 22:18 -- the length of an entirely different pair -- and moved five
     others with it.
@@ -595,7 +595,7 @@ def best_reading(tape: Tape, night: Night, normalizer: Normalizer) -> Reading:
     readings are close, the filenames are the safer of the two.
 
     MARGIN of 2 rather than 1 because an off-by-one description can beat the truth by one row.
-    Where the description is genuinely the better source it does not win narrowly -- the real cases
+    Where the description is really the better source it does not win narrowly -- the real cases
     win 13 to 7 and 18 to 1.
     """
     described = match_tape(tape, night, normalizer, DESCRIPTION)

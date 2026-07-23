@@ -112,7 +112,7 @@ _PACK_SCHEMA = {
         "version": {"type": "string", "minLength": 1},
         "description": {"type": "string"},
         "sources": {"type": "array", "items": {"type": "string"}},
-        # Not the same string as `name`, and the difference is load-bearing. `name` identifies
+        # Not the same string as `name`, and the difference is essential. `name` identifies
         # the pack ("moe"); `band_name` is what the band calls itself ("moe."), which is what
         # a taper types and what archive.org puts in an item title. Optional: a pack that never
         # meets a rival band's tape does not need it.

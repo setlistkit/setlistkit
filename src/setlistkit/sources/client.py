@@ -147,7 +147,7 @@ def urllib_transport(url: str, headers: dict[str, str], *, timeout: float = 60) 
 
     An HTTP error status (4xx/5xx) is a completed exchange, so it comes back as a
     :class:`Response`, not an exception -- the client decides whether 404 means "absent" and
-    whether 429 means "retry". A genuine network failure raises :class:`TransportError`.
+    whether 429 means "retry". A real network failure raises :class:`TransportError`.
     """
     request = urllib.request.Request(url, headers=headers)
     # urlopen flags non-http schemes (file://, ...); every source URL here is a hard-coded

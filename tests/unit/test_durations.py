@@ -75,7 +75,7 @@ def test_touches_segue_is_false_past_the_end_of_a_set():
     assert D.touches_segue(show, "E", 1) is False
 
 
-# ---- recognising a song in a filename --------------------------------------------------------
+# ---- recognizing a song in a filename --------------------------------------------------------
 
 def test_a_song_is_recognised_through_punctuation_spacing_and_case():
     night = _night(_show([[_entry("Stranger Than Fiction")]]))
@@ -119,7 +119,7 @@ def test_a_title_sitting_inside_a_longer_one_does_not_also_claim_it():
 
 
 def test_a_real_segue_pair_in_one_file_still_reports_both_songs():
-    """The overlap rule must not silence a genuine pair: "Time > Breathe Reprise" names two
+    """The overlap rule must not silence a real pair: "Time > Breathe Reprise" names two
     distinct songs and neither title sits inside the other."""
     show = _show([[_entry("Time"), _entry("Breathe Reprise")]])
     night = _night(show)
@@ -229,7 +229,7 @@ def test_a_description_that_explains_far_more_of_the_night_is_taken():
     filename skips six songs and rejects the tape.
 
     The filenames here are wrong rather than absent, which is what makes the two readings
-    genuinely differ: track one names the LAST song of the night, so the forward-only cursor
+    really differ: track one names the LAST song of the night, so the forward-only cursor
     jumps to the end and everything after it is unreachable.
     """
     show = _show([[_entry("Buster"), _entry("Moth"), _entry("Meat"), _entry("Gone")]])
@@ -246,7 +246,7 @@ def test_a_description_winning_by_a_single_row_does_not_get_to_win():
     shifted reading beat the correct one 13 to 12 -- booking a song at the length of another."""
     show = _show([[_entry("Buster"), _entry("Moth"), _entry("Meat")]])
     # The description is offset by one: it names Moth where Buster plays, and so on. It matches
-    # one more slot than the filenames, which are right but leave one track unrecognised.
+    # one more slot than the filenames, which are right but leave one track unrecognized.
     tape = _two_source_tape(["Moth", "Meat", "Buster"], ["Buster", "Moth", "zzz"])
     reading = D.best_reading(tape, _night(show), _Pack())
     assert reading.verdict == D.FILENAME
