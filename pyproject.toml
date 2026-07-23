@@ -30,8 +30,18 @@ classifiers = [
 #   cleanly and a hand-rolled validator gets subtly wrong. jsonschema reports a JSON Pointer
 #   with no source position, so catalog/jsonpos.py maps that pointer to a line:col for the
 #   caret; the domain rules a schema cannot express stay hand-rolled on top.
+#   isodate: report window offsets ("P18M", "P3Y6M", ...) need calendar-aware date arithmetic --
+#   subtracting a month from March 31st has to land on a real day, and the stdlib has no answer
+#   for that. isodate is one package with ZERO dependencies of its own (it dropped `six` in
+#   0.7.0, which python-dateutil still has not), and its date arithmetic agrees with
+#   dateutil.relativedelta on every clamping case this project tested (see
+#   docs/plans/2026-07-22-songbook-design.md, "The clamping rule"). It lives in CORE rather than
+#   the report extra: relative windows are read by `slkit export` itself, including a headless
+#   CI run building a config-driven bundle with no templating involved -- gating it behind
+#   `report` would make a core CLI flag depend on an optional extra.
 dependencies = [
     "jsonschema>=4.0",
+    "isodate>=0.7",
 ]
 
 [project.optional-dependencies]
