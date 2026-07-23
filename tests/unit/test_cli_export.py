@@ -508,3 +508,59 @@ def test_explain_with_no_shows_stored_says_so_and_exits_nothing(tmp_path, capsys
     code = main(["--config", config, "export", "--explain"])
     assert code == EXIT_NOTHING
     assert "nothing to explain" in capsys.readouterr().out
+
+
+# --- config-driven windows in a real build ------------------------------------------------------
+
+
+def test_songbook_resolves_its_window_from_config_when_no_flags_are_given(tmp_path):
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    assert main(["--config", config, "export", "songbook", "--out", str(out)]) == EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    # TAPES' last stored night is 2025-07-05; since_back="P1M" resolves to 2025-06-05 (no clamp:
+    # June has a 5th). No until_back configured, so `until` defaults to the anchor itself.
+    assert payload["generated"]["window"] == {"since": "2025-06-05", "until": "2025-07-05",
+                                              "spec": None}
+    assert [row["d"] for row in payload["shows"]] == ["2025-07-04", "2025-07-05"]
+
+
+def test_songbook_an_explicit_flag_still_wins_over_a_configured_window(tmp_path):
+    """Flags beat config PER ENDPOINT -- `--since` overrides only the configured start; `until`
+    still comes from config, since no `--until` flag was given here."""
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    assert main(["--config", config, "export", "songbook", "--out", str(out),
+                "--since", "2025-07-05"]) == EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["generated"]["window"] == {"since": "2025-07-05", "until": "2025-07-05",
+                                              "spec": None}
+
+
+def test_tapemeasure_resolves_its_window_from_config_when_no_flags_are_given(tmp_path):
+    """Wired the same way as songbook, through the same `_window_for` helper -- a config-driven
+    window is not a songbook-only feature."""
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.tapemeasure.window]\nsince_back = "P1D"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    out = tmp_path / "tapemeasure.json"
+    assert main(["--config", config, "export", "tapemeasure", "--out", str(out)]) == EXIT_OK
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    # TAPES' last stored night is 2025-07-05; since_back="P1D" resolves to 2025-07-04.
+    assert payload["generated"]["window"] == {"since": "2025-07-04", "until": "2025-07-05"}
+
+
+def test_an_empty_corpus_still_reports_nothing_rather_than_crashing_on_window_resolution(tmp_path):
+    """`store.corpus.first_and_last()` is `None` for an empty corpus -- there is no `last_show` to
+    anchor a configured window against, so `_window_for` must not try, even when a window IS
+    configured. The existing 'nothing stored' path is what should fire instead."""
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "store", "init"]) == EXIT_OK
+    out = tmp_path / "songbook.json"
+    assert main(["--config", config, "export", "songbook", "--out", str(out)]) == EXIT_NOTHING
+    assert not out.exists()

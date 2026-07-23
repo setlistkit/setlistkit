@@ -128,18 +128,42 @@ def _explain_endpoint(key: str, literal: str | None, endpoint) -> None:
         print(f"  note: {endpoint.clamp_note}")
 
 
+def _window_for(config, report_name: str, args,
+                span: tuple[str, str] | None) -> tuple[str | None, str | None]:
+    """One report's effective window: an explicit flag beats ``[reports.<report_name>.window]``.
+
+    Shared by ``_tapemeasure`` and ``_songbook`` so the two sub-verbs cannot drift into resolving
+    windows two different ways. ``span`` is the corpus's earliest/latest stored show date
+    (``store.corpus.first_and_last()``), or ``None`` for an empty corpus -- there is no
+    `last_show`/`first_show` to anchor a configured window against yet, and the caller's own
+    "nothing stored" message fires immediately after this returns regardless of what it returns,
+    so falling back to bare flag-checking (no config lookup at all) is enough here, rather than
+    duplicating ``_explain``'s explicit "nothing to explain" message a second time.
+    """
+    since_flag = getattr(args, "since", None)
+    until_flag = getattr(args, "until", None)
+    if span is None:
+        return (daterange.check_date(since_flag, "--since"),
+                daterange.check_date(until_flag, "--until"))
+    first, last = span
+    return exportio.resolve_window(config, report_name, since_flag=since_flag,
+                                   until_flag=until_flag, first=first, last=last)
+
+
 def _tapemeasure(config, args) -> int:
     """Read the last derivation out of the store and write it as one bundle.
 
-    ``--since``/``--until`` narrow every section to one inclusive window, statistics included. See
-    :func:`_stats_for` for why the statistics are the one thing here that is computed rather than
-    read, and why that is not the recomputation this module's docstring refuses to do.
+    ``--since``/``--until`` narrow every section to one inclusive window, statistics included --
+    an explicit flag beats a configured ``[reports.tapemeasure.window]`` per endpoint (see
+    :func:`_window_for`), and a run with neither stays the open window this command has always
+    defaulted to. See :func:`_stats_for` for why the statistics are the one thing here that is
+    computed rather than read, and why that is not the recomputation this module's docstring
+    refuses to do.
     """
-    since = daterange.check_date(getattr(args, "since", None), "--since")
-    until = daterange.check_date(getattr(args, "until", None), "--until")
-    window = {"since": since, "until": until}
     with Store(config.data_root) as store:
         store.init()
+        since, until = _window_for(config, "tapemeasure", args, store.corpus.first_and_last())
+        window = {"since": since, "until": until}
         performances = store.durations.performances(**window)
         if not performances:
             print(_nothing_message(since, until))
@@ -249,14 +273,14 @@ def _songbook(config, args) -> int:
 
     Unlike `_tapemeasure`, nothing here is read from a `derive`-written table -- there is none.
     The bundle is a pure function of the stored corpus and the pack's vocabulary (see
-    `catalog.songbook.bundle`), so this handler's only jobs are: resolve the window, load the
-    pack, read the corpus, and hand both to the pure function untouched.
+    `catalog.songbook.bundle`), so this handler's only jobs are: resolve the window (an explicit
+    flag beats a configured ``[reports.songbook.window]`` per endpoint -- see :func:`_window_for`),
+    load the pack, read the corpus, and hand both to the pure function untouched.
     """
-    since = daterange.check_date(getattr(args, "since", None), "--since")
-    until = daterange.check_date(getattr(args, "until", None), "--until")
     pack = load_pack(resolve_pack_dir(getattr(args, "pack", None), args.config))
     with Store(config.data_root) as store:
         store.init()
+        since, until = _window_for(config, "songbook", args, store.corpus.first_and_last())
         shows = store.corpus.shows(since=since, until=until)
         if not shows:
             print(_nothing_songbook(since, until))
