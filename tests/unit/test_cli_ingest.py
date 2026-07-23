@@ -757,3 +757,39 @@ def test_a_tape_whose_description_yields_no_setlist_is_mirrored_and_explained(tm
         assert store.tapes.recording_count() == 2                 # both tapes mirrored
         assert [s["date"] for s in store.corpus.shows()] == ["2025-07-04"]   # one show in the corpus
         assert "2025-09-09" in store.tapes.show_types()
+
+
+# --- the funnel profile ---------------------------------------------------------------------
+
+def test_ingest_writes_no_profile_by_default(tmp_path, capsys):
+    _cache(tmp_path)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    assert "profile written" not in capsys.readouterr().out
+
+
+def test_profile_flag_writes_the_funnel_counts_as_json(tmp_path, capsys):
+    _cache(tmp_path)
+    out = tmp_path / "funnel.json"
+    assert main(["--config", _cfg(tmp_path), "ingest", "--profile", str(out)]) == EXIT_OK
+    assert f"profile written to {out}" in capsys.readouterr().out
+    payload = json.loads(out.read_text())
+    assert payload["counts"]["s1.start"] == 4        # the four cached items in ITEMS
+    assert payload["shows"] == 1
+    assert payload["skipped"] == 3
+    assert payload["imbalances"] == []
+
+
+def test_profile_is_written_on_a_dry_run_too(tmp_path):
+    """The flag decides whether the counts are WRITTEN, not whether they are taken -- a dry run
+    still parses everything, so it can still be asked to show its work."""
+    _cache(tmp_path)
+    out = tmp_path / "funnel.json"
+    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run",
+                "--profile", str(out)]) == EXIT_OK
+    assert out.is_file()
+
+
+def test_a_healthy_ingest_never_prints_an_imbalance_warning(tmp_path, capsys):
+    _cache(tmp_path)
+    main(["--config", _cfg(tmp_path), "ingest"])
+    assert "does not reconcile" not in capsys.readouterr().out

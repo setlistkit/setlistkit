@@ -35,10 +35,13 @@ anything they decide. What lives HERE is the three things Phase 3 deliberately k
 
 from __future__ import annotations
 
+import json
 import textwrap
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
+from ..catalog.funnel import imbalances
 from ..catalog.merge import merge_shows, override_disagreements
 from ..catalog.pack import load_pack
 from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING, count_songs,
@@ -147,6 +150,7 @@ def ingest(config, args) -> int:
                              source_by_date=store.corpus.show_sources())
         _report_merge(merged, previous, produced, pack, len(cached.items))
         _report_skipped(parsed.skipped, pack, len(cached.items))
+        _report_profile(parsed, getattr(args, "profile", None))
         _report_mirror(mirror, {show["date"] for show in merged.shows})
         # --dry-run is exempt: the guard protects the stored corpus, and a dry run cannot reach
         # it. Refusing anyway would make the one command that is safe to run while diagnosing a
@@ -509,3 +513,37 @@ def _report_skipped(skipped, pack, n_items: int) -> None:
         why = textwrap.shorten(str(pack.corpus.drop_dates.get(date) or "no reason recorded"),
                                width=_REASON_WIDTH, placeholder=" [...]")
         print(f"      {date} ({tapes} tape(s)): {why}")
+
+
+def _report_profile(parsed, profile_path: str | None) -> None:
+    """Say when the funnel's arithmetic does not close, and write it out if asked to.
+
+    The imbalance check runs on every ingest, profiled or not -- ``catalog.funnel``'s own
+    docstring is explicit that the counts are always taken, and a reconciliation bug is worth
+    knowing about on an ordinary run, not only the one somebody happened to ask for a profile
+    on. ``--profile`` only decides whether the numbers are WRITTEN, exactly as that docstring
+    says of the counting itself.
+    """
+    unreconciled = imbalances(parsed.funnel)
+    if unreconciled:
+        # Reported, never raised: a funnel that does not close is a bug in THIS PROGRAM, not a
+        # reason to refuse a corpus that is otherwise fine. See catalog.funnel.imbalances.
+        print(f"  warning: the funnel does not reconcile at {len(unreconciled)} node(s):")
+        for node, entering, leaving in unreconciled:
+            print(f"    {node}: {entering} in, {leaving} out")
+    if not profile_path:
+        return
+    path = Path(profile_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "counts": parsed.funnel.as_dict(),
+        "shows": len(parsed.shows),
+        "skipped": len(parsed.skipped),
+        "imbalances": unreconciled,
+    }
+    # Registry order, not alphabetical: as_dict() already walks EDGE_IDS in the order the ladder
+    # runs, and sort_keys would scramble s1/s2/s3 into the alphabet for no reason anyone reading
+    # the file would thank us for.
+    path.write_text(json.dumps(payload, indent=2, sort_keys=False, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+    print(f"  profile written to {path}")

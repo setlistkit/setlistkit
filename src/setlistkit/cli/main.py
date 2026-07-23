@@ -121,6 +121,12 @@ def _add_ingest(sub) -> None:
         help="publish even when the merge produced far fewer shows than are stored (see the "
              "no-shrink guard)",
     )
+    ingest_cmd.add_argument(
+        "--profile", metavar="PATH",
+        help="write the funnel's per-decision counts to PATH as JSON (see catalog.funnel); the "
+             "counts are always taken during a parse, this only decides whether they are "
+             "written out",
+    )
 
 
 def _add_derive(sub) -> None:
