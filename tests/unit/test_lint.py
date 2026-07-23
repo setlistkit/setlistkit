@@ -381,6 +381,37 @@ def test_a_one_off_unknown_title_is_below_the_reporting_floor(tmp_path):
     assert not any("not in the vocabulary" in d.summary for d in found)
 
 
+def test_a_near_miss_title_is_reported_regardless_of_play_count(tmp_path):
+    """The floor that keeps _unknown_title_findings readable is the wrong filter for THIS
+    question: a fake song only has to be minted once to publish a wrong number beside a real
+    one's -- see the Rebubula/Rububula splinter this rule exists to catch."""
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": '["Aurora"]'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Arorra\n")])
+    near = [d for d in found if "nearly match" in d.summary]
+    assert len(near) == 1
+    assert "'Arorra' -> 'Aurora'" in near[0].detail
+    # one play is far below _UNKNOWN_TITLE_FLOOR (8), and reported anyway
+    assert not any("not in the vocabulary" in d.summary for d in found)
+
+
+def test_a_title_with_no_near_vocabulary_match_is_not_a_near_miss(tmp_path):
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": '["Aurora"]'})
+    found = lint(pack, [_item("Set 1:\n01. Aurora\n02. Totally Different Thing\n")])
+    assert not any("nearly match" in d.summary for d in found)
+
+
+def test_near_miss_and_the_unknown_floor_finding_accumulate_independently(tmp_path):
+    """One title crosses the floor by frequency, a different one is near a known name -- both
+    findings fire, neither one absorbs the other."""
+    pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
+    items = [_item("Set 1:\n01. Aurora\n02. Mystery Song\n", identifier=f"t{n}",
+                   date=f"2025-07-{n:02d}") for n in range(1, 11)]
+    items.append(_item("Set 1:\n01. Aurora\n02. Arorra\n", identifier="near", date="2025-08-01"))
+    found = lint(pack, items)
+    assert any("not in the vocabulary" in d.summary for d in found)          # Mystery Song, n=10
+    assert any("nearly match" in d.summary for d in found)                   # Arorra, n=1
+
+
 def test_corpus_checks_report_themselves_skipped_without_a_corpus(tmp_path):
     pack = _write_pack(tmp_path, **{"pack.json": IDENTITY, "vocabulary.json": VOCAB})
     assert any("corpus-aware checks skipped" in s for s in _summaries(lint(pack)))

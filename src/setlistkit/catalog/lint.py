@@ -41,7 +41,7 @@ perfectly clean. That is the same shape as a filter test written above the set h
 fail, it just never fires. The parser records what it actually saw, and that is what these checks
 are held against.
 
-Four corpus-aware findings, all warnings, because none of them is a broken pack:
+Five corpus-aware findings, all warnings, because none of them is a broken pack:
 
 - **A rule matches nothing.** Dead weight, and the pack cannot know it without a corpus.
 - **A rule is subsumed by another.** Everything it catches, another rule already caught.
@@ -49,10 +49,13 @@ Four corpus-aware findings, all warnings, because none of them is a broken pack:
 - **A frequent title the pack does not know.** The "Hi & Lo" bug from the other side: not an
   alias pointing nowhere, but a real song nothing points AT. Its plays scatter across a name that
   joins to nothing, which is silent and permanent and looks exactly like a song nobody played.
+- **A title nearly matches a known one.** Reported at every play count, because frequency is
+  the wrong filter for "which fake songs are we publishing" -- see ``_near_miss_title_findings``.
 """
 
 from __future__ import annotations
 
+import difflib
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -115,6 +118,7 @@ def lint(pack_dir, items: Iterable[Mapping] = ()) -> list[Diagnostic]:
     diagnostics.extend(_subsumed_rule_findings(pack, pack_dir, census))
     diagnostics.extend(_unreachable_alias_findings(pack, pack_dir, census))
     diagnostics.extend(_unknown_title_findings(pack, census))
+    diagnostics.extend(_near_miss_title_findings(pack, census))
     return diagnostics
 
 
@@ -250,6 +254,35 @@ def _spelt(variants: Counter) -> str:
     return f"{ranked[0]} (also: {', '.join(ranked[1:4])})"
 
 
+def _unknown_titles(pack: Pack, census) -> tuple[Counter, dict[str, Counter]]:
+    """Every title the corpus kept that the pack's vocabulary does not recognise.
+
+    Shared by :func:`_unknown_title_findings` and :func:`_near_miss_title_findings`, which ask
+    two different questions of the same set -- which of these are common enough to be worth a
+    look, and which of these are close enough to a known name to be a typo -- so the walk of the
+    census happens once, not twice, for a census that can run into the tens of thousands of
+    tokens on a real corpus.
+
+    Returns ``(plays, spellings)``: ``plays`` maps a normalized unknown key to how many times it
+    was played, ``spellings`` maps the same key to every raw spelling that reached it and how
+    often, for :func:`_spelt` to summarise.
+    """
+    normalize = pack.normalizer.normalize
+    _, norm_to_canon = pack.normalizer.build_vocab()
+    plays: Counter = Counter()
+    spellings: dict[str, Counter] = {}
+    for token, count in census.seen.items():
+        if token in census.dropped or token in census.tagged:
+            continue
+        canon, _ = pack.normalizer.canonicalize(token)
+        key = normalize(canon) if canon else ""
+        if not key or key in norm_to_canon:
+            continue
+        plays[key] += count
+        spellings.setdefault(key, Counter())[canon] += count
+    return plays, spellings
+
+
 def _unknown_title_findings(pack: Pack, census) -> list[Diagnostic]:
     """Titles the corpus keeps producing that the pack has never heard of.
 
@@ -270,19 +303,7 @@ def _unknown_title_findings(pack: Pack, census) -> list[Diagnostic]:
     because frequency is what says which one to fix first. The spellings are shown together, since
     seeing the variants IS the argument for adding the song.
     """
-    normalize = pack.normalizer.normalize
-    _, norm_to_canon = pack.normalizer.build_vocab()
-    plays: Counter = Counter()
-    spellings: dict[str, Counter] = {}
-    for token, count in census.seen.items():
-        if token in census.dropped or token in census.tagged:
-            continue
-        canon, _ = pack.normalizer.canonicalize(token)
-        key = normalize(canon) if canon else ""
-        if not key or key in norm_to_canon:
-            continue
-        plays[key] += count
-        spellings.setdefault(key, Counter())[canon] += count
+    plays, spellings = _unknown_titles(pack, census)
     unknown = Counter({_spelt(spellings[key]): n for key, n in plays.items()})
     frequent = [(name, n) for name, n in unknown.most_common() if n >= _UNKNOWN_TITLE_FLOOR]
     if not frequent:
@@ -304,6 +325,47 @@ def _unknown_title_findings(pack: Pack, census) -> list[Diagnostic]:
                "wants a classifier or a drop rule. Sorted by how often each was played, because\n"
                "that is the order in which getting it wrong costs the most.\n\n"
                f"{lines}{more}",
+    )]
+
+
+def _near_miss_title_findings(pack: Pack, census) -> list[Diagnostic]:
+    """Unknown titles that land just under canonicalize's own 0.9 fuzzy-match cutoff.
+
+    THE FLOOR ABOVE IS THE WRONG FILTER FOR THIS QUESTION. ``_UNKNOWN_TITLE_FLOOR`` exists
+    because below it the long tail is mostly one-off taper noise, and that reasoning holds for
+    "which songs are we missing" -- it is exactly backwards for "which fake songs are we
+    publishing with a straight face". A splinter only has to be minted ONCE to sit beside a real
+    song's statistics with a confident-looking median attached to it: `Rububula`, one character
+    off `Rebubula`, scored 0.875 against a 0.9 cutoff and was published as its own song with a
+    7:08 median computed from a single mistimed track.
+
+    Reported regardless of play count, and never merged automatically -- proposing a merge is
+    recognition, performing one is discovery, and this finding is deliberately only the former.
+    A human reads the candidate and either adds it to ``aliases.json`` or leaves it alone. The
+    same band, cutoff=0.80, is what ``catalog/normalizer.py``'s ``_canonicalize`` measures for
+    the identical reason when it is handed a funnel to record into; this is that same
+    measurement, read back out of a census instead of taken live during a parse.
+    """
+    _, norm_to_canon = pack.normalizer.build_vocab()
+    plays, spellings = _unknown_titles(pack, census)
+    candidates = []
+    for key, n in plays.most_common():
+        match = difflib.get_close_matches(key, list(norm_to_canon.keys()), n=1, cutoff=0.80)
+        if match:
+            candidates.append((_spelt(spellings[key]), n, norm_to_canon[match[0]]))
+    if not candidates:
+        return []
+    lines = "\n".join(f"  {n:5d}  {name!r} -> {canon!r}" for name, n, canon in candidates)
+    return [Diagnostic(
+        severity=WARNING,
+        summary=f"{len(candidates)} unknown title(s) nearly match a name already in the pack",
+        detail="Within one or two characters of a name in vocabulary.json, reported at every\n"
+               "play count -- frequency is the wrong filter here, because a splinter only has\n"
+               "to be minted once to publish a wrong number beside a real song's.\n\n"
+               "Add the ones that are genuinely the same song to aliases.json. Not all of them\n"
+               "will be: a near string match is a candidate for a human to rule on, not a\n"
+               "verdict.\n\n"
+               f"{lines}",
     )]
 
 
