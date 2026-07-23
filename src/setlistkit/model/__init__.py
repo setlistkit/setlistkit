@@ -12,7 +12,9 @@ against a six-year corpus and are not validated for this one.
 
 from .backtest import BacktestResult, HoldoutResult, backtest, holdout, hit_rates
 from .backtest import naive_baseline, recency_baseline
-from .scores import ScoreConfig, SongScore, song_scores
+from .scores import OVERDUE_FALLBACK_RATIO, ScoreConfig, SongScore, overdue_ratio, rotation
+from .scores import song_scores
 
-__all__ = ["BacktestResult", "HoldoutResult", "ScoreConfig", "SongScore", "backtest",
-           "hit_rates", "holdout", "naive_baseline", "recency_baseline", "song_scores"]
+__all__ = ["BacktestResult", "HoldoutResult", "OVERDUE_FALLBACK_RATIO", "ScoreConfig",
+           "SongScore", "backtest", "hit_rates", "holdout", "naive_baseline",
+           "overdue_ratio", "recency_baseline", "rotation", "song_scores"]

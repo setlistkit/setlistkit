@@ -9,9 +9,12 @@ signal at a time, because the score is a product of four of them and a test that
 once proves nothing about either.
 """
 
+import datetime as dt
+
 import pytest
 
-from setlistkit.model.scores import ScoreConfig, song_scores
+from setlistkit.model.scores import OVERDUE_FALLBACK_RATIO, ScoreConfig, overdue_ratio, rotation
+from setlistkit.model.scores import song_scores
 
 
 def _show(date, *songs, non_songs=()):
@@ -152,3 +155,28 @@ def test_a_show_with_an_unreadable_date_is_skipped_not_crashed_on():
 def test_the_config_is_frozen():
     with pytest.raises(AttributeError):
         ScoreConfig().gap_weight = 99
+
+
+def test_overdue_ratio_is_the_single_shared_definition():
+    """The formula published in songbook.py and pinned again in
+    test_rotation_parity.py against the JS side -- this is the ordinary-case check that it
+    computes what it says: shows since last played, over the typical gap between plays."""
+    assert overdue_ratio(gap=6, mean_gap=3.0) == 2.0
+
+
+def test_overdue_ratio_falls_back_when_the_mean_gap_is_zero():
+    """The fallback that used to differ silently between this scorer and the Scorecard's
+    ancestor (0.0 there, 1.0 here, per the design doc's own measurement) -- settled in slice
+    2a and pinned here as the one module constant both this function and
+    test_rotation_parity.py read, rather than two independently typed literals."""
+    assert overdue_ratio(gap=5, mean_gap=0.0) == OVERDUE_FALLBACK_RATIO
+
+
+def test_rotation_is_public_and_still_correct():
+    """_rotation became rotation() in slice 4, as groundwork for the Scorecard port -- see
+    the function's own docstring for why the Songbook itself never calls it. This test only
+    re-checks that the rename did not change the arithmetic."""
+    past = [(dt.date(2026, 1, 1), ["A"]), (dt.date(2026, 1, 2), ["B"]),
+            (dt.date(2026, 1, 3), ["A"])]
+    since, typical = rotation(past)
+    assert since["A"] == 0 and typical["A"] == 2.0

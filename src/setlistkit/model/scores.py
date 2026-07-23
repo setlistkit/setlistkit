@@ -203,13 +203,24 @@ def _base_rates(past: Sequence[tuple[dt.date, list[str]]], config: ScoreConfig,
     return {song: value / total for song, value in weighted.items()}, dict(weighted)
 
 
-def _rotation(past: Sequence[tuple[dt.date, list[str]]]) -> tuple[dict[str, int],
-                                                                  dict[str, float]]:
+def rotation(past: Sequence[tuple[dt.date, list[str]]]) -> tuple[dict[str, int],
+                                                                 dict[str, float]]:
     """Shows since each song last played, and its typical gap between plays.
 
     Counted in shows rather than days on purpose: the band's rotation moves when they play,
     not when the calendar does, and a three-month winter off should not make everything
     overdue at once.
+
+    PUBLIC AS OF SLICE 4, AND NOT YET CALLED BY ANYTHING THE SONGBOOK SHIPS. The Songbook
+    computes gap and mean-gap itself, client-side, in JavaScript
+    (``famoe.ly/bin/songbook/logic.js``'s ``dueRatio()``, called from ``aggregateWindow()``) --
+    see :func:`overdue_ratio` for the one piece of that computation this module shares with
+    it. This function is made
+    public here as groundwork for the Scorecard port instead, which would consume it directly
+    rather than writing a fourth copy of the same shows-since-last-play arithmetic. The
+    Scorecard itself is out of scope for the Songbook
+    (docs/plans/2026-07-22-songbook-design.md, "Out of scope") -- its existence as a public
+    function is not evidence that port has happened.
     """
     last_at: dict[str, int] = {}
     intervals: defaultdict[str, list[int]] = defaultdict(list)
@@ -225,17 +236,47 @@ def _rotation(past: Sequence[tuple[dt.date, list[str]]]) -> tuple[dict[str, int]
     return since, typical
 
 
-def _score_one(song: str, rate: float, rotation: tuple[dict[str, int], dict[str, float]],
+# The ratio when it cannot be computed normally -- mean_gap is falsy, which in practice only
+# happens for an empty window (a song with exactly one play still gets a mean_gap of the
+# window length itself, never zero; see rotation() above). Settled in slice 2a
+# (docs/plans/2026-07-22-songbook-design.md) as the one number this scorer and the Songbook's
+# browser JS are both written to use, replacing two people's independent guesses (0.0 in the
+# Scorecard's ancestor, 1.0 here) with one decided value. Named so it has exactly one place to
+# change, and so tests/unit/test_rotation_parity.py has one thing to import instead of a
+# second typed-in-by-hand literal.
+OVERDUE_FALLBACK_RATIO = 1.0
+
+
+def overdue_ratio(gap: int | None, mean_gap: float) -> float:
+    """How many "typical gaps" overdue a song is, right now.
+
+    This is the whole of the computation that used to exist three times, in two languages --
+    the Scorecard's POC ancestor, the Songbook's POC ancestor, and here. Extracted to its own
+    function so this module has exactly one definition of it, published in
+    setlistkit.catalog.songbook's module docstring and pinned against a copy of the Songbook's
+    own JS in tests/unit/test_rotation_parity.py.
+
+    ``gap`` is shows since the song last played, or ``None`` if it never has. ``mean_gap`` is
+    its typical interval between plays -- already carrying its OWN fallback to the window
+    length for a song with exactly one play (see rotation()), which is identical across every
+    implementation and is not the fallback this function exists for. This function's fallback
+    fires only when ``mean_gap`` itself is falsy, which is the empty-window edge case.
+    """
+    return (gap / mean_gap) if (gap is not None and mean_gap) else OVERDUE_FALLBACK_RATIO
+
+
+def _score_one(song: str, rate: float,
+               rotation_maps: tuple[dict[str, int], dict[str, float]],
                weighted: Mapping[str, float], config: ScoreConfig) -> SongScore:
     """One song's row: its rate, adjusted for how overdue it is and how recently it played.
 
     The due boost is capped because an uncapped one hands the top of the list permanently to
     whatever was played once in 1994 and never again.
     """
-    since, typical = rotation
+    since, typical = rotation_maps
     gap = since.get(song)
     mean_gap = typical.get(song) or 0.0
-    ratio = (gap / mean_gap) if (gap is not None and mean_gap) else 1.0
+    ratio = overdue_ratio(gap, mean_gap)
     due = 1.0 + config.gap_weight * max(0.0, min(ratio, config.gap_cap) - 1.0)
     cool = _cooldown(gap, config)
     return SongScore(song=song, score=rate * due * cool, base=rate, gap_ratio=ratio,
@@ -254,6 +295,7 @@ def song_scores(shows: Iterable[Mapping], config: ScoreConfig,
         raise ValueError(f"as-of date is not a date: {asof!r}")
     past = _training_shows(shows, config, when)
     base, weighted = _base_rates(past, config, when)
-    rotation = _rotation(past)
-    out = [_score_one(song, rate, rotation, weighted, config) for song, rate in base.items()]
+    rotation_maps = rotation(past)
+    out = [_score_one(song, rate, rotation_maps, weighted, config)
+           for song, rate in base.items()]
     return sorted(out, key=lambda row: (-row.score, row.song))
