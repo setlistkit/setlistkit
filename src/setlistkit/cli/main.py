@@ -166,6 +166,11 @@ def _add_export(sub) -> None:
     """The ``slkit export`` parser."""
     export_cmd = sub.add_parser(
         "export", help="write what was derived as one file, for something else to draw")
+    export_cmd.add_argument(
+        "--explain", action="store_true",
+        help="print what every configured [reports.*] window resolves to, and why -- builds "
+             "nothing",
+    )
     export_sub = export_cmd.add_subparsers(dest="export_action")
 
     tapemeasure_cmd = export_sub.add_parser(

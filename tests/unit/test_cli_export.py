@@ -33,6 +33,7 @@ from setlistkit.catalog.tapemeasure import SCHEMA
 from setlistkit.cli.export import EXIT_NOTHING
 from setlistkit.cli.main import EXIT_OK, main
 
+from test_cli_derive import CONFIG as BASE_CONFIG
 from test_cli_derive import LENGTHS, SETLIST, SONGS, _cache, _cfg, _tape
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "tapemeasure.json"
@@ -413,3 +414,97 @@ def test_export_songbook_the_fingerprint_changes_when_the_corpus_changes(tmp_pat
     _code, out2 = _export_songbook(tmp_path, TAPES + [extra])
     fp2 = json.loads(out2.read_text(encoding="utf-8"))["generated"]["corpus"]
     assert fp1 != fp2
+
+
+# --- `slkit export --explain` -------------------------------------------------------------------
+
+
+def _cfg_with_reports(tmp_path, reports_toml):
+    """`_cfg`, plus a `[reports.*]` block appended -- what `--explain` reads."""
+    path = tmp_path / "slkit.toml"
+    path.write_text(BASE_CONFIG + "\n" + reports_toml, encoding="utf-8")
+    return str(path)
+
+
+def test_explain_prints_the_anchor_and_show_count(tmp_path, capsys):
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    code = main(["--config", config, "export", "--explain"])
+    assert code == EXIT_OK
+    printed = capsys.readouterr().out
+    # TAPES' last stored night is 2025-07-05.
+    assert "anchor: last_show = 2025-07-05" in printed
+    assert "2 shows held" in printed
+
+
+def test_explain_restates_the_literal_in_words_and_prints_the_resolved_date(tmp_path, capsys):
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    main(["--config", config, "export", "--explain"])
+    printed = capsys.readouterr().out
+    assert "songbook" in printed
+    assert '"P1M"' in printed
+    assert "calendar month" in printed
+    # 2025-07-05 - P1M = 2025-06-05 (no clamp: June has a 5th).
+    assert "2025-06-05" in printed
+
+
+def test_explain_prints_a_clamp_note_only_when_clamping_actually_fires(tmp_path, capsys):
+    _cache(tmp_path, TAPES)
+    clamps = _cfg_with_reports(
+        tmp_path, '[reports.clampy.window]\nanchor = "2025-03-31"\nsince_back = "P1M"\n')
+    assert main(["--config", clamps, "ingest"]) == EXIT_OK
+    main(["--config", clamps, "export", "--explain"])
+    printed = capsys.readouterr().out
+    assert "clamped to 2025-02-28" in printed
+
+
+def test_explain_stays_quiet_about_clamping_when_it_did_not_fire(tmp_path, capsys):
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    main(["--config", config, "export", "--explain"])
+    printed = capsys.readouterr().out
+    assert "clamped" not in printed
+
+
+def test_explain_includes_a_show_dated_exactly_on_the_resolved_since(tmp_path, capsys):
+    """Both endpoints are INCLUSIVE. TAPES' two nights are 2025-07-04 and 2025-07-05; with
+    since_back="P1D" from the last_show anchor (2025-07-05), `since` resolves to exactly
+    2025-07-04 -- a stored show. An off-by-one treating `since` as exclusive would report 1 show
+    instead of 2."""
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1D"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    main(["--config", config, "export", "--explain"])
+    printed = capsys.readouterr().out
+    assert "2025-07-04 .. 2025-07-05" in printed
+    assert "2 shows" in printed
+
+
+def test_explain_builds_nothing(tmp_path, capsys):
+    """The point of `--explain`: it is safe to run against a config nobody has committed yet."""
+    _cache(tmp_path, TAPES)
+    config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    main(["--config", config, "export", "--explain"])
+    assert not (tmp_path / "tapemeasure.json").exists()
+
+
+def test_explain_with_no_reports_configured_says_so(tmp_path, capsys):
+    _cache(tmp_path, TAPES)
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "ingest"]) == EXIT_OK
+    code = main(["--config", config, "export", "--explain"])
+    assert code == EXIT_OK
+    assert "nothing else to explain" in capsys.readouterr().out
+
+
+def test_explain_with_no_shows_stored_says_so_and_exits_nothing(tmp_path, capsys):
+    config = _cfg(tmp_path)
+    assert main(["--config", config, "store", "init"]) == EXIT_OK
+    code = main(["--config", config, "export", "--explain"])
+    assert code == EXIT_NOTHING
+    assert "nothing to explain" in capsys.readouterr().out

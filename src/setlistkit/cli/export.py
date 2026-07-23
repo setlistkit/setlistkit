@@ -35,7 +35,10 @@ here was tested; it wasn't, and by its nature it can't be.
 
 from __future__ import annotations
 
+from datetime import date
+
 from ..catalog import songbook
+from ..catalog import window as report_window
 from ..catalog.features import song_features
 from ..catalog.lengths import from_row, song_stats
 from ..catalog.pack import load_pack
@@ -49,14 +52,80 @@ EXIT_NOTHING = 1
 
 
 def export(config, args) -> int:
-    """`slkit export tapemeasure|songbook`, defaulting to tapemeasure.
+    """`slkit export tapemeasure|songbook`, defaulting to tapemeasure; or `--explain`, which
+    builds nothing.
 
-    Defaulting rather than requiring the noun, the way ``derive`` does. There are two bundles now,
-    and a bare `slkit export` still means the one that existed before the second one did.
+    Defaulting rather than requiring the noun, the way `derive` does. There are two bundles today.
+    `--explain` is checked first because it must win regardless of which sub-verb (or none) was
+    also given -- it never builds anything, so no sub-verb dispatch should run ahead of it.
     """
+    if getattr(args, "explain", False):
+        return _explain(config, args)
     if getattr(args, "export_action", None) == "songbook":
         return _songbook(config, args)
     return _tapemeasure(config, args)
+
+
+def _explain(config, _args) -> int:
+    """``slkit export --explain``: what every configured report's window resolves to, and why.
+
+    Printed before anything is built. A compact literal syntax people half-remember is printf
+    all over again -- the fix is not a better paragraph in a doc, it is the tool stating what it
+    understood before it does anything (design doc: "--explain, which matters more than the
+    grammar"). EVERY report under `[reports.*]` is explained in one pass, not just whichever one
+    this run happens to build, because the failure this exists for is a wrong unit discovered on
+    the WRONG report months later.
+    """
+    reports = config.section("reports")
+    with Store(config.data_root) as store:
+        store.init()
+        span = store.corpus.first_and_last()
+        if span is None:
+            print("no shows are stored -- nothing to explain")
+            return EXIT_NOTHING
+        first, last = span
+        print(f"anchor: last_show = {last}   "
+              f"(latest show in corpus, {store.corpus.show_count()} shows held)\n")
+        if not reports:
+            print("no [reports.*] configured -- nothing else to explain")
+            return EXIT_OK
+        for name in sorted(reports):
+            _explain_one(store, config, name, first, last)
+    return EXIT_OK
+
+
+def _explain_one(store, config, name: str, first: str, last: str) -> None:
+    """One report's window: its literals restated in words, its resolved dates, its show count."""
+    spec = report_window.window_spec_from_config(config, name)
+    if spec is None:
+        print(f"{name}\n  (no [reports.{name}.window] configured)\n")
+        return
+    resolved = report_window.resolve_explained(spec, first=first, last=last)
+    since, until = resolved.as_dates()
+    print(name)
+    since_key = "since_back" if spec.since_back is not None else "since_from"
+    _explain_endpoint(since_key, spec.since_back or spec.since_from, resolved.since)
+    until_key = "until_back" if spec.until_back is not None else "until"
+    _explain_endpoint(until_key, spec.until_back, resolved.until)
+    shows = store.corpus.shows(since=since, until=until)
+    days = (date.fromisoformat(until) - date.fromisoformat(since)).days + 1
+    print(f"  window: {since} .. {until}  inclusive  ·  {days} days  ·  "
+          f"{len(shows)} shows\n")
+
+
+def _explain_endpoint(key: str, literal: str | None, endpoint) -> None:
+    """One line of ``--explain`` output for one endpoint, plus its clamp note if one fired.
+
+    Silent about clamping the rest of the time -- a note that prints unconditionally would bury
+    the one time it actually matters, which is the same "printed only when it looks bad has no
+    baseline" problem the tape measure's own `_report_gaps` avoids by always printing its counts.
+    Here the right default is the opposite: say nothing unless something happened, because a
+    clamp is the ANOMALY, not the baseline.
+    """
+    shown = f'"{literal}"' if literal is not None else "(omitted)"
+    print(f"  {key:<10} = {shown:<9} ->  {endpoint.value}   {endpoint.words}")
+    if endpoint.clamp_note:
+        print(f"  note: {endpoint.clamp_note}")
 
 
 def _tapemeasure(config, args) -> int:
