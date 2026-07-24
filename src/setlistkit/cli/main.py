@@ -39,11 +39,14 @@ EXIT_DIAGNOSTIC = 2
 # silence for that long is indistinguishable from a hang.
 _PROGRESS_EVERY = 25
 
-# Seconds per item, for the estimate a dry run prints. MEASURED against archive.org (94 items in
+# Seconds per REQUEST, for the estimate a dry run prints. MEASURED against archive.org (94 items in
 # 2m25s, then 4614 more), not computed from the configured delay: the delay is only the half we
-# control, and the round trip is the other half. An estimate, and labeled as one -- but a real
-# one, and the difference between "4222 items" and "about two hours" is the whole decision.
-_SECONDS_PER_ITEM = 1.5
+# control, and the round trip is the other half. archive.org makes one request per item, so this
+# doubles as seconds-per-item there; setlist.fm pulls ~20 setlists per request, so its dry run
+# reports its own request count and this same per-request cost applies. An estimate, and labeled as
+# one -- but a real one, and the difference between "4222 items" and "about two hours" is the whole
+# decision.
+_SECONDS_PER_REQUEST = 1.5
 
 # Sources `slkit pull` knows how to fetch: the importer registry's keys, so argparse and the
 # registry can never disagree about what exists. Naming them (rather than deriving choices from the
@@ -450,14 +453,25 @@ def _cmd_pull(config, args) -> int:
         force_rescan=args.force_rescan, dry_run=args.dry_run,
         progress=progress, announce=announce)
     if args.dry_run:
-        minutes = result.planned * _SECONDS_PER_ITEM / 60
-        print(f"pull {args.source} (dry run): {result.listed} listed, "
-              f"{result.cached} already cached, {result.planned} would be fetched "
-              f"(about {minutes:.0f} min)")
-        print("  No item metadata was requested. The listing itself was, because that is how\n"
-              "  this learns what is new; it is a few requests against thousands.")
+        # `planned` counts records; the wall clock is set by REQUESTS. They match for archive.org
+        # (one request per item, planned_requests left None) and diverge for a paged source like
+        # setlist.fm, which reports the smaller request count the estimate must be built from.
+        requests = result.planned if result.planned_requests is None else result.planned_requests
+        minutes = requests * _SECONDS_PER_REQUEST / 60
+        across = "" if result.planned_requests is None else f" across {requests} requests"
+        print(f"pull {importer.display_name} (dry run): {result.listed} listed, "
+              f"{result.cached} already cached, {result.planned} would be fetched"
+              f"{across} (about {minutes:.0f} min)")
+        if result.planned_requests is None:
+            print("  No item metadata was requested. The listing itself was, because that is how\n"
+                  "  this learns what is new; it is a few requests against thousands.")
+        else:
+            # A paged source has no separate cheap listing: the first page IS data, and fetching it
+            # is how the run learns the total. So the honest disclosure names that one request.
+            print("  Only the first page was requested, because that is how this learns the total.\n"
+                  "  It is one request against thousands of setlists; the rest is what a real pull costs.")
     else:
-        print(f"pull {args.source}: {result.listed} listed, {result.fetched} fetched, "
+        print(f"pull {importer.display_name}: {result.listed} listed, {result.fetched} fetched, "
               f"{result.cached} already cached")
     if result.missing:
         print(f"  {len(result.missing)} listed item(s) the metadata API does not have; "

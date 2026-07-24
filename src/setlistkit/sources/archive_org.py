@@ -46,6 +46,7 @@ from datetime import timedelta
 
 from ..config import Config, require_network_identity
 from ..store.raw_cache import RawCache
+from .base import PullResult
 from .client import PoliteClient, SourceError
 
 NAMESPACE = "archive_org"
@@ -90,41 +91,6 @@ _CONTAINER_SLACK_FRACTION = 0.01
 # retries and backoff by the time it counts here, so this is five failures on top of twenty-five
 # attempts -- not a hair trigger.
 _MAX_CONSECUTIVE_FAILURES = 5
-
-
-@dataclass(frozen=True)
-class PullResult:
-    """What one ``slkit pull`` run did, in the terms the CLI reports it.
-
-    ``fetched`` and ``cached`` are counted separately because the difference is the whole point
-    of the cache: a second pull that reports 0 fetched and 900 cached made 0 metadata requests,
-    and that is the number archive.org cares about. Under ``force_rescan`` everything is re-asked,
-    so ``cached`` is 0 and ``fetched`` counts items that answered 304 as well as ones that sent
-    bytes -- "re-asked", not "re-downloaded".
-
-    Every listed item lands in exactly one of ``fetched``, ``cached``, ``missing`` or
-    ``unidentified``, and ``listed`` is their sum. That is asserted by a test, because a counter
-    an item can fall out of is how a lost show goes unnoticed.
-    """
-
-    listed: int = 0                        # DISTINCT identifiers the listing named
-    fetched: int = 0
-    cached: int = 0
-    # Items this run set out to fetch: everything listed that is not already cached. In a real
-    # run it equals fetched + missing, which a test asserts. In a dry run it is the whole point,
-    # because it is the number that says what the real run would cost the host.
-    planned: int = 0
-    missing: tuple[str, ...] = ()          # identifiers archive.org 404'd
-    # Identifiers whose fetch failed even after the client's own retries. Separate from `missing`
-    # because the cause is different -- absent versus unwell -- though the remedy is the same:
-    # nothing was cached, so the next pull tries them again.
-    failed: tuple[str, ...] = ()
-    # Listing docs carrying no identifier at all. Unfetchable and unnameable, so they get a count
-    # rather than a list -- but a count, because an item in none of these is an item nobody misses.
-    unidentified: int = 0
-    # The paging backstop fired, so the listing is a prefix of the collection rather than all of
-    # it. Reported because the alternative is an ingest that looks complete and is not.
-    truncated: bool = False
 
 
 @dataclass(frozen=True)

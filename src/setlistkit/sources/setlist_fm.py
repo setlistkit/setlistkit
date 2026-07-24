@@ -21,7 +21,7 @@ from typing import NamedTuple
 
 from ..config import Config
 from ..store.raw_cache import RawCache
-from .archive_org import PullResult
+from .base import PullResult
 from .client import PoliteClient
 from .keyfile import read_api_key
 
@@ -157,8 +157,16 @@ class SetlistFmClient:
             plan = _plan(first)
             if dry_run:
                 cached = len(setlists_in(first)) if first_cached else 0
+                # The cost that predicts wall-clock is REQUESTS, not setlists: one request pulls a
+                # ~20-setlist page. Pages are contiguous from 1, so the ones cached BEFORE this run
+                # are in hand and a real run fetches the rest. This probe just cached page 1, so
+                # discount it unless it was already cached beforehand -- the same baseline `planned`
+                # uses via `first_cached`, or the two counters would disagree on page 1.
+                already = len(self.cached_pages(mbid)) - (0 if first_cached else 1)
                 return PullResult(listed=plan.total, fetched=0, cached=cached,
-                                  planned=max(0, plan.total - cached), truncated=plan.truncated)
+                                  planned=max(0, plan.total - cached),
+                                  planned_requests=max(0, plan.pages - already),
+                                  truncated=plan.truncated)
             fetched, cached = self._walk(mbid, first, first_cached, plan, min_year=min_year,
                                          force_rescan=force_rescan, progress=progress)
         return PullResult(listed=plan.total, fetched=fetched, cached=cached,

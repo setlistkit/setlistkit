@@ -162,6 +162,16 @@ def test_dry_run_fetches_only_the_first_page(tmp_path):
     result = _client(tmp_path, api).pull("the-mbid", dry_run=True)
     assert api.pages_requested == [1]
     assert result.listed == 2 and result.fetched == 0
+    assert result.planned_requests == 1             # a fresh run still fetches that one page
+
+
+def test_dry_run_estimate_counts_page_requests_not_setlists(tmp_path):
+    """The wall-clock cost is page REQUESTS, not setlists: a paged source fetches ~20 per request,
+    so a dry run must report the far smaller request count the time estimate is built from."""
+    page1 = [_setlist(f"s{i}", "01-02-2024", ([_song("X")], None)) for i in range(20)]
+    result = _client(tmp_path, FakeApi({1: page1}, total=50)).pull("the-mbid", dry_run=True)
+    assert result.planned == 50                      # 50 setlists a fresh run would fetch...
+    assert result.planned_requests == 3              # ...across 3 page requests (20 + 20 + 10)
 
 
 def test_unknown_artist_returns_an_empty_result(tmp_path):

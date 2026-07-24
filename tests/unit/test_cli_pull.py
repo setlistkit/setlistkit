@@ -14,7 +14,7 @@ import pytest
 from setlistkit.cli import main as cli
 from setlistkit.cli.main import EXIT_DIAGNOSTIC, EXIT_OK, main
 from setlistkit.config import SENTINEL_USER_AGENT
-from setlistkit.sources.archive_org import PullResult
+from setlistkit.sources.base import PullResult
 from setlistkit.sources.client import SourceFormatError, SourceHTTPError, TransportError
 
 CONFIG = ('data_root = "state"\n'
@@ -160,6 +160,19 @@ def test_a_dry_pull_reports_the_cost_of_the_real_one(tmp_path, capsys, monkeypat
     assert "about 106 min" in out
     # Honest about not being a zero-request mode: the listing did go out.
     assert "No item metadata was requested" in out
+
+
+def test_a_dry_pull_estimates_from_requests_when_a_source_batches_records(tmp_path, capsys,
+                                                                          monkeypatch):
+    """A paged source fetches ~20 records per request, so the estimate must count requests, not
+    records -- and the line reconciles the two so "2919 records / about 4 min" is not a puzzle."""
+    fake = FakeClient(PullResult(listed=2939, cached=20, planned=2919, planned_requests=147))
+    _inject(monkeypatch, fake)
+    assert main(["--config", _cfg(tmp_path), "pull", "archive_org", "-n"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "2919 would be fetched across 147 requests" in out
+    assert "about 4 min" in out                       # 147 requests * 1.5s, not 2919 records
+    assert "Only the first page was requested" in out
 
 
 def test_pull_rejects_an_unknown_source(tmp_path, capsys, client):

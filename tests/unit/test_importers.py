@@ -8,6 +8,8 @@ whole design turns on: a source either feeds the mirror (it has audio) or it con
 candidates, and exactly which decides how ``ingest`` treats it.
 """
 
+import inspect
+
 import pytest
 
 from setlistkit.cli import main as cli
@@ -15,6 +17,9 @@ from setlistkit.config import load_config
 from setlistkit.diagnostics import DiagnosticError
 from setlistkit.importers import IMPORTERS, secondary
 from setlistkit.importers.base import Importer
+from setlistkit.sources.archive_org import ArchiveOrgClient
+from setlistkit.sources.base import SourceClient
+from setlistkit.sources.setlist_fm import SetlistFmClient
 
 
 def test_every_importer_is_keyed_by_its_own_id():
@@ -32,9 +37,22 @@ def test_every_descriptor_is_complete():
     for imp in IMPORTERS.values():
         assert isinstance(imp, Importer)
         assert isinstance(imp.id, str) and imp.id
+        assert isinstance(imp.display_name, str) and imp.display_name
         assert callable(imp.make_client)
         assert callable(imp.identity)
         assert isinstance(imp.feeds_mirror, bool)
+
+
+def test_id_is_the_machine_key_and_display_name_is_the_real_name():
+    """The two spellings are kept apart on purpose: `id` is the underscore form safe as a CLI arg,
+    a [sources.<id>] TOML table key, and a cache dir; `display_name` is the dotted real-world name
+    shown to humans. A dotted id would nest as a TOML table, so the split is not cosmetic."""
+    assert IMPORTERS["archive_org"].display_name == "archive.org"
+    assert IMPORTERS["setlist_fm"].display_name == "setlist.fm"
+    # The machine ids stay underscore -- never a dot, which argparse tolerates but TOML would nest.
+    assert all("." not in imp.id for imp in IMPORTERS.values())
+    # And the display name is the one place the dot lives.
+    assert all("_" not in imp.display_name for imp in IMPORTERS.values())
 
 
 def test_a_mirror_source_folds_in_no_candidates_and_a_setlist_source_does():
@@ -45,6 +63,27 @@ def test_a_mirror_source_folds_in_no_candidates_and_a_setlist_source_does():
     assert not setlist.feeds_mirror and callable(setlist.candidates)
     # `secondary()` is exactly the fold-in sources -- the setlist ones, never the mirror.
     assert [imp.id for imp in secondary()] == ["setlist_fm"]
+
+
+def _keyword_only_shape(func):
+    """The pull contract minus its first positional. `self` and the identity slot (whose NAME is
+    allowed to differ -- collection vs mbid) are dropped; what must match is the keyword-only block:
+    same params, same kinds, same defaults. That is the part `issubclass` cannot see."""
+    params = list(inspect.signature(func).parameters.values())
+    return [(p.name, p.kind, p.default) for p in params[2:]]
+
+
+def test_every_client_is_a_source_client_by_shape_not_inheritance():
+    """The pull surface is a structural contract, so a conformance test is what actually enforces
+    it -- no base class does. `issubclass` (runtime_checkable) confirms `pull` exists; the shape
+    check confirms its keyword block did not drift, which is how a third source would break it."""
+    want = _keyword_only_shape(SourceClient.pull)
+    for client in (ArchiveOrgClient, SetlistFmClient):
+        assert issubclass(client, SourceClient)                  # the method is present...
+        assert _keyword_only_shape(client.pull) == want         # ...and its keyword shape matches
+    # Neither inherits the Protocol: they satisfy it structurally, which is the whole point.
+    assert SourceClient not in ArchiveOrgClient.__mro__
+    assert SourceClient not in SetlistFmClient.__mro__
 
 
 def _cfg(tmp_path, body):

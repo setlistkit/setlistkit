@@ -49,6 +49,7 @@ def _candidates(config, cache, *, normalizer, min_year) -> list[dict]:
 
 IMPORTER = Importer(
     id=NAMESPACE,
+    display_name="setlist.fm",
     feeds_mirror=False,
     make_client=SetlistFmClient,
     identity=_identity,

@@ -132,7 +132,7 @@ def _fold_in_secondary(config, cache, pack, args) -> list[dict]:
         got = importer.candidates(config, cache, normalizer=pack.normalizer,
                                   min_year=min_year(config, importer.id, args.min_year))
         if got:
-            print(f"{importer.id}: {len(got)} setlist(s) folded into the merge")
+            print(f"{importer.display_name}: {len(got)} setlist(s) folded into the merge")
         extra += got
     return extra
 

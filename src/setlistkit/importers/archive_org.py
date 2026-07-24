@@ -28,6 +28,7 @@ def _identity(config) -> str:
 
 IMPORTER = Importer(
     id=NAMESPACE,
+    display_name="archive.org",
     feeds_mirror=True,
     make_client=ArchiveOrgClient,
     identity=_identity,
