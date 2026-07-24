@@ -44,3 +44,27 @@ jobs:
 
       - name: Lint, test, security
         run: make check
+
+  # Once the whole matrix is green on main, tell moe-pack to re-lint itself against this exact
+  # commit. moe-pack pins to setlistkit's default branch, so a rule that lands here should prove
+  # itself against the pack the day it lands -- this is the nudge that makes that automatic
+  # instead of waiting for the next unrelated push over there.
+  notify-moe-pack:
+    needs: check
+    runs-on: ubuntu-latest
+    # Never from a pull request or a branch push: a PR's checks passing says nothing about main,
+    # and re-linting the pack against an unmerged commit would be noise. Only the real main push.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      # The built-in GITHUB_TOKEN is scoped to THIS repo and cannot dispatch to another, so this
+      # uses a fine-grained PAT (secret MOE_PACK_DISPATCH_TOKEN) scoped to only setlistkit/moe-pack
+      # with Contents:write -- the one permission the dispatch endpoint requires. The commit SHA
+      # rides along as client_payload purely so moe-pack's run page can name what woke it; moe-pack
+      # never feeds it to a shell, which is what keeps an injected payload field harmless.
+      - name: Dispatch to moe-pack
+        env:
+          GH_TOKEN: ${{ secrets.MOE_PACK_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST /repos/setlistkit/moe-pack/dispatches \
+            -f event_type=setlistkit-updated \
+            -f 'client_payload[setlistkit_sha]=${{ github.sha }}'
