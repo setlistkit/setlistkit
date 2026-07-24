@@ -326,6 +326,16 @@ def _cmd_store(config, args) -> int:
 def _cmd_config_show(config) -> int:
     print(f"config file : {config.source_path}")
     print(f"data_root   : {config.data_root}")
+    # Resolved the same way the working commands resolve it (relative to this config's own
+    # directory, not the process cwd), so what prints here is the pack those commands will act on.
+    pack = config.section("catalog").get("pack")
+    if pack:
+        pack_path = Path(str(pack)).expanduser()
+        if not pack_path.is_absolute():
+            pack_path = config.source_path.parent / pack_path
+        print(f"pack        : {pack_path.resolve()}")
+    else:
+        print("pack        : (not set — pass --pack or set [catalog] pack)")
     print(f"user_agent  : {config.user_agent}")
     if config.user_agent_is_sentinel:
         print("            : (placeholder — network operations will refuse to run)")

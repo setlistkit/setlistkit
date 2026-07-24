@@ -35,6 +35,23 @@ def test_config_show(tmp_path, capsys):
     assert "user_agent" in out
 
 
+def test_config_show_resolves_pack_against_config_dir(tmp_path, capsys):
+    # A relative [catalog] pack must anchor at the config file's directory, not the process cwd --
+    # the same rule the working commands follow -- so what `config show` prints is the pack they
+    # will act on.
+    target = _write(tmp_path / "slkit.toml", GOOD + '[catalog]\npack = "mypack"\n')
+    assert main(["--config", str(target), "config", "show"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert f"pack        : {(tmp_path / 'mypack').resolve()}" in out
+
+
+def test_config_show_pack_not_set(tmp_path, capsys):
+    target = _write(tmp_path / "slkit.toml", GOOD)  # no [catalog] pack
+    assert main(["--config", str(target), "config", "show"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "pack        : (not set" in out
+
+
 def test_config_check_ok(tmp_path, capsys):
     target = _write(tmp_path / "slkit.toml", GOOD)
     assert main(["--config", str(target), "config", "check"]) == EXIT_OK
