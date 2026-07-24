@@ -7,6 +7,8 @@ here is everything the CLI adds around it, and the one thing it must do BEFORE a
 placeholder user_agent stops the run without a client ever being built.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from setlistkit.cli import main as cli
@@ -48,10 +50,20 @@ class FakeClient:
         return self.result
 
 
+def _inject(monkeypatch, fake):
+    """Route the archive importer's client factory to ``fake``, through the registry.
+
+    The CLI dispatches on ``IMPORTERS`` rather than a client class named in ``main``, so a fake is
+    injected by swapping that importer's ``make_client`` -- which ``FakeClient`` satisfies via its
+    ``__call__(config, cache) -> self`` -- not by patching a symbol on the dispatcher module."""
+    real = cli.IMPORTERS["archive_org"]
+    monkeypatch.setitem(cli.IMPORTERS, "archive_org", replace(real, make_client=fake))
+
+
 @pytest.fixture(name="client")
 def _client(monkeypatch):
     fake = FakeClient()
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     return fake
 
 
@@ -114,7 +126,7 @@ def test_pull_refuses_the_placeholder_user_agent(tmp_path, capsys, client):
 
 def test_pull_names_the_items_the_metadata_api_did_not_have(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=2, fetched=1, cached=0, missing=("gone",)))
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     main(["--config", _cfg(tmp_path), "pull", "archive_org"])
     out = capsys.readouterr().out
     assert "1 listed item(s) the metadata API does not have" in out
@@ -123,7 +135,7 @@ def test_pull_names_the_items_the_metadata_api_did_not_have(tmp_path, capsys, mo
 
 def test_pull_warns_loudly_when_the_listing_was_truncated(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=20000, fetched=0, cached=20000, truncated=True))
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     main(["--config", _cfg(tmp_path), "pull", "archive_org"])
     out = capsys.readouterr().out
     # An ingest over a truncated listing looks complete and is not, so this cannot be silent.
@@ -140,7 +152,7 @@ def test_every_spelling_of_dry_run_reaches_the_client(tmp_path, client, flag):
 
 def test_a_dry_pull_reports_the_cost_of_the_real_one(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=4614, cached=392, planned=4222))
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     assert main(["--config", _cfg(tmp_path), "pull", "archive_org", "-n"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "4614 listed, 392 already cached, 4222 would be fetched" in out
@@ -158,7 +170,7 @@ def test_pull_rejects_an_unknown_source(tmp_path, capsys, client):
 
 def test_pull_names_the_items_the_source_could_not_serve(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=3, fetched=2, failed=("moe2003-02-22.km150.shn",)))
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     main(["--config", _cfg(tmp_path), "pull", "archive_org"])
     out = capsys.readouterr().out
     assert "1 item(s) the source could not serve, even after retries" in out
@@ -168,14 +180,14 @@ def test_pull_names_the_items_the_source_could_not_serve(tmp_path, capsys, monke
 
 def test_pull_counts_listing_docs_that_carried_no_identifier(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=1, fetched=1, unidentified=2))
-    monkeypatch.setattr(cli, "ArchiveOrgClient", fake)
+    _inject(monkeypatch, fake)
     main(["--config", _cfg(tmp_path), "pull", "archive_org"])
     assert "2 listed item(s) carried no identifier" in capsys.readouterr().out
 
 
 def test_pull_reads_settings_from_the_table_named_by_the_source_argument(tmp_path, client):
     # With one source these are the same string. With two, a hard-coded table name makes
-    # `slkit pull setlistfm` quietly read the archive.org settings and pull archive.org.
+    # `slkit pull setlist_fm` quietly read the archive.org settings and pull archive.org.
     monkeypatch_sources = getattr(cli, "_SOURCES")
     assert "archive_org" in monkeypatch_sources
     body = CONFIG + '[sources.other]\ncollection = "not-this-one"\n'
@@ -197,7 +209,7 @@ def test_pull_renders_an_upstream_failure_instead_of_a_traceback(tmp_path, capsy
         def pull(self, collection, **kwargs):
             raise error
 
-    monkeypatch.setattr(cli, "ArchiveOrgClient", Failing())
+    _inject(monkeypatch, Failing())
     assert main(["--config", _cfg(tmp_path), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "the source could not be read" in err and expected in err

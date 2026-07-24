@@ -162,26 +162,44 @@ def urllib_transport(url: str, headers: dict[str, str], *, timeout: float = 60) 
         raise TransportError(f"{url}: {err}") from err
 
 
+@dataclass(frozen=True)
+class Politeness:
+    """The two knobs behind this client being polite: the pause after every request and the
+    retry ceiling. They are grouped because they are one decision -- "how gently we treat the
+    host" -- and because bundling them keeps the constructor inside the argument cap. Production
+    leaves both at the archive.org-friendly defaults; only tests dial them to exercise the paths.
+    """
+    delay: float = DEFAULT_DELAY
+    max_tries: int = DEFAULT_MAX_TRIES
+
+
 class PoliteClient:
     """A cached, rate-limited, backing-off GET client for one source namespace.
 
     ``namespace`` scopes the cache (an archive.org identifier and a setlist.fm id can be the
     same string). ``transport`` and ``sleeper`` are injectable so tests exercise every retry and
-    backoff path without a socket or a real pause. ``default_max_age`` of ``None`` means a cached
-    entry never ages out on its own -- right for immutable-ish records like show metadata.
+    backoff path without a socket or a real pause. ``politeness`` carries the pause/retry pair.
+    ``default_max_age`` of ``None`` means a cached entry never ages out on its own -- right for
+    immutable-ish records like show metadata.
     """
 
     def __init__(self, config: Config, cache: RawCache, *, namespace: str,
-                 transport=None, sleeper=None, delay: float = DEFAULT_DELAY,
-                 max_tries: int = DEFAULT_MAX_TRIES, default_max_age: timedelta | None = None) -> None:
+                 transport=None, sleeper=None, politeness: Politeness = Politeness(),
+                 default_max_age: timedelta | None = None,
+                 extra_headers: dict[str, str] | None = None) -> None:
         self._config = config
         self._cache = cache
         self._namespace = namespace
         self._transport = transport or urllib_transport
         self._sleep = sleeper or time.sleep
-        self._delay = delay
-        self._max_tries = max_tries
+        self._delay = politeness.delay
+        self._max_tries = politeness.max_tries
         self._default_max_age = default_max_age
+        # Static headers merged into every request -- an API key a source authenticates with, which
+        # archive.org has none of and setlist.fm needs on all of. Never the User-Agent or Accept,
+        # which the client owns; a source that tried to override those through here is a bug, so it
+        # is applied first and the client's own two win.
+        self._extra_headers = dict(extra_headers or {})
         self._batch: Batch | None = None
 
     @contextmanager
@@ -231,7 +249,9 @@ class PoliteClient:
         # once per HTTP request, so the retries inside _request all carry this same number.
         if self._batch is not None:
             self._batch.sent += 1
-        headers = {"User-Agent": self._user_agent(), "Accept": accept}
+        # Extra headers first, so the client's own User-Agent and Accept overwrite any a source
+        # tried to smuggle in through extra_headers -- those two belong to the polite layer.
+        headers = {**self._extra_headers, "User-Agent": self._user_agent(), "Accept": accept}
         self._add_conditional(key, headers, cached)
         resp = self._request(url, headers)
         if resp is None:

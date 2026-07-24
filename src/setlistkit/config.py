@@ -71,7 +71,7 @@ class Config:
     raw: dict = field(default_factory=dict, compare=False, repr=False)
 
     def section(self, *names: str) -> dict:
-        """Return a copy of a nested table (e.g. ``section("sources", "setlistfm")``).
+        """Return a copy of a nested table (e.g. ``section("sources", "setlist_fm")``).
 
         A shallow copy, so a caller cannot mutate this frozen config's state through the
         returned dict. Returns ``{}`` for any missing path.
@@ -87,6 +87,17 @@ class Config:
     def user_agent_is_sentinel(self) -> bool:
         """True while user_agent still bears the shipped CHANGE-ME marker."""
         return _SENTINEL_MARKER in self.user_agent
+
+    @property
+    def mbid(self) -> str:
+        """The band's MusicBrainz artist id, a top-level key. Empty string when unset.
+
+        Top-level, not under ``[sources.setlist_fm]``, because it identifies the BAND and not one
+        source's view of it: setlist.fm keys on it today and MusicBrainz or another source could
+        tomorrow, so it belongs beside ``data_root`` rather than owned by whichever source read it
+        first. A source that needs it and finds it empty says so; nothing here forces it.
+        """
+        return str(self.raw.get("mbid") or "").strip()
 
 
 def _search_locations(explicit_path, env, cwd) -> list[Path]:

@@ -67,9 +67,9 @@ def test_the_global_pick_beats_folding_sources_together_two_at_a_time():
     the graphic first and the graphic then outnumbers the listing.
     """
     tape = _record("2026-01-31", "description", _named(12))
-    listing = _record("2026-01-31", "setlistfm", _named(15))
+    listing = _record("2026-01-31", "setlist_fm", _named(15))
     graphic = _record("2026-01-31", "instagram", _named(20))
-    assert pick_show([tape, listing, graphic])["source"] == "setlistfm"
+    assert pick_show([tape, listing, graphic])["source"] == "setlist_fm"
 
 
 def test_the_best_source_wins_when_it_is_complete_enough():
@@ -92,11 +92,11 @@ def test_a_lone_candidate_clears_its_own_bar():
 def test_ties_break_on_song_count_then_identifier():
     """asserted from both argument orders, or the identifier rule could be deleted and the
     first-listed candidate would keep winning by position."""
-    first = _record("2026-01-31", "setlistfm", _named(10), identifier="zzz")
-    second = _record("2026-01-31", "setlistfm", _named(10), identifier="aaa")
+    first = _record("2026-01-31", "setlist_fm", _named(10), identifier="zzz")
+    second = _record("2026-01-31", "setlist_fm", _named(10), identifier="aaa")
     assert pick_show([first, second])["identifier"] == "zzz"
     assert pick_show([second, first])["identifier"] == "zzz"
-    richer = _record("2026-01-31", "setlistfm", _named(11), identifier="aaa")
+    richer = _record("2026-01-31", "setlist_fm", _named(11), identifier="aaa")
     assert pick_show([first, richer])["identifier"] == "aaa"
 
 
@@ -114,9 +114,9 @@ def test_a_completeness_bar_outside_zero_to_one_is_refused():
 
 
 def test_an_unranked_source_never_outranks_a_configured_one():
-    known = _record("2026-01-31", "setlistfm", _named(10))
+    known = _record("2026-01-31", "setlist_fm", _named(10))
     stranger = _record("2026-01-31", "carrier-pigeon", _named(10))
-    assert pick_show([known, stranger])["source"] == "setlistfm"
+    assert pick_show([known, stranger])["source"] == "setlist_fm"
 
 
 def test_an_unranked_source_still_takes_a_date_nobody_else_has():
@@ -153,7 +153,7 @@ def test_a_refused_date_is_refused_in_every_source():
     merge quietly picked one of those copies up instead and the show came straight back."""
     policy = MergePolicy(drop_dates=frozenset({"2025-10-31"}))
     records = [_record("2025-10-31", "description", _named(9)),
-               _record("2025-10-31", "setlistfm", _named(11)),
+               _record("2025-10-31", "setlist_fm", _named(11)),
                _record("2026-01-31", "description", _named(9))]
     result = merge_shows(records, policy=policy)
     assert [show["date"] for show in result.shows] == ["2026-01-31"]
@@ -197,7 +197,7 @@ def test_a_refused_date_stays_refused_even_with_an_override():
 def test_shows_come_back_one_per_date_sorted():
     records = [_record("2026-03-01", "description", _named(9)),
                _record("2026-01-31", "description", _named(9)),
-               _record("2026-01-31", "setlistfm", _named(9)),
+               _record("2026-01-31", "setlist_fm", _named(9)),
                _record("2026-02-14", "instagram", _named(9))]
     result = merge_shows(records)
     assert [show["date"] for show in result.shows] == ["2026-01-31", "2026-02-14", "2026-03-01"]
@@ -205,7 +205,7 @@ def test_shows_come_back_one_per_date_sorted():
 
 def test_candidates_are_kept_for_reporting():
     records = [_record("2026-01-31", "description", _named(9)),
-               _record("2026-01-31", "setlistfm", _named(9))]
+               _record("2026-01-31", "setlist_fm", _named(9))]
     result = merge_shows(records)
     assert len(result.candidates["2026-01-31"]) == 2
 
@@ -231,8 +231,8 @@ def test_a_tagged_non_song_does_not_pad_a_record_past_the_bar():
     padded = _record("2026-01-31", "description", _named(4))
     padded["sets"][0].extend({"song": "Tuning", "segue": False, "non_song": True}
                              for _ in range(10))
-    honest = _record("2026-01-31", "setlistfm", _named(8))
-    assert pick_show([padded, honest])["source"] == "setlistfm"
+    honest = _record("2026-01-31", "setlist_fm", _named(8))
+    assert pick_show([padded, honest])["source"] == "setlist_fm"
 
 
 # --- overrides ------------------------------------------------------------------------------------

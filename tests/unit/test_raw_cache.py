@@ -26,10 +26,10 @@ def test_missing_entry_returns_none(tmp_path):
 
 def test_meta_records_provenance(tmp_path):
     cache = RawCache(tmp_path)
-    cache.put("setlistfm", "abc", b"12345",
+    cache.put("setlist_fm", "abc", b"12345",
               url="https://api.setlist.fm/x", content_type="application/json",
               etag="W/\"1\"", last_modified="Mon, 01 Jan 2026 00:00:00 GMT")
-    meta = cache.meta("setlistfm", "abc")
+    meta = cache.meta("setlist_fm", "abc")
     assert meta["key"] == "abc"
     assert meta["url"] == "https://api.setlist.fm/x"
     assert meta["etag"] == "W/\"1\""
@@ -48,9 +48,9 @@ def test_age_uses_fetched_at(tmp_path):
 def test_namespaces_do_not_collide(tmp_path):
     cache = RawCache(tmp_path)
     cache.put("archive_org", "same", b"A")
-    cache.put("setlistfm", "same", b"B")
+    cache.put("setlist_fm", "same", b"B")
     assert cache.get("archive_org", "same") == b"A"
-    assert cache.get("setlistfm", "same") == b"B"
+    assert cache.get("setlist_fm", "same") == b"B"
 
 
 def test_delete(tmp_path):
@@ -112,11 +112,11 @@ def test_stats_counts_entries_and_bytes_per_namespace(tmp_path):
     cache = RawCache(tmp_path)
     cache.put("archive_org", "a", b"12345")
     cache.put("archive_org", "b", b"1234567890")
-    cache.put("setlistfm", "x", b"123")
+    cache.put("setlist_fm", "x", b"123")
     stats = cache.stats()
-    assert list(stats) == ["archive_org", "setlistfm"]     # alphabetized, so a diff is stable
+    assert list(stats) == ["archive_org", "setlist_fm"]     # alphabetized, so a diff is stable
     assert (stats["archive_org"].entries, stats["archive_org"].bytes) == (2, 15)
-    assert (stats["setlistfm"].entries, stats["setlistfm"].bytes) == (1, 3)
+    assert (stats["setlist_fm"].entries, stats["setlist_fm"].bytes) == (1, 3)
 
 
 def test_stats_is_empty_before_anything_is_cached(tmp_path):

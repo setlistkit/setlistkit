@@ -13,7 +13,7 @@ import pytest
 from setlistkit.config import SENTINEL_USER_AGENT, Config
 from setlistkit.diagnostics import DiagnosticError
 from setlistkit.sources.client import (
-    PoliteClient, Response, SourceFormatError, SourceHTTPError, TransportError,
+    PoliteClient, Politeness, Response, SourceFormatError, SourceHTTPError, TransportError,
 )
 from setlistkit.store.raw_cache import RawCache
 
@@ -139,7 +139,7 @@ def test_force_rescan_is_still_rate_limited(tmp_path):
     cache = RawCache(tmp_path)
     cache.put("archive_org", "item1", b"CACHED")
     client = PoliteClient(_config(tmp_path), cache, namespace="archive_org",
-                          transport=transport, sleeper=sleeps.append, delay=0.5)
+                          transport=transport, sleeper=sleeps.append, politeness=Politeness(delay=0.5))
     client.fetch("item1", "https://archive.org/metadata/item1", force_rescan=True)
     assert 0.5 in sleeps                             # "force" ignores the cache, never the pause
 
@@ -190,7 +190,7 @@ def test_429_without_retry_after_uses_exponential_backoff(tmp_path):
 
 def test_gives_up_after_max_tries_of_throttling(tmp_path):
     transport = FakeTransport(*[Response(429, {}, b"") for _ in range(3)])
-    client = _client(tmp_path, transport, sleeps=[], max_tries=3)
+    client = _client(tmp_path, transport, sleeps=[], politeness=Politeness(max_tries=3))
     with pytest.raises(TransportError):
         client.fetch("item1", "https://archive.org/metadata/item1")
 
@@ -198,7 +198,7 @@ def test_gives_up_after_max_tries_of_throttling(tmp_path):
 def test_transport_error_retries_then_raises(tmp_path):
     sleeps = []
     transport = FakeTransport(TransportError("reset"), TransportError("reset"), TransportError("reset"))
-    client = _client(tmp_path, transport, sleeps=sleeps, max_tries=3)
+    client = _client(tmp_path, transport, sleeps=sleeps, politeness=Politeness(max_tries=3))
     with pytest.raises(TransportError):
         client.fetch("item1", "https://archive.org/metadata/item1")
     assert len(transport.calls) == 3                 # it tried the full budget before giving up
@@ -340,7 +340,7 @@ def test_fetch_json_passes_through_a_404_as_none(tmp_path):
 def test_sleeps_the_delay_after_a_real_answer(tmp_path):
     sleeps = []
     transport = FakeTransport(ok(b"OK"))
-    client = _client(tmp_path, transport, sleeps=sleeps, delay=0.5)
+    client = _client(tmp_path, transport, sleeps=sleeps, politeness=Politeness(delay=0.5))
     client.fetch("item1", "https://archive.org/metadata/item1")
     # be gentle: a pause follows the completed request
     assert 0.5 in sleeps

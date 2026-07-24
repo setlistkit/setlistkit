@@ -49,6 +49,7 @@ from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING
 from ..catalog.showtypes import show_types
 from ..catalog.tracklists import read_tracklist, song_vocabulary
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
+from ..importers import secondary
 from ..sources.archive_org import ArchiveOrgClient
 from ..store import Store
 from ..store.raw_cache import RawCache
@@ -117,6 +118,25 @@ class _Previous:
     source_by_date: dict[str, str]
 
 
+def _fold_in_secondary(config, cache, pack, args) -> list[dict]:
+    """Merge candidates from every setlist source, folded on top of the mirror source's records.
+
+    Each secondary importer (setlist.fm today) carries its OWN ``min_year``
+    (``[sources.<id>].min_year``, absent = no floor), independent of archive.org's: the tapes stop
+    at one year, but the structured setlists can reach as far back as the band is documented, which
+    is the whole point of folding them in -- they backfill the dates and songs no tape covers.
+    Each prints what it contributed so a run says where its shows came from.
+    """
+    extra: list[dict] = []
+    for importer in secondary():
+        got = importer.candidates(config, cache, normalizer=pack.normalizer,
+                                  min_year=min_year(config, importer.id, args.min_year))
+        if got:
+            print(f"{importer.id}: {len(got)} setlist(s) folded into the merge")
+        extra += got
+    return extra
+
+
 def ingest(config, args) -> int:
     """Parse the cache, merge, report, guard, publish. Returns a process exit code.
 
@@ -137,7 +157,13 @@ def ingest(config, args) -> int:
 
     parsed = parse_archive_items(cached.items, normalizer=pack.normalizer,
                                  policy=pack.archive_policy())
-    merged = merge_shows(parsed.shows, overrides=pack.corpus.overrides, policy=pack.merge_policy())
+    # setlist.fm's structured setlists join archive.org's tapes in ONE merge, so the precedence in
+    # merge_shows can do its job: a tape (rank 3) wins a date they both cover, and setlist.fm
+    # (rank 2) keeps the dates and songs no tape carries. The mirror below is still built from the
+    # archive items alone -- setlist.fm has no audio, so no tapes, durations or show-types.
+    extra = _fold_in_secondary(config, cache, pack, args)
+    merged = merge_shows(parsed.shows + extra,
+                         overrides=pack.corpus.overrides, policy=pack.merge_policy())
     produced = _Totals(shows=len(merged.shows),
                        songs=sum(count_songs(show["sets"], show["encore"])
                                  for show in merged.shows))

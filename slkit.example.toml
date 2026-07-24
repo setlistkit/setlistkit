@@ -52,11 +52,11 @@ collection = "moe"
 # leave it out for no floor at all, which is the default.
 # min_year = 2020
 
-[sources.setlistfm]
+[sources.setlist_fm]
 mbid = "..."
 # A path to a file containing only the key. It is perm-checked before use: world-readable
 # is a hard failure. Never inline the key here, and never put it in an env var.
-api_key_file = "~/.config/setlistkit/setlistfm.api_key"
+api_key_file = "~/.config/setlistkit/setlist_fm.api_key"
 
 [report]
 # Only used when setlistkit[report] is installed.

@@ -134,9 +134,9 @@ def test_absolute_data_root_preserved(tmp_path):
 # --- sections and identity --------------------------------------------------
 
 def test_section_access(tmp_path):
-    _write(tmp_path / "slkit.toml", GOOD + "[sources.setlistfm]\nmbid = \"abc\"\n")
+    _write(tmp_path / "slkit.toml", GOOD + "[sources.setlist_fm]\nmbid = \"abc\"\n")
     cfg = load_config(env={}, cwd=tmp_path)
-    assert cfg.section("sources", "setlistfm") == {"mbid": "abc"}
+    assert cfg.section("sources", "setlist_fm") == {"mbid": "abc"}
     assert cfg.section("does", "not", "exist") == {}
 
 

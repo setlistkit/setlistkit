@@ -27,7 +27,7 @@ from pathlib import Path
 # (path-length limits), so we hash instead. The original key always lives in the sidecar.
 _MAX_STEM = 120
 
-# Namespaces are our own source ids ("archive_org", "setlistfm"). Fence them so a stray "/"
+# Namespaces are our own source ids ("archive_org", "setlist_fm"). Fence them so a stray "/"
 # or ".." can never walk the payload out of the cache root.
 _NS = re.compile(r"^[a-z0-9_]+$")
 
