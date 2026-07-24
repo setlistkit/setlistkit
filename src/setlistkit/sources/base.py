@@ -58,7 +58,7 @@ class PullResult:
 
 
 @runtime_checkable
-class SourceClient(Protocol):
+class SourceClient(Protocol):  # pylint: disable=too-few-public-methods  # a one-method contract is the point
     """The one method ``slkit pull`` calls, uniform across sources.
 
     ``pull`` is keyed on the source's identity -- an archive.org collection, a MusicBrainz id --
@@ -72,4 +72,3 @@ class SourceClient(Protocol):
              dry_run: bool = False, progress: Callable[[int, int], None] | None = None,
              announce: Callable[[str], None] | None = None) -> PullResult:
         """Fetch ``identity``'s records into the cache; return what was (or would be) fetched."""
-        ...
