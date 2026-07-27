@@ -110,6 +110,56 @@ FOOT = re.compile(r"[\*\#\^\@\%\+\$§]")
 # Internal segue markers that join two distinct songs inside one token ("A > B", "A -> B").
 SEG_SPLIT = re.compile(r"(~?->|~?>|→|<)")
 
+# A double quote, and the two things split_segues has to walk past. Single quotes are absent on
+# purpose: an apostrophe is not a delimiter, and counting one would unbalance every possessive.
+_DQUOTE = re.compile(r"[\"“”]")
+_DQUOTE_OR_SEG = re.compile(r"[\"“”]|~?->|~?>|→|<")
+
+
+def split_segues(text: str) -> list[str]:
+    """:data:`SEG_SPLIT`'s split with a QUOTED span kept whole.
+
+    A taper who quotes a two-part improv name puts the segue inside the quotes. um2024-04-26
+    line 11 is ``11. "Follow The Ben > Lights Dictate The Jam" >`` and the tape's own file title
+    for that track reads ``Follow The Ben - Lights Dictate The Jam``: one file, 217.63s, with no
+    boundary recorded anywhere in the metadata. The trailing mark outside the quotes is the real
+    segue into track 12 and still splits.
+
+    Splitting the inner one invents a performance the tape does not have -- and one that can
+    never be given an honest length, because dividing a single file at a boundary nobody wrote
+    down is exactly the guess :mod:`setlistkit.catalog.lengths` refuses to make.
+
+    ONLY THE SETLIST PROJECTION WAS EVER WRONG HERE, which is not the obvious half.
+    :func:`setlistkit.catalog.tracklists._read_numbered` emits one entry per numbered LINE and
+    trusts the taper's own indexes, so an interior mark never added a track and the file-count
+    check had nothing to catch. Measured on this tape: 26 entries for 26 files both before and
+    after. The damage was a phantom song in the corpus, not a lost duration.
+
+    Only a BALANCED, non-empty set of double quotes arms this. A lone quote is parse debris, and
+    guessing where its partner went is how a wrong reading gets written; those split as before.
+    Rare either way: 6 lines in the 103,453 cached across every band carry an interior mark, and
+    5 of those are footnote prose about a tease rather than a setlist line.
+
+    Returns ``re.split``'s alternating ``[piece, marker, piece, ...]``, so a caller can go on
+    testing ``index + 1 < len(pieces)`` for a segue that followed.
+    """
+    marks = _DQUOTE.findall(text)
+    if not marks or len(marks) % 2:
+        return SEG_SPLIT.split(text)
+    out: list[str] = []
+    quoted = False
+    cut = 0
+    for match in _DQUOTE_OR_SEG.finditer(text):
+        if _DQUOTE.fullmatch(match.group(0)):
+            quoted = not quoted
+        elif not quoted:
+            out.append(text[cut:match.start()])
+            out.append(match.group(0))
+            cut = match.end()
+    out.append(text[cut:])
+    return out
+
+
 # A set HEADER: "Set 1" / "Set 01" (zero-padded) / "Set II" / "1st Set" / "Disc 2". Marks where
 # a section begins and, more importantly, where the taper's gear preamble ends. Kept separate
 # from the encore markers below so an encore can never be mistaken for the setlist's start.
@@ -637,7 +687,7 @@ def _emit_from_token(token: str, rules: _Rules, songs: list[dict]) -> None:
     and it would be a few lines, and it would be reading intent into a keystroke. That column is
     for a source with a published rule and someone applying it; see :mod:`parse`.
     """
-    pieces = SEG_SPLIT.split(token)
+    pieces = split_segues(token)
     for index in range(0, len(pieces), 2):
         piece = E_PREFIX.sub("", pieces[index])          # "(E) The Faker" -> "The Faker"
         piece = FOOT.sub("", piece).strip(" .,-:")

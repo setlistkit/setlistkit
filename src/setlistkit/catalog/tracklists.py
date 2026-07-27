@@ -60,7 +60,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .normalizer import Normalizer, normalize, squash
-from .parse_archive_org import (CHECKSUM_TAIL, E_PREFIX, FOOT, SEG_SPLIT, gear_pattern,
+from .parse_archive_org import (CHECKSUM_TAIL, E_PREFIX, FOOT, SEG_SPLIT, gear_pattern, split_segues,
                                 unescape_description)
 
 # Every tag is a line break here. See :func:`_lines` for why that differs from the setlist parser.
@@ -273,7 +273,7 @@ def _pieces(song: str) -> list[str]:
     split. Left alone it survives into a song called "Billy Goat (NH)", which joins to nothing.
     """
     out = []
-    for piece in SEG_SPLIT.split(song):
+    for piece in split_segues(song):
         piece = piece.strip()
         if not piece or SEG_SPLIT.fullmatch(piece):
             continue

@@ -22,7 +22,7 @@ import pytest
 from setlistkit.catalog import (ArchivePolicy, Normalizer, count_songs, parse_archive_item,
                                 parse_archive_items, title_band_filter)
 from setlistkit.catalog.parse_archive_org import (NOT_THIS_BAND, OTHER_BILLING,
-                                                  clean_html)
+                                                  clean_html, split_segues)
 
 _VOCAB = ["Rebubula", "Meat", "Plane Crash", "Ophelia", "The Faker", "Recreational Chemistry",
           "Hi & Lo", "Timmy Tucker"]
@@ -195,6 +195,56 @@ def test_every_segue_marker_a_taper_writes_means_the_same_thing(marker):
     assert entries["Meat"]["segue"] is True
     assert entries["Plane Crash"]["segue"] is False
     assert "transition" not in entries["Meat"]        # never graded, whatever the mark was
+
+
+# --- segues the taper wrote INSIDE a quoted name --------------------------------------------
+#
+# um2024-04-26 line 11 is `11. "Follow The Ben > Lights Dictate The Jam" >`, and the tape's own
+# file title for that track is `Follow The Ben - Lights Dictate The Jam`: one file, 217.63s, with
+# no boundary recorded anywhere. Splitting it invents a performance that can never be given an
+# honest length. The tracklist reader was never fooled -- it emits one entry per numbered line --
+# so this is a setlist-side defect only.
+
+def test_a_segue_inside_a_quoted_name_does_not_split_the_track():
+    assert split_segues('"Follow The Ben > Lights Dictate The Jam"') == [
+        '"Follow The Ben > Lights Dictate The Jam"']
+
+
+def test_the_segue_outside_the_quotes_still_splits():
+    """The taper marks the real one after the closing quote; only the inner mark is theirs."""
+    assert split_segues('"Follow The Ben > Lights Dictate The Jam" > Just Learned To Play') == [
+        '"Follow The Ben > Lights Dictate The Jam" ', ">", " Just Learned To Play"]
+
+
+def test_two_quoted_titles_segued_together_still_split():
+    assert split_segues('"Sludge And Dub" > "Jake Conducts"') == [
+        '"Sludge And Dub" ', ">", ' "Jake Conducts"']
+
+
+def test_a_lone_quote_leaves_the_split_exactly_as_it_was():
+    """Debris from an earlier parse, not a delimiter. Guessing where its partner went is how a
+    wrong reading gets written, so an unbalanced token splits the way it always did."""
+    assert split_segues('"Follow The Ben > Lights') == ['"Follow The Ben ', ">", " Lights"]
+
+
+def test_an_apostrophe_is_not_a_quote():
+    """Single quotes are never counted -- every possessive would unbalance the token."""
+    assert split_segues("Umphrey's McGee > Don't Know") == ["Umphrey's McGee ", ">", " Don't Know"]
+
+
+def test_a_quoted_improv_name_reaches_the_corpus_as_one_song():
+    """End to end: the pack protects the title, so it is a song and not a spoken moment."""
+    quoted = '"Follow The Ben > Lights Dictate The Jam"'
+    record = parse_archive_item(
+        _item(description=_item()["description"].replace(
+            "03. Meat > Plane Crash", f"03. {quoted} > Ophelia")),
+        normalizer=_StubNormalizer(extra_vocab=["Follow The Ben - Lights Dictate The Jam"],
+                                   protected=["Follow The Ben - Lights Dictate The Jam"]))
+    titles = _titles(record)
+    assert "Lights Dictate The Jam" not in titles       # never became a second performance
+    assert titles.count("Follow The Ben - Lights Dictate The Jam") == 1
+    entries = {entry["song"]: entry for entry in record["sets"][0]}
+    assert entries["Follow The Ben - Lights Dictate The Jam"]["segue"] is True
 
 
 # --- structure: sets, encores, and where the setlist starts ---------------------------------

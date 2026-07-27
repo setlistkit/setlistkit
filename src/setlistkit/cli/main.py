@@ -18,11 +18,12 @@ from pathlib import Path
 
 from .. import __version__
 from ..catalog.lint import lint
+from ..catalog.normalizer import Normalizer
 from ..catalog.scaffold import starter_pack
 from ..catalog.suggest import render_markdown, suggest, titles_from_cache
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
-from ..importers import IMPORTERS
+from ..importers import IMPORTERS, secondary
 from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
@@ -329,6 +330,12 @@ def _add_pack(sub) -> None:
     suggest_cmd.add_argument(
         "--from", dest="source", metavar="PATH", required=True,
         help="a JSON array of raw title strings (e.g. raw/archive_org/titles.json)",
+    )
+    suggest_cmd.add_argument(
+        "--curated", metavar="PATH",
+        help="a JSON array of song names from a source that PUBLISHES titles (setlist.fm), "
+             "which are clustered with --from but win the canonical spelling. `slkit bootstrap` "
+             "reads these from the configured setlist sources automatically",
     )
     suggest_cmd.add_argument(
         "--out", metavar="DIR", required=True,
@@ -759,9 +766,11 @@ def _nonempty_pack_file(path: Path) -> bool:
         return True
 
 
-def _cmd_pack_suggest(args) -> int:
-    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
-    source = Path(args.source).expanduser()
+def _read_titles(source: Path) -> list[str]:
+    """A JSON array of title strings from ``source``, or a diagnostic naming what was wrong.
+
+    Shared by ``--from`` and ``--curated`` so the two read the same shape and fail the same way.
+    """
     try:
         titles = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -777,8 +786,14 @@ def _cmd_pack_suggest(args) -> int:
             summary=f"{source} is not a JSON array of strings",
             detail="This command reads a flat list of raw title strings and clusters them.",
         ))
+    return titles
 
-    suggestion = suggest(titles, cutoff=args.cutoff)
+
+def _cmd_pack_suggest(args) -> int:
+    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
+    titles = _read_titles(Path(args.source).expanduser())
+    curated = _read_titles(Path(args.curated).expanduser()) if args.curated else []
+    suggestion = suggest(titles, cutoff=args.cutoff, curated=curated)
     out_dir = Path(args.out).expanduser()
     _write_suggestion(suggestion, out_dir, force=args.force)
     if (out_dir / "pack.json").is_file():
@@ -823,6 +838,11 @@ def _write_suggestion(suggestion, out_dir: Path, *, force: bool) -> None:
     folded = sum(c.size for c in suggestion.songs) - len(suggestion.songs)
     print(f"{suggestion.raw_count} raw titles -> {len(suggestion.songs)} song candidates "
           f"({folded} variants folded in), {len(suggestion.non_songs)} probable non-songs")
+    # Reported separately because the two numbers answer different questions: how many names a
+    # setlist source got to SPELL, and how many songs would not be in the draft at all without it.
+    if suggestion.curated:
+        print(f"  {len(suggestion.curated)} named by a setlist source "
+              f"({len(suggestion.backfilled)} of them on no tape at all)")
     for path in (vocab_path, aliases_path, sugg_path):
         print(f"  wrote {path}")
 
@@ -847,6 +867,37 @@ def _bootstrap_titles(config) -> list[str]:
     cached = client.cached_items(importer.identity(config),
                                  min_year=min_year(config, "archive_org", None))
     return titles_from_cache(cached.items)
+
+
+def _curated_titles(config) -> list[str]:
+    """Every distinct song name the configured SETLIST sources name as a performance.
+
+    The draft used to read the mirror and nothing else, so the dictionary every later stage is
+    judged against was built from taper prose while the source that publishes actual song titles
+    sat pulled, cached and unread. That is what this fixes; :func:`suggest` explains what changes
+    once the names are in its hands.
+
+    Read through each importer's own ``candidates`` rather than off the raw blobs, which buys two
+    things for free. A source that is not configured returns nothing and says nothing -- the same
+    quiet absence ``ingest`` already relies on -- so this needs no "is it set up" test of its own.
+    And ``non_song`` entries are already flagged by the parsers, which is how setlist.fm's ``tape``
+    marker (a song played over the PA, never performed) is kept out without a rule here that would
+    have to know what a tape marker is.
+
+    The normalizer is empty on purpose. There is no pack yet at draft time -- that is what is being
+    drafted -- so names arrive as the source spells them and the clustering does the rest.
+    """
+    cache = RawCache(config.data_root)
+    empty = Normalizer(vocabulary=[])
+    names: set[str] = set()
+    for importer in secondary():
+        for record in importer.candidates(config, cache, normalizer=empty,
+                                          min_year=min_year(config, importer.id, None)) or ():
+            for entries in list(record.get("sets") or ()) + [record.get("encore") or ()]:
+                for entry in entries:
+                    if not entry.get("non_song") and entry.get("song"):
+                        names.add(str(entry["song"]).strip())
+    return sorted(names, key=str.casefold)
 
 
 def _cmd_bootstrap(config, args) -> int:
@@ -885,7 +936,8 @@ def _cmd_bootstrap(config, args) -> int:
             detail="Nothing is cached for this collection and min_year. Run `slkit pull "
                    "archive_org` first (or re-run bootstrap without --skip-pull), then retry.",
         ))
-    _write_suggestion(suggest(titles, cutoff=args.cutoff), pack_dir, force=args.force)
+    _write_suggestion(suggest(titles, cutoff=args.cutoff, curated=_curated_titles(config)),
+                      pack_dir, force=args.force)
 
     _step(4, "pack init — scaffold the remaining pack files, clobbering none")
     _cmd_pack_init(argparse.Namespace(pack=str(pack_dir), force=False, config=args.config))

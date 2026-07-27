@@ -182,13 +182,18 @@ def _cutoffs(all_nights: Sequence[tuple[str, set[str]]], index: int,
     return [all_nights[position][0] for position in range(start, index)]
 
 
-def _predict(corpus: Sequence[Mapping], spec: ReplaySpec, night: str, cutoff: str,
-             set_len: int) -> Drop:
+def predict_drop(corpus: Sequence[Mapping], spec: ReplaySpec, night: str, cutoff: str,
+                 set_len: int) -> Drop:
     """One drop: the night predicted from a corpus that stops at ``cutoff``.
 
     The filter is ``<= cutoff`` and the cutoff is strictly before the night, so the night itself
     can never be in the filtered corpus. ``asof`` stays the night regardless -- see the module
     docstring on why both are here.
+
+    Public because :mod:`setlistkit.picks.upcoming` predicts the same way for a night that has not
+    happened, and this one line is the leak boundary. Two copies of it is two places for the
+    comparison to drift to ``<`` or for the filter to be skipped entirely, and only one of them
+    would have a test watching it.
     """
     visible = [show for show in corpus if show["date"] <= cutoff]
     chances = rollout_night(visible, spec.score, spec.predict, asof=night, set_len=set_len)
@@ -238,7 +243,7 @@ def _walk(corpus: Sequence[Mapping], spec: ReplaySpec, depth: int,
             continue
         if len(cutoffs) < depth:
             short += 1
-        night_drops = tuple(_predict(corpus, spec, night, cutoff, len(played))
+        night_drops = tuple(predict_drop(corpus, spec, night, cutoff, len(played))
                             for cutoff in cutoffs)
         for drop in night_drops:
             by_cutoff.setdefault(drop.cutoff, {})[night] = drop.chances
