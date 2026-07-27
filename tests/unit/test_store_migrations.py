@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from setlistkit.store.migrations import (
+    MIGRATIONS,
     Migration,
     applied_versions,
     apply_pending,
@@ -84,3 +85,34 @@ def test_reading_version_does_not_create_the_ledger(conn):
     assert schema_version(conn) == 0
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "schema_migrations" not in tables
+
+
+def test_a_store_predating_the_transition_fold_in_gets_the_column(conn):
+    """Migration 3 repairs a database that recorded migration 1 before `transition` was in it.
+
+    Built the way the real one was: migration 1's own DDL, minus the column, with the version
+    recorded. The runner then has nothing left to do at version 1, which is exactly why the
+    column could never arrive on its own.
+    """
+    conn.execute("CREATE TABLE shows(date TEXT PRIMARY KEY)")
+    conn.execute("CREATE TABLE show_entries("
+                 "  date TEXT NOT NULL, section TEXT NOT NULL, set_no INTEGER,"
+                 "  position INTEGER NOT NULL, song TEXT NOT NULL,"
+                 "  segue INTEGER NOT NULL, non_song INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL,"
+                 " applied_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO schema_migrations VALUES(1, 'initial', '2026-07-01')")
+    conn.execute("INSERT INTO schema_migrations VALUES(2, 'picks', '2026-07-25')")
+
+    assert apply_pending(conn, MIGRATIONS) == [3]
+    assert "transition" in {row[1] for row in conn.execute("PRAGMA table_info(show_entries)")}
+
+
+def test_a_store_that_already_has_the_transition_column_is_left_alone(conn):
+    """A fresh store gets it from migration 1, and `ADD COLUMN` on an existing name is an error."""
+    apply_pending(conn, MIGRATIONS)
+    before = [row[1] for row in conn.execute("PRAGMA table_info(show_entries)")]
+    assert "transition" in before
+    # Idempotent under a re-run of the whole list, which is what a second `store.init()` does.
+    assert apply_pending(conn, MIGRATIONS) == []
+    assert [row[1] for row in conn.execute("PRAGMA table_info(show_entries)")] == before

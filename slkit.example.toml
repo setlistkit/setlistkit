@@ -58,6 +58,47 @@ mbid = "..."
 # is a hard failure. Never inline the key here, and never put it in an env var.
 api_key_file = "~/.config/setlistkit/setlist_fm.api_key"
 
+[model]
+# Prediction knobs. Every value here is a CONSTRUCTION choice — how a night is drawn and how much
+# of the result gets recorded. The scoring constants (recency halflife, cooldown, era weight) are
+# deliberately NOT here: each of them carries a measured out-of-sample result written down beside
+# it in model/scores.py, and a knob that can be edited without re-measuring is a knob that will be.
+#
+# Every key below is optional and shows its default. An UNKNOWN key is an error rather than
+# ignored: these live in config so a number can be changed without editing source, and a silently
+# skipped key is a change somebody believes they made.
+
+# How many songs one simulated night takes. A live `slkit predict` has to GUESS this, because
+# nothing tells it how long tonight will be; `slkit replay` is told the real number by the night
+# it grades. A set-length prior is the open question that has to be answered before any of this
+# publishes a page about a show that has not happened.
+# set_len = 10
+
+# How many encore songs to construct, picked from what the set did not already use.
+# encore_len = 1
+
+# How many times to draw the night. The confidence attached to a song IS its share of these draws,
+# so this is a noise knob and not a correctness one. 500 is inherited from the pipeline this was
+# ported from; see scripts/rollout_convergence.py, which re-measures it on your own corpus.
+# rollouts = 500
+
+# Fixes the draw, so the same corpus and the same seed produce the same prediction twice. A replay
+# is reproducible because of this line.
+# seed = 42
+
+# A song is marked as segueing into the next when it ran into the next song this often. Ordering
+# and segue marks are PRESENTATION: they are recorded and shown, never scored.
+# segue_threshold = 0.45
+
+# How far down the confidence ranking gets recorded. Larger than set_len on purpose — a song can
+# be worth listing without ever being likely enough to make a typical night.
+# top_n = 30
+
+# How far back `slkit replay` walks, as an offset from the last stored show. Same validated
+# grammar report windows use (P18M, P3Y6M, P30D, P2W), so the span slides forward on its own as
+# shows are ingested and never depends on what day the command was run.
+# replay_since_back = "P18M"
+
 [report]
 # Only used when setlistkit[report] is installed.
 out_dir = "../site"

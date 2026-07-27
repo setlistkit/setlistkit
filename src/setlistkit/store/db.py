@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +56,15 @@ _DATE_EXPR = {
     # song_length_stats is deliberately absent. Its `longest_date` is a date but not the row's
     # axis: a song's statistics are computed over every year it was played, so narrowing them to a
     # range would print a whole-corpus median under a header claiming it covers one month.
+    #
+    # The ledger's three. An iteration's axis is the CUTOFF it was trained through and a pick's is
+    # the NIGHT it is about, and those are different dates on the same row of the same walk -- so
+    # `--since` narrows the two tables to different things on purpose. Asking "what did we say
+    # about July" and "what did we know by July" are both real questions and neither table can
+    # answer the other one.
+    "pick_iterations": '"cutoff_date"',
+    "picks": '"night_date"',
+    "pick_outcomes": '"night_date"',
 }
 
 
@@ -368,7 +378,8 @@ class Store:
 
     # --- plain-text view ---
 
-    def dump(self, *, since: str | None = None, until: str | None = None) -> str:
+    def dump(self, *, since: str | None = None, until: str | None = None,
+             only: Sequence[str] | None = None) -> str:
         """Render derived state to deterministic plain text, for reviewable diffs.
 
         Volatile timestamp columns are dropped and rows are sorted, so two dumps of the same
@@ -382,13 +393,22 @@ class Store:
         A range never hides anything quietly. Every table's header says whether the range reached
         it and how many rows it holds in total, so a table with no date axis reads as "all of it,
         because there is no date to filter on" rather than as a table that happens to look small.
+
+        ``only`` narrows to a named set of tables and says so in the heading, for the same reason
+        the range does: the whole database is seventy-six thousand tracks and one domain's worth of
+        it is what somebody actually opened this for. A name that is not in the database is not an
+        error -- the picks tables do not exist until migration 2 has run, and asking for them on an
+        older store should report an empty ledger, not a crash.
         """
         since = daterange.check_date(since, "--since")
         until = daterange.check_date(until, "--until")
         ranged = since is not None or until is not None
-        lines = [f"# {DB_FILENAME} — contents"
+        wanted = self.table_names() if only is None else [t for t in self.table_names()
+                                                          if t in set(only)]
+        scope = "" if only is None else f" [{', '.join(sorted(set(only)))}]"
+        lines = [f"# {DB_FILENAME} — contents{scope}"
                  + (f" ({daterange.label(since, until)})" if ranged else ""), ""]
-        for table in self.table_names():
+        for table in wanted:
             cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({_quote(table)})")]
             shown = [c for c in cols if c not in VOLATILE_COLUMNS]
             where, params = _where(table, since, until)

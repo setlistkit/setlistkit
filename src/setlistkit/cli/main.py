@@ -23,6 +23,7 @@ from ..catalog.suggest import render_markdown, suggest, titles_from_cache
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
 from ..importers import IMPORTERS
+from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
 from ..store.raw_cache import RawCache
@@ -30,6 +31,8 @@ from .common import min_year, required_setting, resolve_pack_dir
 from .derive import derive
 from .export import export
 from .ingest import ingest
+from ..picks.drops import DEFAULT_DEPTH
+from .predict import drops_cmd, predict, replay
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
@@ -84,6 +87,12 @@ def _add_store(sub) -> None:
 def _add_dump(sub) -> None:
     """The ``slkit dump`` parser."""
     dump_cmd = sub.add_parser("dump", help="print a plain-text view of derived state")
+    dump_cmd.add_argument(
+        "what", nargs="?", choices=("all", "picks"), default="all",
+        help="which tables to print (default: %(default)s). `picks` is the prediction ledger, "
+             "and it is the strongest case for this command in the project: those tables are the "
+             "only ones here that cannot be rebuilt",
+    )
     # Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
     # someone reaches for when they already suspect something is wrong -- one bug at a time.
     dump_cmd.add_argument("--since", metavar="YYYY-MM-DD",
@@ -146,6 +155,92 @@ def _add_derive(sub) -> None:
                                help="pack directory to derive with (overrides [catalog] pack)")
     _add_dry_run(durations_cmd,
                  "read, reconcile and report in full, but write nothing to the database")
+
+
+def _add_predict(sub) -> None:
+    """The ``slkit predict`` parser."""
+    predict_cmd = sub.add_parser(
+        "predict", help="rank every song's chance of being played on one night")
+    predict_cmd.add_argument(
+        "--asof", metavar="YYYY-MM-DD",
+        help="the night to predict (default: the day after the last stored show, which is the "
+             "earliest date the corpus does not already hold). Nothing dated on or after it is "
+             "read, so naming a night inside the corpus gives a blinded re-prediction of it",
+    )
+    _add_model_flags(predict_cmd)
+    predict_cmd.add_argument(
+        "--set-len", type=int, metavar="N",
+        help="how many songs to assume will be played (overrides set_len in [model]). A live "
+             "prediction has to guess this; a replay is told it by the night it grades",
+    )
+
+
+def _add_replay(sub) -> None:
+    """The ``slkit replay`` parser."""
+    replay_cmd = sub.add_parser(
+        "replay",
+        help="predict every gradeable night in a window before revealing it, and grade the lot")
+    # Inclusive at both ends and spelled exactly as `dump` and `export` spell them. A range that
+    # means one thing in one command and something a day wider in another is a range nobody can
+    # check a published number against.
+    replay_cmd.add_argument("--since", metavar="YYYY-MM-DD",
+                            help="grade nights on or after this date (default: the window in "
+                                 "[model] replay_since_back, anchored on the last stored show)")
+    replay_cmd.add_argument("--until", metavar="YYYY-MM-DD",
+                            help="grade nights on or before this date")
+    _add_model_flags(replay_cmd)
+    _add_dry_run(replay_cmd, "predict and grade the whole window and report it, but write "
+                             "nothing to the picks ledger")
+    replay_cmd.add_argument(
+        "--force", action="store_true",
+        help="write even when the run leaves a ledger table with less than half the rows it "
+             "started with (see the no-shrink guard)",
+    )
+
+
+def _add_drops(sub) -> None:
+    """The ``slkit drops`` parser.
+
+    The window flags are spelled and defaulted exactly as ``replay`` spells them, deliberately: a
+    churn number and a recall number quoted off the same store have to be about the same nights,
+    and two commands that disagree about what "the window" means make that impossible to check.
+    """
+    drops_parser = sub.add_parser(
+        "drops",
+        help="predict every gradeable night in a window from several earlier cutoffs, and watch "
+             "the shortlist move")
+    drops_parser.add_argument("--since", metavar="YYYY-MM-DD",
+                              help="cover nights on or after this date (default: the window in "
+                                   "[model] replay_since_back, anchored on the last stored show)")
+    drops_parser.add_argument("--until", metavar="YYYY-MM-DD",
+                              help="cover nights on or before this date")
+    drops_parser.add_argument(
+        "--depth", type=int, metavar="N",
+        help=f"how many earlier cutoffs to predict each night from (default: {DEFAULT_DEPTH}). "
+             "The walk costs nights x depth predictions, so this is what decides whether it runs "
+             "in seconds or minutes",
+    )
+    _add_model_flags(drops_parser)
+    _add_dry_run(drops_parser, "walk the whole window and report it, but write nothing to the "
+                               "picks ledger")
+    drops_parser.add_argument(
+        "--force", action="store_true",
+        help="write even when the run leaves a ledger table with less than half the rows it "
+             "started with (see the no-shrink guard)",
+    )
+
+
+def _add_model_flags(parser: argparse.ArgumentParser) -> None:
+    """``--rollouts``, on both commands that draw.
+
+    An iteration flag rather than a setting: a lower count shows the direction of a model change
+    several times faster, and it is the wrong number to leave behind in a file a nightly run
+    reads. The cost of a prediction is in the scoring pass over the corpus, not the draws, so
+    lowering it buys less than it looks like it should.
+    """
+    parser.add_argument(
+        "--rollouts", type=int, metavar="N",
+        help="how many times to draw the night (overrides rollouts in [model])")
 
 
 def _add_export_common(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -302,6 +397,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_pull(sub)
     _add_ingest(sub)
     _add_derive(sub)
+    _add_predict(sub)
+    _add_replay(sub)
+    _add_drops(sub)
     _add_export(sub)
     _add_pack(sub)
     _add_bootstrap(sub)
@@ -397,9 +495,10 @@ def _cmd_dump(config, args) -> int:
     hand back an empty dump of the year that was asked for -- which reads as "there is nothing
     there", the one answer this view exists to make trustworthy.
     """
+    only = None if args.what == "all" else LEDGER_TABLES
     try:
         with Store(config.data_root) as store:
-            print(store.dump(since=args.since, until=args.until), end="")
+            print(store.dump(since=args.since, until=args.until, only=only), end="")
     except ValueError as exc:
         raise _malformed_date(exc, "print") from exc
     return EXIT_OK
@@ -414,6 +513,36 @@ def _malformed_date(exc: ValueError, verb: str) -> DiagnosticError:
                "mean what it looks like: `--until 2023` sorts below every date in 2023 and\n"
                f"would {verb} an empty range rather than the year you asked for.",
     ))
+
+
+def _cmd_predict(config, args) -> int:
+    """`slkit predict`, with the same refusal every other dated command gives."""
+    try:
+        return predict(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "predict from") from exc
+
+
+def _cmd_replay(config, args) -> int:
+    """`slkit replay`, likewise.
+
+    Wrapped here rather than inside the walk for the reason ``_cmd_export`` gives: a malformed
+    flag is a CLI fault, and the replay's job starts once the window is known to mean what it
+    says. Unwrapped, ``--since "the fall tour"`` arrives as a traceback -- which is the one shape
+    of output this program does not use to say no.
+    """
+    try:
+        return replay(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "grade") from exc
+
+
+def _cmd_drops(config, args) -> int:
+    """`slkit drops`, with the same refusal ``replay`` gives a window it cannot read."""
+    try:
+        return drops_cmd(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "walk") from exc
 
 
 def _cmd_export(config, args) -> int:
@@ -791,6 +920,9 @@ _COMMANDS = {
     "pull": _cmd_pull,
     "ingest": ingest,
     "derive": derive,
+    "predict": _cmd_predict,
+    "replay": _cmd_replay,
+    "drops": _cmd_drops,
     "export": _cmd_export,
     "dump": _cmd_dump,
     "bootstrap": _cmd_bootstrap,

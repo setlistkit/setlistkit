@@ -66,10 +66,19 @@ class HoldoutResult:
     best: dict[str, object]
 
 
-def _gradeable(shows: Iterable[Mapping], min_songs: int) -> list[tuple[str, set[str]]]:
+def gradeable(shows: Iterable[Mapping], min_songs: int) -> list[tuple[str, set[str]]]:
     """(date, songs played) for every show complete enough to grade, oldest first.
 
     A night recorded as two songs grades the taper's notes, not the model.
+
+    PUBLIC because it is also the replay's cutoff list: :mod:`setlistkit.picks.replay` walks
+    exactly these dates, one at a time, revealing one night per step. "Complete enough to grade"
+    has to mean the same thing in both places or the two disagree about which nights count, so
+    there is one implementation and the replay imports it rather than filtering for itself.
+
+    Note this is a different question from ``ScoreConfig.min_show_songs``, which is "complete
+    enough to LEARN from" and defaults lower. Both floors are real and they are not the same
+    number; see the design doc's open questions.
     """
     out = []
     for show in shows:
@@ -86,7 +95,7 @@ def _gradeable(shows: Iterable[Mapping], min_songs: int) -> list[tuple[str, set[
 def _window(shows: Iterable[Mapping], count: int,
             min_songs: int) -> list[tuple[str, set[str]]]:
     """The most recent ``count`` gradeable shows."""
-    return _gradeable(shows, min_songs)[-count:] if count > 0 else []
+    return gradeable(shows, min_songs)[-count:] if count > 0 else []
 
 
 def hit_rates(shows: Iterable[Mapping], tests: Sequence[tuple[str, set[str]]],
@@ -129,7 +138,7 @@ def naive_baseline(shows: Iterable[Mapping],
     The floor any amount of machinery should clear. It flatters the model, because it withholds
     recency too -- which is why :func:`recency_baseline` exists beside it.
     """
-    corpus = _gradeable(shows, 1)
+    corpus = gradeable(shows, 1)
     graded = _coerce(tests)
     rates = []
     for date, actual in graded:
@@ -151,7 +160,7 @@ def recency_baseline(shows: Iterable[Mapping],
     not "does the model beat a coin" but "does the rest of the machinery earn its place on top
     of recency", and only this baseline answers it.
     """
-    corpus = _gradeable(shows, config.min_show_songs)
+    corpus = gradeable(shows, config.min_show_songs)
     rates = []
     for date, actual in _coerce(tests):
         weighted = _weighted_frequency(corpus, date, config.recency_halflife_days)

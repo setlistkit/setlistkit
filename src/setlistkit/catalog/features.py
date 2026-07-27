@@ -39,6 +39,12 @@ from dataclasses import dataclass, field
 from .normalizer import clean_song
 from .parse import JAM_SEGUE
 
+# How many partners a song's bigram graph keeps, for a caller that does not say. Three is what a
+# song's profile shows a reader, and it is a presentation number: nobody reads a fourth-favorite
+# follower off a page. It is the wrong number for anything that WALKS the graph -- greedy set
+# ordering asks "what follows this song, out of these eleven others", and a graph truncated to
+# three answers "nothing" for almost every pair. So it is a default and not a constant, and
+# `top_partners=None` asks for the whole graph.
 _TOP_PARTNERS = 3
 
 
@@ -217,8 +223,12 @@ def _walk_encore(tally: _Tally, songs: list[Mapping], date: str) -> None:
             tally.segue(song, _name(songs[position + 1]), jam=_is_jam(entry))
 
 
-def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:
-    """One song's row, once the whole corpus has been folded in."""
+def _feature_of(tally: _Tally, song: str, plays: int, top: int | None) -> SongFeature:
+    """One song's row, once the whole corpus has been folded in.
+
+    ``top`` caps both partner graphs; ``None`` keeps them whole (``Counter.most_common(None)``
+    returns everything, which is why no branch is needed here).
+    """
     slots = tally.slots.get(song) or [0.5]
     return SongFeature(
         song=song,
@@ -233,20 +243,26 @@ def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:
             jam_segue_out=round(tally.segues.jam_out[song] / plays, 3),
         ),
         mean_slot=round(sum(slots) / len(slots), 3),
-        top_partners=tuple(tally.segues.partners[song].most_common(_TOP_PARTNERS)),
-        top_jam_partners=tuple(tally.segues.jam_partners[song].most_common(_TOP_PARTNERS)),
+        top_partners=tuple(tally.segues.partners[song].most_common(top)),
+        top_jam_partners=tuple(tally.segues.jam_partners[song].most_common(top)),
         first_seen=min(tally.dates[song]),
         last_seen=max(tally.dates[song]),
     )
 
 
-def song_features(shows: Iterable[Mapping]) -> list[SongFeature]:
+def song_features(shows: Iterable[Mapping], *,
+                  top_partners: int | None = _TOP_PARTNERS) -> list[SongFeature]:
     """Every song's structural profile, most-played first.
 
     ``shows`` is the shape :func:`setlistkit.store.corpus.shows` returns.
 
     Ties on play count break on the song name, so two runs over the same corpus agree and so
     does anything computed downstream.
+
+    ``top_partners`` caps ``top_partners``/``top_jam_partners``; pass ``None`` for the whole
+    bigram graph, which is what a consumer walking it needs rather than reading it. Defaulted so
+    every existing caller keeps the profile it already had -- see the constant above for why the
+    two callers want different numbers.
     """
     tally = _Tally()
     for show in shows:
@@ -260,5 +276,6 @@ def song_features(shows: Iterable[Mapping]) -> list[SongFeature]:
             _walk_set(tally, songs, date, is_last=index == last and not encore)
         _walk_encore(tally, encore, date)
 
-    out = [_feature_of(tally, song, plays) for song, plays in tally.plays.items()]
+    out = [_feature_of(tally, song, plays, top_partners)
+           for song, plays in tally.plays.items()]
     return sorted(out, key=lambda feature: (-feature.n_plays, feature.song))
