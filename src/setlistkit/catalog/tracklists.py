@@ -60,8 +60,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .normalizer import Normalizer, normalize, squash
-from .parse import (CHECKSUM_TAIL, E_PREFIX, FOOT, SEG_SPLIT, gear_pattern,
-                    unescape_description)
+from .parse_archive_org import (CHECKSUM_TAIL, E_PREFIX, FOOT, SEG_SPLIT, gear_pattern,
+                                unescape_description)
 
 # Every tag is a line break here. See :func:`_lines` for why that differs from the setlist parser.
 _TAG_RE = re.compile(r"<[^>]+>")

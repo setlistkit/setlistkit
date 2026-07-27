@@ -19,13 +19,15 @@ from setlistkit.importers import IMPORTERS, secondary
 from setlistkit.importers.base import Importer
 from setlistkit.sources.archive_org import ArchiveOrgClient
 from setlistkit.sources.base import SourceClient
+from setlistkit.sources.phish_in import PhishInClient
+from setlistkit.sources.phish_net import PhishNetClient
 from setlistkit.sources.setlist_fm import SetlistFmClient
 
 
 def test_every_importer_is_keyed_by_its_own_id():
     """The registry key and the descriptor's id are the same string -- the one spelling of a source."""
     assert all(key == imp.id for key, imp in IMPORTERS.items())
-    assert set(IMPORTERS) == {"archive_org", "setlist_fm"}
+    assert set(IMPORTERS) == {"archive_org", "setlist_fm", "phish_net", "phish_in"}
 
 
 def test_sources_choices_come_from_the_registry():
@@ -57,12 +59,18 @@ def test_id_is_the_machine_key_and_display_name_is_the_real_name():
 
 def test_a_mirror_source_folds_in_no_candidates_and_a_setlist_source_does():
     """The rule ingest splits on: the mirror source (archive) is read explicitly and has no
-    candidates hook; a setlist source (setlist.fm) contributes candidates and feeds no mirror."""
-    archive, setlist = IMPORTERS["archive_org"], IMPORTERS["setlist_fm"]
+    candidates hook; every setlist source contributes candidates and feeds no mirror.
+
+    Three setlist sources now, against one mirror. That ratio is the design working: adding
+    phish.net and phish.in was a registry entry apiece, exactly as the module docstring promised,
+    and nothing about this rule had to change to hold them."""
+    archive = IMPORTERS["archive_org"]
     assert archive.feeds_mirror and archive.candidates is None
-    assert not setlist.feeds_mirror and callable(setlist.candidates)
+    for setlist_id in ("setlist_fm", "phish_net", "phish_in"):
+        imp = IMPORTERS[setlist_id]
+        assert not imp.feeds_mirror and callable(imp.candidates)
     # `secondary()` is exactly the fold-in sources -- the setlist ones, never the mirror.
-    assert [imp.id for imp in secondary()] == ["setlist_fm"]
+    assert [imp.id for imp in secondary()] == ["setlist_fm", "phish_net", "phish_in"]
 
 
 def _keyword_only_shape(func):
@@ -78,12 +86,11 @@ def test_every_client_is_a_source_client_by_shape_not_inheritance():
     it -- no base class does. `issubclass` (runtime_checkable) confirms `pull` exists; the shape
     check confirms its keyword block did not drift, which is how a third source would break it."""
     want = _keyword_only_shape(SourceClient.pull)
-    for client in (ArchiveOrgClient, SetlistFmClient):
+    for client in (ArchiveOrgClient, SetlistFmClient, PhishNetClient, PhishInClient):
         assert issubclass(client, SourceClient)                  # the method is present...
         assert _keyword_only_shape(client.pull) == want         # ...and its keyword shape matches
-    # Neither inherits the Protocol: they satisfy it structurally, which is the whole point.
-    assert SourceClient not in ArchiveOrgClient.__mro__
-    assert SourceClient not in SetlistFmClient.__mro__
+        # None inherits the Protocol: they satisfy it structurally, which is the whole point.
+        assert SourceClient not in client.__mro__
 
 
 def _cfg(tmp_path, body):

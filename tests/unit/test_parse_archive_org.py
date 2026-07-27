@@ -21,7 +21,8 @@ import pytest
 
 from setlistkit.catalog import (ArchivePolicy, Normalizer, count_songs, parse_archive_item,
                                 parse_archive_items, title_band_filter)
-from setlistkit.catalog.parse import NOT_THIS_BAND, OTHER_BILLING, clean_html
+from setlistkit.catalog.parse_archive_org import (NOT_THIS_BAND, OTHER_BILLING,
+                                                  clean_html)
 
 _VOCAB = ["Rebubula", "Meat", "Plane Crash", "Ophelia", "The Faker", "Recreational Chemistry",
           "Hi & Lo", "Timmy Tucker"]
@@ -177,6 +178,23 @@ def test_internal_segue_splits_one_token_into_two_songs():
     entries = {entry["song"]: entry for entry in record["sets"][0]}
     assert entries["Meat"]["segue"] is True
     assert entries["Plane Crash"]["segue"] is False
+
+
+@pytest.mark.parametrize("marker", [">", "->", "~>", "→"])
+def test_every_segue_marker_a_taper_writes_means_the_same_thing(marker):
+    """A tape description is one person typing, not a documented rule being applied.
+
+    So `>` and `->` are the same fact here, and the parse is identical whichever one appears.
+    Only a source that publishes what its marks mean, and has someone applying that, earns the
+    finer `transition` field -- phish.net does; a taper does not, and reading intent into their
+    keystroke would invent the very thing that field exists to record.
+    """
+    record = _parse(_item(description=_item()["description"].replace(
+        "03. Meat > Plane Crash", f"03. Meat {marker} Plane Crash")))
+    entries = {entry["song"]: entry for entry in record["sets"][0]}
+    assert entries["Meat"]["segue"] is True
+    assert entries["Plane Crash"]["segue"] is False
+    assert "transition" not in entries["Meat"]        # never graded, whatever the mark was
 
 
 # --- structure: sets, encores, and where the setlist starts ---------------------------------

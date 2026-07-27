@@ -44,13 +44,14 @@ from pathlib import Path
 from ..catalog.funnel import imbalances
 from ..catalog.merge import merge_shows, override_disagreements
 from ..catalog.pack import load_pack
-from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING, count_songs,
-                             parse_archive_items)
+from ..catalog.parse import count_songs
+from ..catalog.parse_archive_org import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND,
+                                         OTHER_BILLING, parse_archive_items)
 from ..catalog.showtypes import show_types
 from ..catalog.tracklists import read_tracklist, song_vocabulary
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
-from ..importers import secondary
-from ..sources.archive_org import ArchiveOrgClient
+from ..importers import IMPORTERS, secondary
+from ..sources.archive_org import ArchiveOrgClient, CachedItems
 from ..store import Store
 from ..store.raw_cache import RawCache
 from .common import min_year, required_setting, resolve_pack_dir
@@ -137,6 +138,56 @@ def _fold_in_secondary(config, cache, pack, args) -> list[dict]:
     return extra
 
 
+def _mirror_source(config, args) -> str | None:
+    """The mirror source this deployment actually has, or ``None`` if it has none.
+
+    A band whose only sources are structured setlist APIs has no audio anywhere -- Phish is the
+    worked example: archive.org carries zero Phish shows (the 153 items matching the search are
+    tribute bands), and both phish.net and phish.in are setlist sources. Everything the mirror
+    holds -- tapes, durations, show types -- comes from items that do not exist for that band.
+
+    ``args.source`` defaults to the first registered source rather than to something the operator
+    chose, so its mere presence proves nothing. What decides is whether a mirror source has a
+    config table at all. A table that exists but is incomplete still reaches ``required_setting``
+    below and still fails there, loudly, which is the behavior a half-configured archive.org wants.
+    """
+    chosen = IMPORTERS.get(getattr(args, "source", "") or "")
+    if chosen is not None and chosen.feeds_mirror and config.section("sources", chosen.id):
+        return chosen.id
+    for importer in IMPORTERS.values():
+        if importer.feeds_mirror and config.section("sources", importer.id):
+            return importer.id
+    return None
+
+
+def _read_mirror(config, args, cache, pack):
+    """The mirror source's cached items and their parse, or empty stand-ins when there is none.
+
+    Returns the real pair unchanged when a mirror source is configured. Otherwise it parses an
+    empty item list -- rather than fabricating a result object -- so the empty case travels
+    through exactly the same code as a real one and cannot drift from it.
+
+    The absence is PRINTED, never inferred silently. Publishing a corpus with no tapes in it is a
+    perfectly good outcome for a band nobody taped, and an alarming one for a band whose archive
+    config was mistyped. The run cannot tell those apart; the operator can, but only if the run
+    says which path it took.
+    """
+    empty = parse_archive_items([], normalizer=pack.normalizer, policy=pack.archive_policy())
+    source = _mirror_source(config, args)
+    if source is None:
+        print("no mirror source configured: building the corpus from setlist sources alone "
+              "(no tapes, durations or show types)")
+        return CachedItems(), empty
+    collection = required_setting(
+        config, ("sources", source), "collection",
+        f"An ingest reads what `slkit pull {source}` cached, and needs the same collection.")
+    cached = ArchiveOrgClient(config, cache).cached_items(
+        collection, min_year=min_year(config, source, args.min_year))
+    _report_cache(cached, collection, source)
+    return cached, parse_archive_items(cached.items, normalizer=pack.normalizer,
+                                       policy=pack.archive_policy())
+
+
 def ingest(config, args) -> int:
     """Parse the cache, merge, report, guard, publish. Returns a process exit code.
 
@@ -146,17 +197,8 @@ def ingest(config, args) -> int:
     hand what was on screen a moment ago.
     """
     pack = load_pack(resolve_pack_dir(getattr(args, "pack", None), args.config))
-    collection = required_setting(
-        config, ("sources", args.source), "collection",
-        f"An ingest reads what `slkit pull {args.source}` cached, and needs the same collection.")
-
     cache = RawCache(config.data_root)
-    cached = ArchiveOrgClient(config, cache).cached_items(
-        collection, min_year=min_year(config, args.source, args.min_year))
-    _report_cache(cached, collection, args.source)
-
-    parsed = parse_archive_items(cached.items, normalizer=pack.normalizer,
-                                 policy=pack.archive_policy())
+    cached, parsed = _read_mirror(config, args, cache, pack)
     # setlist.fm's structured setlists join archive.org's tapes in ONE merge, so the precedence in
     # merge_shows can do its job: a tape (rank 3) wins a date they both cover, and setlist.fm
     # (rank 2) keeps the dates and songs no tape carries. The mirror below is still built from the

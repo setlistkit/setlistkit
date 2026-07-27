@@ -44,6 +44,13 @@ class PullResult:
     # a page of ~20 setlists per request, so `planned` setlists cost far fewer requests -- it sets
     # this to the page count so the dry-run time estimate reflects requests, not records.
     planned_requests: int | None = None
+    # What THIS dry run itself spent, when the source can say. A dry run is a question about cost
+    # that is not free to ask, and how much it costs differs per source: setlist.fm must fetch page
+    # one to learn the total, phish.in walks its index, and phish.net spends nothing at all because
+    # the years come from config. Reported rather than inferred, because the CLI used to infer it
+    # from `planned_requests` and would then tell an operator that one page had been requested on a
+    # source that had made no request whatsoever. ``None`` means the source did not say.
+    probe_requests: int | None = None
     missing: tuple[str, ...] = ()          # identifiers archive.org 404'd
     # Identifiers whose fetch failed even after the client's own retries. Separate from `missing`
     # because the cause is different -- absent versus unwell -- though the remedy is the same:

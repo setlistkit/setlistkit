@@ -9,8 +9,12 @@ rotation model that treats all thirty slots in a show as interchangeable will ha
 four set-closers and no opener.
 
 Everything is a rate in [0,1] with an ``n_plays`` beside it. A 1.00 encore rate on n=1 means
-nothing, and a consumer needs the n to know that. The six rates live together in ``Rates``
+nothing, and a consumer needs the n to know that. The seven rates live together in ``Rates``
 because they share that denominator; ``mean_slot`` does not share it and so does not join them.
+
+One of those seven, ``jam_segue_out``, is only ever non-zero where a source graded its transitions
+finely enough to say -- phish.net alone, today. It is zero everywhere else and that zero means "we
+were never told", not "it never happened". Same for ``top_jam_partners``. See :func:`_is_jam`.
 
 Computed over whatever ``shows`` the caller hands in -- this module has no opinion about a window
 and takes none. The version this was ported from used 2023-01-01 onward unconditionally, on the
@@ -30,21 +34,28 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .normalizer import clean_song
+from .parse import JAM_SEGUE
 
 _TOP_PARTNERS = 3
 
 
 @dataclass(frozen=True)
 class Rates:
-    """How often a song took each structural role. All six are over the same ``n_plays``.
+    """How often a song took each structural role. All seven are over the same ``n_plays``.
 
     Grouped because they share that denominator, which is the thing that makes them
     comparable to each other and to nothing else in the record. ``mean_slot`` deliberately
     stays outside: it averages slot observations, and a set of one contributes none, so its
     denominator is not ``n_plays`` and never was.
+
+    ``jam_segue_out`` is a SUBSET of ``segue_out``, not a sibling of it: every jam segue is a
+    segue. Kept as a rate of its own because the two answer different questions -- ``segue_out``
+    is "does this song run into things", which the composed suites max out by habit, and
+    ``jam_segue_out`` is "does this song dissolve", which is the jam-vehicle signal. A song can
+    score 1.0 on the first and 0.0 on the second, and several do.
     """
 
     opener: float
@@ -53,6 +64,7 @@ class Rates:
     encore: float
     segue_out: float
     segue_in: float
+    jam_segue_out: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -71,13 +83,52 @@ class SongFeature:
     top_partners: tuple[tuple[str, int], ...]
     first_seen: str
     last_seen: str
+    # The partner graph restricted to `->`. Defaulted so a caller building a feature by hand does
+    # not have to know about it, and so a corpus from a source that grades no transitions gets an
+    # empty tuple -- which says "we were never told", the same thing the NULL column says. It is
+    # NOT a claim that the song never dissolved into anything.
+    top_jam_partners: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class _Segues:
+    """The five tallies about songs running into other songs, which all move together.
+
+    Grouped for the same reason :class:`Rates` is: they are written by one call and read as one
+    subject, and five loose counters on the tally would be five things a reader has to check are
+    kept in step. ``into`` rather than ``in``, which is a keyword.
+
+    Frozen swaps the counters out, not their contents -- the same trick :class:`Auth` uses in the
+    sources layer. Tallying mutates a Counter in place and is unaffected; reassigning one wholesale
+    is the mistake worth blocking, since it would silently drop everything counted so far.
+    """
+
+    out: Counter = field(default_factory=Counter)
+    into: Counter = field(default_factory=Counter)
+    jam_out: Counter = field(default_factory=Counter)
+    partners: defaultdict = field(default_factory=lambda: defaultdict(Counter))
+    jam_partners: defaultdict = field(default_factory=lambda: defaultdict(Counter))
+
+    def record(self, song: str, nxt: str, *, jam: bool) -> None:
+        """Record that ``song`` ran into ``nxt`` without a stop.
+
+        ``jam`` narrows it to a `->`. A jam segue is counted in BOTH graphs, because it IS a
+        segue: subtracting it from the general one would make ``segue_out`` mean "ran into the
+        next song, except the interesting times", which nothing asked for.
+        """
+        self.out[song] += 1
+        self.partners[song][nxt] += 1
+        self.into[nxt] += 1
+        if jam:
+            self.jam_out[song] += 1
+            self.jam_partners[song][nxt] += 1
 
 
 class _Tally:
     """The running counts for every song, filled in one pass over the shows.
 
-    A class rather than eleven parallel dicts threaded through three functions: pylint counts
-    locals, and more to the point a reader should not have to check that eleven containers are
+    A class rather than a dozen parallel dicts threaded through three functions: pylint counts
+    locals, and more to the point a reader should not have to check that a dozen containers are
     all keyed the same way.
     """
 
@@ -87,9 +138,7 @@ class _Tally:
         self.set_closer: Counter = Counter()
         self.show_closer: Counter = Counter()
         self.encore: Counter = Counter()
-        self.segue_out: Counter = Counter()
-        self.segue_in: Counter = Counter()
-        self.partners: defaultdict = defaultdict(Counter)
+        self.segues = _Segues()
         self.slots: defaultdict = defaultdict(list)
         self.dates: defaultdict = defaultdict(list)
 
@@ -98,11 +147,9 @@ class _Tally:
         self.plays[song] += 1
         self.dates[song].append(date)
 
-    def segue(self, song: str, nxt: str) -> None:
+    def segue(self, song: str, nxt: str, *, jam: bool = False) -> None:
         """Record that ``song`` ran into ``nxt`` without a stop."""
-        self.segue_out[song] += 1
-        self.partners[song][nxt] += 1
-        self.segue_in[nxt] += 1
+        self.segues.record(song, nxt, jam=jam)
 
 
 def _songs_only(entries: Iterable[Mapping]) -> list[Mapping]:
@@ -127,6 +174,19 @@ def _name(entry: Mapping) -> str:
     return clean_song(entry["song"])
 
 
+def _is_jam(entry: Mapping) -> bool:
+    """Whether this entry dissolved into the next one, per the source's transition code.
+
+    Absent means the source does not grade transitions, and that reads as False here -- which is
+    the one place this asymmetry has to be stated out loud. False means "not known to be a jam
+    segue", NOT "known not to be". Every corpus without phish.net in it therefore scores 0.0 on
+    ``jam_segue_out`` throughout, and that is an absence of evidence rather than evidence of
+    absence. A consumer ranking bands against each other on this number would be comparing one
+    band's data to another band's silence.
+    """
+    return entry.get("transition") == JAM_SEGUE
+
+
 def _walk_set(tally: _Tally, songs: list[Mapping], date: str, *, is_last: bool) -> None:
     """Fold one set into the tally."""
     count = len(songs)
@@ -144,7 +204,7 @@ def _walk_set(tally: _Tally, songs: list[Mapping], date: str, *, is_last: bool) 
             if is_last:
                 tally.show_closer[song] += 1
         if entry.get("segue") and position + 1 < count:
-            tally.segue(song, _name(songs[position + 1]))
+            tally.segue(song, _name(songs[position + 1]), jam=_is_jam(entry))
 
 
 def _walk_encore(tally: _Tally, songs: list[Mapping], date: str) -> None:
@@ -154,7 +214,7 @@ def _walk_encore(tally: _Tally, songs: list[Mapping], date: str) -> None:
         tally.play(song, date)
         tally.encore[song] += 1
         if entry.get("segue") and position + 1 < len(songs):
-            tally.segue(song, _name(songs[position + 1]))
+            tally.segue(song, _name(songs[position + 1]), jam=_is_jam(entry))
 
 
 def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:
@@ -168,11 +228,13 @@ def _feature_of(tally: _Tally, song: str, plays: int) -> SongFeature:
             set_closer=round(tally.set_closer[song] / plays, 3),
             show_closer=round(tally.show_closer[song] / plays, 3),
             encore=round(tally.encore[song] / plays, 3),
-            segue_out=round(tally.segue_out[song] / plays, 3),
-            segue_in=round(tally.segue_in[song] / plays, 3),
+            segue_out=round(tally.segues.out[song] / plays, 3),
+            segue_in=round(tally.segues.into[song] / plays, 3),
+            jam_segue_out=round(tally.segues.jam_out[song] / plays, 3),
         ),
         mean_slot=round(sum(slots) / len(slots), 3),
-        top_partners=tuple(tally.partners[song].most_common(_TOP_PARTNERS)),
+        top_partners=tuple(tally.segues.partners[song].most_common(_TOP_PARTNERS)),
+        top_jam_partners=tuple(tally.segues.jam_partners[song].most_common(_TOP_PARTNERS)),
         first_seen=min(tally.dates[song]),
         last_seen=max(tally.dates[song]),
     )

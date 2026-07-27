@@ -4,7 +4,7 @@
 
 A source's whole job is to get raw bytes off the network and into the cache and back -- it never
 normalizes a song name or knows what the pack vocabulary is. That work belongs to
-:mod:`setlistkit.catalog.parse` (:func:`parse_setlistfm`), the same split archive.org has: this
+:mod:`setlistkit.catalog.parse` (:func:`parse_setlist_fm`), the same split archive.org has: this
 module produces raw setlist pages, the catalog layer turns them into merge records. The layer test
 enforces it -- nothing under ``sources/`` may import ``catalog/``.
 
@@ -22,7 +22,7 @@ from typing import NamedTuple
 from ..config import Config
 from ..store.raw_cache import RawCache
 from .base import PullResult
-from .client import PoliteClient
+from .client import Auth, PoliteClient
 from .keyfile import read_api_key
 
 # The JSON REST root. A path this package builds, never user input.
@@ -45,7 +45,7 @@ def setlists_in(page: object) -> list[dict]:
     """The raw ``setlist`` objects in one cached page payload, defensively.
 
     A tiny projection, not a parse: it does not touch a song name, so it stays on the source side
-    of the layer line. :func:`setlistkit.catalog.parse.parse_setlistfm` is what normalizes.
+    of the layer line. :func:`setlistkit.catalog.parse.parse_setlist_fm` is what normalizes.
     """
     if not isinstance(page, dict):
         return []
@@ -112,7 +112,7 @@ class SetlistFmClient:
         self._cache = cache
         self._client = PoliteClient(config, cache, namespace=NAMESPACE,
                                     transport=transport, sleeper=sleeper,
-                                    extra_headers={"x-api-key": key})
+                                    auth=Auth(headers={"x-api-key": key}))
 
     @staticmethod
     def _page_key(mbid: str, page: int) -> str:
@@ -166,6 +166,7 @@ class SetlistFmClient:
                 return PullResult(listed=plan.total, fetched=0, cached=cached,
                                   planned=max(0, plan.total - cached),
                                   planned_requests=max(0, plan.pages - already),
+                                  probe_requests=0 if first_cached else 1,
                                   truncated=plan.truncated)
             fetched, cached = self._walk(mbid, first, first_cached, plan, min_year=min_year,
                                          force_rescan=force_rescan, progress=progress)

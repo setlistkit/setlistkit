@@ -89,6 +89,20 @@ def _corpus(conn: sqlite3.Connection) -> None:
     # `section` separates the sets (0) from the encore (1) rather than giving the encore a magic
     # set number, so "the encore is last" is an explicit sort and not arithmetic that happens to
     # work. Every read orders by (section, set_no, position).
+    #
+    # `transition` is NULLABLE and that is the whole point of it. `segue` is a boolean every
+    # source can answer, so it stays NOT NULL; `transition` is the finer answer only phish.net
+    # gives, and NULL means "this source does not distinguish" -- which must stay separate from
+    # 1, "the band stopped". Rank the two together and a source that cannot tell us would be
+    # recorded as having told us there was no segue.
+    #
+    # What it buys, measured on 2020-2026: `>` (code 2) and `->` (code 3) are near-disjoint
+    # relations -- 1,398 and 304 distinct song pairs, only 36 in common. `>` is habit, topping
+    # out at 17 repeats (the composed suites); `->` is improvisation, topping out at 3. Folded
+    # into one boolean they are 5:1 in favor of the predictable ones, so a partner graph built
+    # on `segue` alone drowns the 325 jam transitions in 1,600 routine ones. Codes 4/5/6 come
+    # along for free and encode set structure (last of a set, last before the encore, last of
+    # the show); 7 is undocumented and stored rather than discarded.
     conn.execute(
         "CREATE TABLE show_entries("
         "  date TEXT NOT NULL REFERENCES shows(date) ON DELETE CASCADE,"
@@ -98,6 +112,7 @@ def _corpus(conn: sqlite3.Connection) -> None:
         "  song TEXT NOT NULL,"
         "  segue INTEGER NOT NULL,"
         "  non_song INTEGER NOT NULL,"
+        "  transition INTEGER,"
         "  PRIMARY KEY (date, section, set_no, position))")
     # "how often has this song been played, and when" is the question every model layer asks, and
     # without this it is a full scan of every entry ever recorded.

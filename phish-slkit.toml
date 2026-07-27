@@ -1,0 +1,54 @@
+# setlistkit configuration for the PHISH research spike.
+#
+# A second band alongside the moe. config, pointed at its own data_root and its own pack so the
+# two corpora cannot contaminate each other. This file holds no credential -- the phish.net key
+# lives in its own perm-checked file, referenced by path below.
+#
+# Use it explicitly:  slkit <command> --config phish-slkit.toml
+
+# Where all mutable state lives, deliberately outside the repository. Raw source snapshots go
+# under <data_root>/raw/<source>/{blob,meta}/, the same layout archive.org's pull writes.
+data_root = "../phish-pack"
+
+# Identifies THIS deployment to phish.net and phish.in, and gives them a contact. Both hosts ask
+# to be treated gently -- phish.net's docs warn that apps demanding data too frequently get
+# disabled, and phish.in's API description just says "please be nice" -- so this is not decoration.
+user_agent = "setlistkit-research/0.1 (+mailto:tim@lnx.cx; Phish generalization spike)"
+
+# The band's MusicBrainz id, top-level because it names the BAND and not one source's view of it.
+# Phish. Nothing reads it yet on this config -- setlist.fm is not among the sources here -- but it
+# is the durable cross-source identifier for this band and belongs beside data_root.
+mbid = "e01646f2-2a04-450d-8bf2-0d993082e058"
+
+[catalog]
+# Built locally, never cloned: phish.net's Terms of Use section 1.4 bars republishing their
+# content "in any other format or by any other means, physical or electronic, with or without
+# attribution", so a phish-pack cannot ship the way moe-pack does. The rules are ours and can
+# ship; the rows are theirs and cannot.
+pack = "../phish-pack"
+
+[sources.phish_net]
+# The artist whose rows to keep out of a year payload. The showyear endpoint returns Trey solo,
+# TAB and guest appearances alongside Phish, so this is what separates the band from the sideman.
+artist = "phish"
+# A path to the credential file, perm-checked before use: world-readable is a hard failure.
+# Never inline the key here, and never put it in an env var.
+api_key_file = "~/.config/phish.net/setlistkit-keys.json"
+# phish.net's key page issues a JSON blob carrying both an `apikey` and a `publickey`. Naming the
+# field means the operator points at the file the provider gave them rather than hand-copying a
+# secret into a second file -- the copy being the one nobody remembers to delete. Omit this for a
+# file holding nothing but the bare key, which is what every other source expects.
+api_key_field = "apikey"
+# Floor on the play year, unquoted. 2020 is not a v1 shortcut: at the model's fitted 200-day
+# recency halflife, a 2020 cutoff keeps ~13% of a 34-year corpus and 99.99% of its recency weight,
+# so earlier years spend someone else's bandwidth to move the fifth decimal place.
+min_year = 2020
+
+[sources.phish_in]
+# No key. The API is anonymous; a key only raises rate caps.
+#
+# Same floor, and it means the same thing -- but note the two sources answer different questions
+# inside it. phish.net owns the setlist GRAMMAR (sets, positions, and the `>` versus `->` segue
+# distinction nothing else carries); phish.in owns the CLOCK (per-track duration in milliseconds,
+# from a database, where phish.net's `tracktime` field is empty in every row anyone has looked at).
+min_year = 2020

@@ -472,7 +472,15 @@ def _cmd_pull(config, args) -> int:
         print(f"pull {importer.display_name} (dry run): {result.listed} listed, "
               f"{result.cached} already cached, {result.planned} would be fetched"
               f"{across} (about {minutes:.0f} min)")
-        if result.planned_requests is None:
+        # What the dry run itself just spent. Sources that report it get an exact number; the rest
+        # keep the older prose. This used to be inferred from `planned_requests`, which meant every
+        # paged source was described as having fetched "the first page" -- false for a source that
+        # sizes the job from config and makes no request at all.
+        if result.probe_requests is not None:
+            spent = result.probe_requests
+            print(f"  This estimate cost {spent} request(s)." if spent else
+                  "  This estimate cost no requests at all: the job's size is known without asking.")
+        elif result.planned_requests is None:
             print("  No item metadata was requested. The listing itself was, because that is how\n"
                   "  this learns what is new; it is a few requests against thousands.")
         else:

@@ -16,9 +16,14 @@ the same file-passing seam the old repo already ran on.
 from .archive_org import ArchiveOrgClient
 from .client import PoliteClient, Response, SourceHTTPError, TransportError
 from .keyfile import read_api_key
+from .phish_in import PhishInClient
+from .phish_net import PhishNetAPIError, PhishNetClient
 
 __all__ = [
     "ArchiveOrgClient",
+    "PhishInClient",
+    "PhishNetAPIError",
+    "PhishNetClient",
     "PoliteClient",
     "Response",
     "SourceHTTPError",

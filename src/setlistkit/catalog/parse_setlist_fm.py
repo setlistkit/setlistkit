@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from .normalizer import Normalizer
-from .parse import count_songs
+from .parse import count_songs, keep
 
 
 def _iso_date(event_date: object) -> str:
@@ -84,8 +84,8 @@ def _record(setlist: Mapping, normalizer: Normalizer) -> dict | None:
             "identifier": f"setlist_fm-{setlist.get('id') or ''}"}
 
 
-def parse_setlistfm(pages: Iterable[Mapping], *, normalizer: Normalizer,
-                    min_year: int | None = None) -> list[dict]:
+def parse_setlist_fm(pages: Iterable[Mapping], *, normalizer: Normalizer,
+                     min_year: int | None = None) -> list[dict]:
     """Cached setlist.fm page payloads into merge show-record candidates.
 
     One record per setlist that carries a usable date and at least one song, deduped by nothing --
@@ -100,11 +100,6 @@ def parse_setlistfm(pages: Iterable[Mapping], *, normalizer: Normalizer,
             if not isinstance(setlist, Mapping):
                 continue
             record = _record(setlist, normalizer)
-            if record is None:
-                continue
-            if min_year is not None and record["year"].isdigit() and int(record["year"]) < min_year:
-                continue
-            if count_songs(record["sets"], record["encore"]) == 0:
-                continue
-            shows.append(record)
+            if keep(record, min_year):
+                shows.append(record)
     return sorted(shows, key=lambda rec: (rec["date"], rec["identifier"]))

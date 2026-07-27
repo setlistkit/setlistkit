@@ -24,11 +24,12 @@ Two roles a source can play, distinguished by :attr:`Importer.feeds_mirror`:
 
 from __future__ import annotations
 
-from . import archive_org, setlist_fm
+from . import archive_org, phish_in, phish_net, setlist_fm
 from .base import Importer
 
 # id -> importer. The single source of truth the CLI dispatches through; ``_SOURCES`` is its keys.
-IMPORTERS: dict[str, Importer] = {imp.id: imp for imp in (archive_org.IMPORTER, setlist_fm.IMPORTER)}
+IMPORTERS: dict[str, Importer] = {imp.id: imp for imp in (archive_org.IMPORTER, setlist_fm.IMPORTER,
+                                                          phish_net.IMPORTER, phish_in.IMPORTER)}
 
 
 def secondary() -> list[Importer]:

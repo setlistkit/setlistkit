@@ -5,7 +5,7 @@
 The two halves are tested on the two sides of the layer line they live on. The client
 (`sources/setlist_fm.py`) is exercised against a fake transport -- pagination, the newest-first
 year floor that stops it early, the x-api-key header, the cache round-trip -- and never touches a
-song name. The parser (`catalog/parse.py:parse_setlistfm`) turns raw pages into merge records, and
+song name. The parser (`catalog/parse.py:parse_setlist_fm`) turns raw pages into merge records, and
 that is where the date conversion, the encore pooling, and the tape-is-not-a-play rule are checked.
 """
 
@@ -16,7 +16,7 @@ import pytest
 
 from setlistkit.catalog.normalizer import Normalizer
 from setlistkit.catalog.parse import count_songs
-from setlistkit.catalog.parse_setlistfm import parse_setlistfm
+from setlistkit.catalog.parse_setlist_fm import parse_setlist_fm
 from setlistkit.sources.client import Response
 from setlistkit.sources.setlist_fm import NAMESPACE, SetlistFmClient
 from setlistkit.config import load_config
@@ -43,14 +43,14 @@ def _page(*setlists):
 
 
 def test_event_date_becomes_iso():
-    [rec] = parse_setlistfm([_page(_setlist("a", "23-08-2024", ([_song("Mantis")], None)))],
-                            normalizer=NZ)
+    [rec] = parse_setlist_fm([_page(_setlist("a", "23-08-2024", ([_song("Mantis")], None)))],
+                             normalizer=NZ)
     assert rec["date"] == "2024-08-23" and rec["year"] == "2024"
     assert rec["source"] == "setlist_fm" and rec["identifier"] == "setlist_fm-a"
 
 
 def test_encore_sets_pool_into_encore():
-    [rec] = parse_setlistfm(
+    [rec] = parse_setlist_fm(
         [_page(_setlist("a", "01-02-2024",
                         ([_song("Bridgeless"), _song("Ophelia")], None),
                         ([_song("Hangover")], 1)))],
@@ -61,7 +61,7 @@ def test_encore_sets_pool_into_encore():
 
 def test_tape_song_is_kept_but_flagged_non_song():
     """A song played over the PA is recorded but does not count as a performance."""
-    [rec] = parse_setlistfm(
+    [rec] = parse_setlist_fm(
         [_page(_setlist("a", "01-02-2024",
                         ([_song("Intro Music", tape=True), _song("Mantis")], None)))],
         normalizer=NZ)
@@ -73,7 +73,7 @@ def test_tape_song_is_kept_but_flagged_non_song():
 def test_min_year_floors_the_parse():
     pages = [_page(_setlist("new", "01-02-2024", ([_song("Mantis")], None)),
                    _setlist("old", "01-02-2019", ([_song("Mantis")], None)))]
-    dates = {r["date"] for r in parse_setlistfm(pages, normalizer=NZ, min_year=2020)}
+    dates = {r["date"] for r in parse_setlist_fm(pages, normalizer=NZ, min_year=2020)}
     assert dates == {"2024-02-01"}
 
 
@@ -81,7 +81,7 @@ def test_no_date_and_songless_setlists_are_skipped():
     pages = [_page(_setlist("nodate", "", ([_song("Mantis")], None)),
                    _setlist("empty", "01-02-2024"),
                    _setlist("good", "02-02-2024", ([_song("Mantis")], None)))]
-    recs = parse_setlistfm(pages, normalizer=NZ)
+    recs = parse_setlist_fm(pages, normalizer=NZ)
     assert [r["identifier"] for r in recs] == ["setlist_fm-good"]
 
 
@@ -185,7 +185,7 @@ def test_cached_pages_round_trips(tmp_path):
     client.pull("the-mbid")
     pages = client.cached_pages("the-mbid")
     assert len(pages) == 1
-    [rec] = parse_setlistfm(pages, normalizer=NZ)
+    [rec] = parse_setlist_fm(pages, normalizer=NZ)
     assert rec["sets"][0][0]["song"] == "Mantis"
 
 

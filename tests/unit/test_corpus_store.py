@@ -42,6 +42,25 @@ def test_a_show_survives_the_round_trip_exactly(store):
     assert read == {k: v for k, v in SHOW.items()}
 
 
+def test_a_transition_code_survives_the_round_trip(store):
+    """The finer answer only phish.net gives. `segue` says whether; `transition` says which kind,
+    and 3 (`->`) is the improvisational one a partner graph built on the boolean cannot see."""
+    show = {**SHOW, "sets": [[{**_entry("Tweezer", segue=True), "transition": 3},
+                              {**_entry("Piper", segue=True), "transition": 2}]], "encore": []}
+    store.corpus.replace_shows([show])
+    read, = store.corpus.shows()
+    assert [e["transition"] for e in read["sets"][0]] == [3, 2]
+
+
+def test_an_entry_from_a_source_without_codes_carries_no_transition_key(store):
+    """NULL means "this source does not distinguish", and that has to read back differently from
+    1, "the band stopped". An entry that went in without the key comes back without it."""
+    store.corpus.replace_shows([SHOW])
+    read, = store.corpus.shows()
+    assert all("transition" not in e for one_set in read["sets"] for e in one_set)
+    assert read == SHOW               # and the whole record is unchanged by the wider table
+
+
 def test_set_order_and_song_order_are_both_preserved(store):
     store.corpus.replace_shows([SHOW])
     read, = store.corpus.shows()
@@ -153,7 +172,11 @@ def test_an_orphaned_entry_row_does_not_invent_a_show(tmp_path):
         store.corpus.replace_shows([SHOW])
 
     hand_edit = sqlite3.connect(tmp_path / "setlistkit.sqlite")   # no foreign_keys pragma
-    hand_edit.execute("INSERT INTO show_entries VALUES('1999-01-01', 0, 1, 0, 'Ghost', 0, 0)")
+    # Columns named rather than positional: this stands in for a hand edit, not for the schema,
+    # and a widened table should not fail it.
+    hand_edit.execute(
+        "INSERT INTO show_entries(date, section, set_no, position, song, segue, non_song) "
+        "VALUES('1999-01-01', 0, 1, 0, 'Ghost', 0, 0)")
     hand_edit.commit()
     hand_edit.close()
 
