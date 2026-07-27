@@ -129,6 +129,24 @@ class RawCache:
         data = self.get(namespace, key)
         return None if data is None else data.decode(encoding)
 
+    def get_json(self, namespace: str, key: str):
+        """The cached payload decoded as JSON, or ``None`` if absent or unreadable.
+
+        The convenience every JSON source was writing for itself: read, decode, and treat a body
+        that will not parse the same as one that is not there. A source re-reading its own cache
+        cannot do anything useful with half a payload, and ``None`` is what its loop already
+        handles -- so the alternative was the identical try/except in each of them.
+
+        ``replace`` on decode keeps one stray non-UTF-8 byte from sinking a whole entry.
+        """
+        data = self.get(namespace, key)
+        if data is None:
+            return None
+        try:
+            return json.loads(data.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            return None
+
     def meta(self, namespace: str, key: str) -> dict | None:
         """The sidecar metadata for an entry, or ``None`` if not cached."""
         meta_path = self._meta_path(namespace, key)

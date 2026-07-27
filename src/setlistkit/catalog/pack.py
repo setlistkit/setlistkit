@@ -52,7 +52,7 @@ from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from .jsonpos import JSONSource, Pos, diagnostic_at, load_json
 from .merge import COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy, overrides_from_mapping
 from .normalizer import Normalizer, normalize
-from .parse import ArchivePolicy, fragment_pattern, title_band_filter
+from .parse_archive_org import ArchivePolicy, fragment_pattern, title_band_filter
 
 PACK_FILE = "pack.json"
 VOCABULARY_FILE = "vocabulary.json"

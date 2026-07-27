@@ -6,11 +6,13 @@ We version the schema so later phases can add tables without a migration framewo
 on after the fact. Each migration is a function plus a version; the runner applies the ones
 not yet recorded, each in its own transaction, so a half-applied migration never survives.
 
-Today there is exactly one migration, and that is deliberate. The five that used to be here
-were the schema growing up in public: a fresh install replayed the whole history of our
-indecision to arrive at a schema it could have been handed directly. Nothing was installed
+Migration 1 is the whole catalog schema as one step, and that is deliberate. The five that used
+to be here were the schema growing up in public: a fresh install replayed the whole history of
+our indecision to arrive at a schema it could have been handed directly. Nothing was installed
 anywhere, so there was no upgrade path worth the cost of keeping, and the collapsed versions
 are in git if anyone ever wants to read how the shape was arrived at.
+
+Migration 2 adds the picks ledger, and is NOT folded back into 1 -- see the note beside it.
 
 The forward-only promise starts at the first PyPI release and signed tag, not now. Until
 then a schema change may be folded straight back into the initial migration and any local
@@ -89,6 +91,20 @@ def _corpus(conn: sqlite3.Connection) -> None:
     # `section` separates the sets (0) from the encore (1) rather than giving the encore a magic
     # set number, so "the encore is last" is an explicit sort and not arithmetic that happens to
     # work. Every read orders by (section, set_no, position).
+    #
+    # `transition` is NULLABLE and that is the whole point of it. `segue` is a boolean every
+    # source can answer, so it stays NOT NULL; `transition` is the finer answer only phish.net
+    # gives, and NULL means "this source does not distinguish" -- which must stay separate from
+    # 1, "the band stopped". Rank the two together and a source that cannot tell us would be
+    # recorded as having told us there was no segue.
+    #
+    # What it buys, measured on 2020-2026: `>` (code 2) and `->` (code 3) are near-disjoint
+    # relations -- 1,398 and 304 distinct song pairs, only 36 in common. `>` is habit, topping
+    # out at 17 repeats (the composed suites); `->` is improvisation, topping out at 3. Folded
+    # into one boolean they are 5:1 in favor of the predictable ones, so a partner graph built
+    # on `segue` alone drowns the 325 jam transitions in 1,600 routine ones. Codes 4/5/6 come
+    # along for free and encode set structure (last of a set, last before the encore, last of
+    # the show); 7 is undocumented and stored rather than discarded.
     conn.execute(
         "CREATE TABLE show_entries("
         "  date TEXT NOT NULL REFERENCES shows(date) ON DELETE CASCADE,"
@@ -98,6 +114,7 @@ def _corpus(conn: sqlite3.Connection) -> None:
         "  song TEXT NOT NULL,"
         "  segue INTEGER NOT NULL,"
         "  non_song INTEGER NOT NULL,"
+        "  transition INTEGER,"
         "  PRIMARY KEY (date, section, set_no, position))")
     # "how often has this song been played, and when" is the question every model layer asks, and
     # without this it is a full scan of every entry ever recorded.
@@ -297,6 +314,114 @@ def _durations(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX duration_edges_kind ON duration_edges(kind)")
 
 
+def _picks(conn: sqlite3.Connection) -> None:
+    # The picks ledger: what was predicted, when it was predicted, and how it turned out.
+    #
+    # THESE TABLES ARE THE ONE THING HERE THAT CANNOT BE REBUILT. Every other table in this schema
+    # is derived: `replace_shows` replaces the whole corpus on every ingest, the durations chain
+    # recomputes from the tapes, and losing any of it costs a re-run. A prediction is different in
+    # kind -- it is a claim made at a moment, and once the corpus has moved past that moment there
+    # is no way to produce it again. Re-running the model against today's data does not recover
+    # what it would have said in March; it produces a new, better-informed answer wearing March's
+    # date. So these accumulate forever, `replace_shows` must never touch them (there is a test),
+    # and the writer refuses a run that shrinks them.
+    #
+    # An ITERATION is keyed by its data cutoff: the latest show whose setlist was in training. One
+    # row per cutoff, UNIQUE, because re-running the same cutoff is a correction and not a second
+    # opinion. `config_json` is the whole config that produced it, stored rather than referenced,
+    # because a prediction read back without the settings that made it is not reproducible and not
+    # arguable either.
+    conn.execute(
+        "CREATE TABLE pick_iterations("
+        "  id INTEGER PRIMARY KEY,"
+        "  cutoff_date TEXT NOT NULL UNIQUE,"
+        "  run_ts TEXT NOT NULL,"
+        "  config_json TEXT NOT NULL)")
+    # One row per (iteration, night, rank). Keyed on the rank rather than the song because rank is
+    # what makes a recorded list addressable -- "what did we have at rank 3 that night" is the
+    # question a churn view asks, and a song can leave the list entirely between iterations.
+    #
+    # `confidence` is the share of rollouts the song appeared in, so it is a stated probability and
+    # not a score. That is the whole reason the rollouts exist: without a number here, `expected`
+    # in pick_outcomes cannot be computed and calibration cannot be measured at all.
+    conn.execute(
+        "CREATE TABLE picks("
+        "  iteration_id INTEGER NOT NULL REFERENCES pick_iterations(id) ON DELETE CASCADE,"
+        "  night_date TEXT NOT NULL,"
+        "  rank INTEGER NOT NULL,"
+        "  song TEXT NOT NULL,"
+        "  confidence REAL NOT NULL,"
+        "  PRIMARY KEY (iteration_id, night_date, rank))")
+    # One row per graded night, keyed on the night: a night is graded once, against whichever
+    # iteration was the honest one for it (the latest cutoff strictly before it). `scored_asof`
+    # records WHICH cutoff that was, so a row can be traced back to the picks it grades.
+    #
+    # `actual_json` is the played setlist as a sorted JSON array -- stored, though it is also in
+    # show_entries, because it is what this row was scored against. The corpus gets rebuilt on
+    # every ingest and a later parse can change what a night is held to have contained; a grade
+    # whose answer key moves underneath it is a grade nobody can check.
+    conn.execute(
+        "CREATE TABLE pick_outcomes("
+        "  night_date TEXT PRIMARY KEY,"
+        "  actual_json TEXT NOT NULL,"
+        "  recall_at_n REAL NOT NULL,"
+        "  expected_hits REAL NOT NULL,"
+        "  actual_hits INTEGER NOT NULL,"
+        "  calibration_ratio REAL NOT NULL,"
+        "  scored_asof TEXT NOT NULL)")
+
+
+def _transition_column(conn: sqlite3.Connection) -> None:
+    """Add `show_entries.transition` to a store that predates it being in migration 1.
+
+    THIS MIGRATION IS THE REPAIR FOR A FOLD-IN THAT SHOULD NOT HAVE HAPPENED. `transition` was
+    added by editing migration 1 in place, which the module docstring permits before the first
+    release -- but the permission assumes nobody is carrying a database yet, and by then two
+    people were. A store created before that edit records migration 1 as applied, so it never
+    receives the column and never will: the runner has nothing left to run. The corpus is intact
+    and every read of it fails with `no such column: transition`.
+
+    Guarded rather than unconditional because a store created AFTER the edit already has the
+    column from migration 1, and `ADD COLUMN` on an existing name is an error. That makes this
+    the one migration in the list whose effect depends on what it finds, which is a smell -- and
+    the alternative is worse, because there is no version number that distinguishes the two
+    histories. Migration 1 means two different schemas depending on when it ran, and that is the
+    actual defect. It is contained here rather than left for the next reader to rediscover.
+
+    The lesson, and the reason migration 2 states it too: once a database exists outside your
+    machine, the collapse rule has expired whether or not a release has shipped.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(show_entries)")}
+    if "transition" not in columns:
+        conn.execute("ALTER TABLE show_entries ADD COLUMN transition INTEGER")
+
+
+def _recording_source(conn: sqlite3.Connection) -> None:
+    """Add `recordings.source`: which importer supplied this tape.
+
+    THE MIRROR USED TO HAVE ONE SUPPLIER AND NOW HAS TWO, and nothing on the row said which. That
+    was tolerable while every tape came from archive.org, because the answer was a constant. It
+    stopped being tolerable the moment phish.in started feeding the mirror, and the symptom is
+    specific: every consumer that wants to LINK to a tape has to reconstruct its origin, and the
+    only thing available to reconstruct it from is the shape of the identifier. `phish_in-2042`
+    looks like a phish.in id today and is a naming convention, not a contract -- the first source
+    whose ids happen to collide with the pattern gets its tapes linked to the wrong archive, and
+    the page still renders.
+
+    A NEW MIGRATION RATHER THAN AN EDIT TO MIGRATION 1, deliberately, and migration 3 is why: a
+    column folded into migration 1 after databases exist gives migration 1 two meanings, and there
+    is no version number that tells the two apart. Added here, every store passes through the same
+    steps in the same order and there is one history.
+
+    Defaulted to '' rather than to 'archive_org'. Backfilling a guess would make an unknown
+    provenance indistinguishable from a measured one, which is the exact confusion the column is
+    being added to end. The next ingest rewrites the mirror whole and fills it truthfully.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recordings)")}
+    if "source" not in columns:
+        conn.execute("ALTER TABLE recordings ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+
+
 def _m0001_initial(conn: sqlite3.Connection) -> None:
     """The whole schema, as one step, in dependency order.
 
@@ -316,6 +441,18 @@ def _m0001_initial(conn: sqlite3.Connection) -> None:
 # the initial migration is allowed, and preferable to shipping a history nobody lived through.
 MIGRATIONS: list[Migration] = [
     Migration(1, "initial", _m0001_initial),
+    # Not folded back into migration 1, though the module docstring above still allows it before
+    # the first release. Two databases already exist and hold real corpora; folding would mean
+    # rebuilding both to add tables that only ever get appended to. The collapse rule is there to
+    # avoid shipping a history nobody lived through, and this is a history somebody did.
+    Migration(2, "picks", _picks),
+    # Repairs the one fold-in that did happen after those two databases existed. See the
+    # function: migration 1 means two different schemas depending on when it ran, and this is
+    # what makes them the same schema again.
+    Migration(3, "transition_column", _transition_column),
+    # The mirror gained a second supplier (phish.in) and the rows could not say so. Not folded
+    # into migration 1, for the reason migration 3 spells out at length.
+    Migration(4, "recording_source", _recording_source),
 ]
 
 

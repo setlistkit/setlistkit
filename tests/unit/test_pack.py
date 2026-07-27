@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from setlistkit.catalog.pack import Pack, load_pack
-from setlistkit.catalog.parse import parse_archive_items
+from setlistkit.catalog.parse_archive_org import parse_archive_items
 from setlistkit.diagnostics import DiagnosticError, render
 
 EXAMPLE_PACK = Path(__file__).resolve().parents[2] / "examples" / "packs" / "example"

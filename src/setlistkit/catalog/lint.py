@@ -64,7 +64,7 @@ from ..diagnostics import ERROR, NOTE, WARNING, Diagnostic
 from .jsonpos import Pos, Positions, diagnostic_at, parse
 from .pack import ALIASES_FILE, CLASSIFIERS_FILE, CORPUS_FILE, Pack, Rule, \
     load_duration_exclusions, load_pack
-from .parse import parse_archive_items
+from .parse_archive_org import parse_archive_items
 
 
 # A title has to turn up at least this often before "the pack does not know it" is worth a

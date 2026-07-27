@@ -26,10 +26,12 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import field as dcfield
 from datetime import timedelta
 
 from ..config import Config, require_network_identity
@@ -163,6 +165,28 @@ def urllib_transport(url: str, headers: dict[str, str], *, timeout: float = 60) 
 
 
 @dataclass(frozen=True)
+class Auth:
+    """How a source proves who it is. Grouped for the same two reasons :class:`Politeness` is:
+    it is one decision -- "what credential rides along" -- and bundling keeps the constructor
+    inside the argument cap.
+
+    Two shapes because two sources need two. setlist.fm authenticates with an ``x-api-key``
+    header; phish.net takes ``?apikey=`` in the query string and offers no header form at all.
+
+    The distinction that matters: ``headers`` are handed to the transport and never recorded,
+    which is ordinary, but ``query`` would otherwise end up INSIDE the URL -- the string this
+    client caches in ``raw/<ns>/meta/*.json``, reports, and puts in exceptions. So ``query`` is
+    applied at the transport call and nowhere else. A key file is perm-checked before it is read
+    (see :mod:`keyfile`); writing that same key into a data directory in plaintext would quietly
+    undo the check, and a cache sidecar is exactly the sort of file that gets pasted into a bug
+    report.
+    """
+
+    headers: dict[str, str] = dcfield(default_factory=dict)
+    query: dict[str, str] = dcfield(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Politeness:
     """The two knobs behind this client being polite: the pause after every request and the
     retry ceiling. They are grouped because they are one decision -- "how gently we treat the
@@ -186,7 +210,7 @@ class PoliteClient:
     def __init__(self, config: Config, cache: RawCache, *, namespace: str,
                  transport=None, sleeper=None, politeness: Politeness = Politeness(),
                  default_max_age: timedelta | None = None,
-                 extra_headers: dict[str, str] | None = None) -> None:
+                 auth: Auth = Auth()) -> None:
         self._config = config
         self._cache = cache
         self._namespace = namespace
@@ -195,12 +219,19 @@ class PoliteClient:
         self._delay = politeness.delay
         self._max_tries = politeness.max_tries
         self._default_max_age = default_max_age
-        # Static headers merged into every request -- an API key a source authenticates with, which
-        # archive.org has none of and setlist.fm needs on all of. Never the User-Agent or Accept,
-        # which the client owns; a source that tried to override those through here is a bug, so it
-        # is applied first and the client's own two win.
-        self._extra_headers = dict(extra_headers or {})
+        # The credential pair (see :class:`Auth`). Headers are merged into every request, and the
+        # client's own User-Agent and Accept always win over them -- a source that tried to
+        # override those through here is a bug. Query params are applied at the transport call
+        # only, so they never reach the cached URL.
+        self._auth = auth
         self._batch: Batch | None = None
+
+    def _authed(self, url: str) -> str:
+        """``url`` with the auth query params appended. The only string the key ever enters."""
+        if not self._auth.query:
+            return url
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}{urllib.parse.urlencode(dict(self._auth.query))}"
 
     @contextmanager
     def batch(self, batch_id: str | None = None):
@@ -251,7 +282,7 @@ class PoliteClient:
             self._batch.sent += 1
         # Extra headers first, so the client's own User-Agent and Accept overwrite any a source
         # tried to smuggle in through extra_headers -- those two belong to the polite layer.
-        headers = {**self._extra_headers, "User-Agent": self._user_agent(), "Accept": accept}
+        headers = {**self._auth.headers, "User-Agent": self._user_agent(), "Accept": accept}
         self._add_conditional(key, headers, cached)
         resp = self._request(url, headers)
         if resp is None:
@@ -312,7 +343,10 @@ class PoliteClient:
         """
         for attempt in range(self._max_tries):
             try:
-                resp = self._transport(url, headers)
+                # The ONLY place the auth query params are applied. Every other use of `url` in
+                # this method -- both exception messages -- keeps the clean one, so a key never
+                # reaches a traceback or a log.
+                resp = self._transport(self._authed(url), headers)
             except TransportError:
                 if attempt == self._max_tries - 1:
                     raise

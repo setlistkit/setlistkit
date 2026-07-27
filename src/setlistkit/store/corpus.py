@@ -38,6 +38,17 @@ from .migrations import transaction
 _SET, _ENCORE = 0, 1
 
 
+def _transition(entry: Mapping) -> int | None:
+    """An entry's source transition code, or ``None`` where the source does not give one.
+
+    Absent and null both mean "not told", and both must reach the column as NULL rather than as
+    a number: every code phish.net issues is >= 1, so a 0 standing in for "unknown" would be a
+    value the source never sends and a reader would have to know to distrust.
+    """
+    code = entry.get("transition")
+    return int(code) if isinstance(code, int) and not isinstance(code, bool) else None
+
+
 def _entry_rows(date: str, record: Mapping) -> list[tuple]:
     """One show record flattened into ``show_entries`` rows.
 
@@ -49,10 +60,12 @@ def _entry_rows(date: str, record: Mapping) -> list[tuple]:
     for set_no, one_set in enumerate(record.get("sets") or (), start=1):
         for position, entry in enumerate(one_set or ()):
             rows.append((date, _SET, set_no, position, str(entry.get("song") or ""),
-                         int(bool(entry.get("segue"))), int(bool(entry.get("non_song")))))
+                         int(bool(entry.get("segue"))), int(bool(entry.get("non_song"))),
+                         _transition(entry)))
     for position, entry in enumerate(record.get("encore") or ()):
         rows.append((date, _ENCORE, 1, position, str(entry.get("song") or ""),
-                     int(bool(entry.get("segue"))), int(bool(entry.get("non_song")))))
+                     int(bool(entry.get("segue"))), int(bool(entry.get("non_song"))),
+                     _transition(entry)))
     return rows
 
 
@@ -77,8 +90,9 @@ def replace_shows(conn: sqlite3.Connection, records: Iterable[Mapping]) -> int:
               str(show.get("identifier") or ""), show.get("reason")) for show in rows])
         entries = [row for show in rows for row in _entry_rows(str(show["date"]), show)]
         conn.executemany(
-            "INSERT INTO show_entries(date, section, set_no, position, song, segue, non_song) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?)", entries)
+            "INSERT INTO show_entries"
+            "(date, section, set_no, position, song, segue, non_song, transition) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)", entries)
     return len(rows)
 
 
@@ -105,13 +119,18 @@ def shows(conn: sqlite3.Connection, since: str | None = None,
             record["reason"] = row["reason"]
         out[row["date"]] = record
     for row in conn.execute(
-            "SELECT date, section, set_no, position, song, segue, non_song FROM show_entries "
-            "ORDER BY date, section, set_no, position"):
+            "SELECT date, section, set_no, position, song, segue, non_song, transition "
+            "FROM show_entries ORDER BY date, section, set_no, position"):
         record = out.get(row["date"])
         if record is None:
             continue                       # orphaned by a hand-edit; the shows table is the truth
         entry = {"song": row["song"], "segue": bool(row["segue"]),
                  "non_song": bool(row["non_song"])}
+        # Present only where a source gave one, matching how `reason` is handled above: an entry
+        # from a source that does not distinguish comes back the shape it went in as, rather than
+        # carrying a null that later code has to learn means "never knew".
+        if row["transition"] is not None:
+            entry["transition"] = row["transition"]
         if row["section"] == _ENCORE:
             record["encore"].append(entry)
             continue

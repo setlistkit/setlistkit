@@ -53,7 +53,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from .parse import item_text
+from .parse_archive_org import item_text
 
 ELECTRIC = "electric"
 ACOUSTIC = "acoustic"

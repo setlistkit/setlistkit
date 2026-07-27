@@ -75,6 +75,50 @@ def test_segue_rates_and_partners():
     assert feat["Aurora"].top_partners[0] == ("Wormhole", 2)
 
 
+def _jam(song):
+    """An entry that segued into the next one improvisationally -- a `->`, not a `>`."""
+    return {"song": song, "segue": True, "non_song": False, "transition": 3}
+
+
+def test_the_jam_partner_graph_is_not_the_segue_partner_graph():
+    """The whole reason `transition` is stored. `>` is habit and `->` is improvisation, and on
+    the real corpus they share only 2% of their pairs -- so a song's routine partner and its
+    dissolve partner can be different songs, and pooling them hides the second behind the first.
+    """
+    shows = [{"date": f"2025-01-0{n}", "source": "s", "identifier": f"t{n}",
+              "sets": [[_entry("Aurora", segue=True), _entry("Wormhole")]], "encore": []}
+             for n in (1, 2, 3)]
+    shows.append({"date": "2025-01-04", "source": "s", "identifier": "t4",
+                  "sets": [[_jam("Aurora"), _entry("Bearsong")]], "encore": []})
+    feat = _by_song(song_features(shows))
+    assert feat["Aurora"].top_partners[0] == ("Wormhole", 3)      # pooled: habit wins
+    assert feat["Aurora"].top_jam_partners == (("Bearsong", 1),)  # split: the dissolve shows up
+    assert feat["Aurora"].rates.segue_out == 1.0                  # every play segued out
+    assert feat["Aurora"].rates.jam_segue_out == 0.25             # one of the four dissolved
+
+
+def test_a_jam_segue_is_counted_in_both_graphs_not_moved_between_them():
+    """`jam_segue_out` is a subset of `segue_out`. Subtracting would make the general rate mean
+    "ran into the next song, except the interesting times"."""
+    shows = [{"date": "2025-01-01", "source": "s", "identifier": "t1",
+              "sets": [[_jam("Aurora"), _entry("Wormhole")]], "encore": []}]
+    feat = _by_song(song_features(shows))
+    assert feat["Aurora"].rates.segue_out == 1.0
+    assert feat["Aurora"].rates.jam_segue_out == 1.0
+    assert feat["Aurora"].top_partners == feat["Aurora"].top_jam_partners == (("Wormhole", 1),)
+
+
+def test_a_corpus_with_no_transition_codes_reports_zero_not_a_crash():
+    """Sources other than phish.net grade nothing, so the key is simply absent. That has to read
+    as "never told" -- a 0.0 rate and an empty tuple -- and must not be mistaken downstream for a
+    measured claim that the song never dissolved into anything."""
+    shows = [_show("2025-01-01", [[("Aurora", True), "Wormhole"]])]
+    feat = _by_song(song_features(shows))
+    assert feat["Aurora"].rates.segue_out == 1.0        # the boolean still works
+    assert feat["Aurora"].rates.jam_segue_out == 0.0
+    assert feat["Aurora"].top_jam_partners == ()
+
+
 def test_mean_slot_places_a_song_in_the_set():
     shows = [_show("2025-01-01", [["Aurora", "Wormhole", "Bearsong"]])]
     feat = _by_song(song_features(shows))

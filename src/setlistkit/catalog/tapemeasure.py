@@ -104,9 +104,11 @@ def _feature_of(feature: SongFeature | None) -> dict | None:
                       "show_closer": feature.rates.show_closer,
                       "encore": feature.rates.encore,
                       "segue_out": feature.rates.segue_out,
-                      "segue_in": feature.rates.segue_in},
+                      "segue_in": feature.rates.segue_in,
+                      "jam_segue_out": feature.rates.jam_segue_out},
             "mean_slot": feature.mean_slot,
             "top_partners": [list(pair) for pair in feature.top_partners],
+            "top_jam_partners": [list(pair) for pair in feature.top_jam_partners],
             "first_seen": feature.first_seen,
             "last_seen": feature.last_seen}
 

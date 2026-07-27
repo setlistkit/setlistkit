@@ -44,13 +44,14 @@ from pathlib import Path
 from ..catalog.funnel import imbalances
 from ..catalog.merge import merge_shows, override_disagreements
 from ..catalog.pack import load_pack
-from ..catalog.parse import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND, OTHER_BILLING, count_songs,
-                             parse_archive_items)
+from ..catalog.parse import count_songs
+from ..catalog.parse_archive_org import (DROPPED_DATE, NO_DATE, NOT_THIS_BAND,
+                                         OTHER_BILLING, parse_archive_items)
 from ..catalog.showtypes import show_types
 from ..catalog.tracklists import read_tracklist, song_vocabulary
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
-from ..importers import secondary
-from ..sources.archive_org import ArchiveOrgClient
+from ..importers import IMPORTERS, secondary, tape_sources
+from ..sources.archive_org import ArchiveOrgClient, CachedItems
 from ..store import Store
 from ..store.raw_cache import RawCache
 from .common import min_year, required_setting, resolve_pack_dir
@@ -137,6 +138,83 @@ def _fold_in_secondary(config, cache, pack, args) -> list[dict]:
     return extra
 
 
+def _fold_in_tapes(mirror: _Mirror, config, cache, args) -> None:
+    """Add every non-mirror source's recordings to the mirror, in place.
+
+    Appended rather than merged, and an identifier collision is impossible by construction: each
+    source namespaces its own (``phish_in-...``), and archive.org's are archive.org item names.
+    Two rows for one night is the ORDINARY case in this table -- it is what the durations chain
+    votes with -- so there is nothing to deduplicate even where a night has both.
+
+    Nothing else the mirror holds is folded in. ``show_types`` is read off a taper's notes and
+    ``listings`` is a taper's written tracklist; a structured archive has neither, and inventing
+    an empty listing for one would put it in the count of tapes whose listing we could not read.
+    """
+    for importer in tape_sources():
+        if not config.section("sources", importer.id):
+            continue
+        got = importer.tapes(config, cache,
+                             min_year=min_year(config, importer.id, args.min_year))
+        if got:
+            print(f"{importer.display_name}: {len(got)} recording(s) folded into the mirror")
+            mirror.recordings.extend(got)
+
+
+def _mirror_source(config, args) -> str | None:
+    """The mirror source this deployment actually has, or ``None`` if it has none.
+
+    A band whose only sources are structured setlist APIs has no audio anywhere -- Phish is the
+    worked example: archive.org carries zero Phish shows (the 153 items matching the search are
+    tribute bands), and both phish.net and phish.in are setlist sources. Everything the mirror
+    holds -- tapes, durations, show types -- comes from items that do not exist for that band.
+
+    ``args.source`` defaults to the first registered source rather than to something the operator
+    chose, so its mere presence proves nothing. What decides is whether a mirror source has a
+    config table at all. A table that exists but is incomplete still reaches ``required_setting``
+    below and still fails there, loudly, which is the behavior a half-configured archive.org wants.
+    """
+    chosen = IMPORTERS.get(getattr(args, "source", "") or "")
+    if chosen is not None and chosen.feeds_mirror and config.section("sources", chosen.id):
+        return chosen.id
+    for importer in IMPORTERS.values():
+        if importer.feeds_mirror and config.section("sources", importer.id):
+            return importer.id
+    return None
+
+
+def _read_mirror(config, args, cache, pack):
+    """The mirror source's cached items and their parse, or empty stand-ins when there is none.
+
+    Returns the real pair unchanged when a mirror source is configured. Otherwise it parses an
+    empty item list -- rather than fabricating a result object -- so the empty case travels
+    through exactly the same code as a real one and cannot drift from it.
+
+    The absence is PRINTED, never inferred silently. Publishing a corpus with no tapes in it is a
+    perfectly good outcome for a band nobody taped, and an alarming one for a band whose archive
+    config was mistyped. The run cannot tell those apart; the operator can, but only if the run
+    says which path it took.
+    """
+    empty = parse_archive_items([], normalizer=pack.normalizer, policy=pack.archive_policy())
+    source = _mirror_source(config, args)
+    if source is None:
+        # Deliberately does NOT say "no tapes". It cannot know: a fold-in source may contribute
+        # recordings a moment later, and for Phish one does. What is certainly absent is what
+        # only a mirror source has -- a taper's written tracklist and the notes a show type is
+        # read off. Saying "no durations" here was true when archive.org was the only audio
+        # anywhere and became a false line printed above 249 tapes.
+        print("no mirror source configured: building the corpus from setlist sources alone "
+              "(no taper tracklists or show types; any audio comes from a fold-in source)")
+        return CachedItems(), empty
+    collection = required_setting(
+        config, ("sources", source), "collection",
+        f"An ingest reads what `slkit pull {source}` cached, and needs the same collection.")
+    cached = ArchiveOrgClient(config, cache).cached_items(
+        collection, min_year=min_year(config, source, args.min_year))
+    _report_cache(cached, collection, source)
+    return cached, parse_archive_items(cached.items, normalizer=pack.normalizer,
+                                       policy=pack.archive_policy())
+
+
 def ingest(config, args) -> int:
     """Parse the cache, merge, report, guard, publish. Returns a process exit code.
 
@@ -146,17 +224,8 @@ def ingest(config, args) -> int:
     hand what was on screen a moment ago.
     """
     pack = load_pack(resolve_pack_dir(getattr(args, "pack", None), args.config))
-    collection = required_setting(
-        config, ("sources", args.source), "collection",
-        f"An ingest reads what `slkit pull {args.source}` cached, and needs the same collection.")
-
     cache = RawCache(config.data_root)
-    cached = ArchiveOrgClient(config, cache).cached_items(
-        collection, min_year=min_year(config, args.source, args.min_year))
-    _report_cache(cached, collection, args.source)
-
-    parsed = parse_archive_items(cached.items, normalizer=pack.normalizer,
-                                 policy=pack.archive_policy())
+    cached, parsed = _read_mirror(config, args, cache, pack)
     # setlist.fm's structured setlists join archive.org's tapes in ONE merge, so the precedence in
     # merge_shows can do its job: a tape (rank 3) wins a date they both cover, and setlist.fm
     # (rank 2) keeps the dates and songs no tape carries. The mirror below is still built from the
@@ -168,7 +237,9 @@ def ingest(config, args) -> int:
                        songs=sum(count_songs(show["sets"], show["encore"])
                                  for show in merged.shows))
 
-    mirror = _mirror(cached.items, parsed.shows, pack, merged.shows)
+    mirror = _mirror(cached.items, parsed.shows, pack, merged.shows,
+                     _mirror_source(config, args) or "")
+    _fold_in_tapes(mirror, config, cache, args)
 
     with Store(config.data_root) as store:
         store.init()
@@ -236,7 +307,7 @@ def _listings(kept, pack, corpus_shows) -> dict[str, dict]:
     return out
 
 
-def _mirror(items, shows, pack, corpus_shows) -> _Mirror:
+def _mirror(items, shows, pack, corpus_shows, source: str = "") -> _Mirror:
     """The tapes to store and the date tags to store, from the items the parser accepted.
 
     Keyed on acceptance rather than on the whole cache, because all three of the parser's
@@ -253,7 +324,11 @@ def _mirror(items, shows, pack, corpus_shows) -> _Mirror:
     dates = {show["identifier"]: show["date"] for show in shows}
     kept = [item for item in items if str(item.get("identifier") or "") in dates]
     return _Mirror(
-        recordings=[dict(item, date=dates[item["identifier"]]) for item in kept],
+        # `source` is stamped here rather than defaulted in the store, so a row with no source is
+        # a row nobody claimed rather than a row assumed to be archive.org's. Every tape in this
+        # branch came out of the mirror source's items, by construction.
+        recordings=[dict(item, date=dates[item["identifier"]], source=source)
+                    for item in kept],
         show_types=[asdict(kind) for kind in show_types(kept, dates=dates,
                                                         acoustic=pack.corpus.acoustic)],
         listings=_listings(kept, pack, corpus_shows))

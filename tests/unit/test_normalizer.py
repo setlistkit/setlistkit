@@ -149,7 +149,7 @@ def test_canonicalize_exact_normalized_match():
 
 def test_canonicalize_fuzzy_within_cutoff():
     norm = Normalizer(vocabulary=["Recreational Chemistry"])
-    canon, seg = norm.canonicalize("Recreational Chemistr")   # dropped trailing y, inside 0.9
+    canon, _ = norm.canonicalize("Recreational Chemistr")   # dropped trailing y, inside 0.9
     assert canon == "Recreational Chemistry"
 
 
@@ -162,7 +162,7 @@ def test_canonicalize_unknown_falls_through_to_cleaned_display():
 
 def test_canonicalize_empty_after_normalize_is_none():
     norm = Normalizer(vocabulary=["Anything"])
-    canon, seg = norm.canonicalize("(cover)")   # a pure attribution normalizes to nothing
+    canon, _ = norm.canonicalize("(cover)")   # a pure attribution normalizes to nothing
     assert canon is None
 
 

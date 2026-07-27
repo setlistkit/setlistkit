@@ -33,8 +33,9 @@ from setlistkit.catalog.tapemeasure import SCHEMA
 from setlistkit.cli.export import EXIT_NOTHING
 from setlistkit.cli.main import EXIT_OK, main
 
+# pylint: disable=wrong-import-order
 from test_cli_derive import CONFIG as BASE_CONFIG
-from test_cli_derive import LENGTHS, SETLIST, SONGS, _cache, _cfg, _tape
+from test_cli_derive import LENGTHS, SONGS, _cache, _cfg, _tape
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "tapemeasure.json"
 GOLDEN_SONGBOOK = Path(__file__).resolve().parent / "golden" / "songbook.json"
@@ -50,7 +51,7 @@ TAPES = [
 ]
 
 
-def _export(tmp_path, tapes=None, *args):
+def _export(tmp_path, *args, tapes=None):
     """Ingest, derive and export, as three commands sharing only the database."""
     _cache(tmp_path, tapes if tapes is not None else TAPES)
     config = _cfg(tmp_path)
@@ -61,7 +62,7 @@ def _export(tmp_path, tapes=None, *args):
     return code, out
 
 
-def _export_songbook(tmp_path, tapes=None, *args):
+def _export_songbook(tmp_path, *args, tapes=None):
     """Ingest, then export songbook -- no derive step, because the bundle needs none."""
     _cache(tmp_path, tapes if tapes is not None else TAPES)
     config = _cfg(tmp_path)
@@ -119,11 +120,11 @@ def test_a_taper_is_credited_without_publishing_their_email_address(tmp_path):
     who posted four times. Thanking 499 people by printing their email addresses is not thanking
     them, so the domain stops at this boundary."""
     _code, out = _export(tmp_path)
-    credits = json.loads(out.read_text(encoding="utf-8"))["credits"]
-    assert {row["uploader"] for row in credits} == {"one", "two"}
-    assert not any("@" in row["uploader"] for row in credits)
+    credited = json.loads(out.read_text(encoding="utf-8"))["credits"]
+    assert {row["uploader"] for row in credited} == {"one", "two"}
+    assert not any("@" in row["uploader"] for row in credited)
     # The counts still have to be right, or the masking has eaten the data with the address.
-    assert {row["uploader"]: row["n_tapes"] for row in credits} == {"one": 2, "two": 1}
+    assert {row["uploader"]: row["n_tapes"] for row in credited} == {"one": 2, "two": 1}
 
 
 def test_every_song_with_lengths_also_carries_its_structural_profile(tmp_path):
@@ -161,7 +162,7 @@ def test_exporting_before_deriving_says_so_rather_than_writing_an_empty_bundle(t
 
 
 def test_a_dry_run_reports_the_bundle_and_writes_nothing(tmp_path):
-    _code, out = _export(tmp_path, None, "--dry-run")
+    _code, out = _export(tmp_path, "--dry-run")
     assert not out.exists()
 
 
@@ -229,7 +230,7 @@ def test_a_tape_that_could_not_be_read_reaches_the_bundle_as_a_review_row(tmp_pa
     unreadable = _tape("example2025-07-04.c", "2025-07-04",
                        songs=("audio",) * 5, uploader="three@example.org",
                        description="Recorded from the soundboard. Enjoy, and please don't sell.")
-    _code, out = _export(tmp_path, TAPES + [unreadable])
+    _code, out = _export(tmp_path, tapes=TAPES + [unreadable])
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert any(row["identifier"] == "example2025-07-04.c" for row in payload["review"])
     assert all(row["url"].startswith("https://archive.org/details/") for row in payload["review"])
@@ -244,7 +245,7 @@ def test_a_tape_that_could_not_be_read_reaches_the_bundle_as_a_review_row(tmp_pa
 
 
 def test_a_window_narrows_every_dated_section(tmp_path):
-    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    _code, out = _export(tmp_path, "--since", "2025-07-05")
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert {row["date"] for row in payload["performances"]} == {"2025-07-05"}
     assert payload["generated"]["date_range"] == ["2025-07-05", "2025-07-05"]
@@ -262,7 +263,7 @@ def test_song_statistics_describe_the_window_and_not_the_corpus(tmp_path):
     # second bundle with itself -- which passes the interesting assertion for the wrong reason.
     _code, whole = _export(tmp_path)
     whole_n = {s["song"]: s["n"] for s in json.loads(whole.read_text(encoding="utf-8"))["songs"]}
-    _code, windowed = _export(tmp_path, None, "--since", "2025-07-05")
+    _code, windowed = _export(tmp_path, "--since", "2025-07-05")
     windowed_n = {s["song"]: s["n"]
                   for s in json.loads(windowed.read_text(encoding="utf-8"))["songs"]}
     # Both nights played all five songs, so the corpus counts each twice and the window once.
@@ -278,7 +279,7 @@ def test_the_bundle_is_self_consistent_inside_its_window(tmp_path):
     matters is not which median is right in the abstract -- it is that a consumer joining `songs`
     to `performances` cannot find them describing different sets of nights.
     """
-    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    _code, out = _export(tmp_path, "--since", "2025-07-05")
     payload = json.loads(out.read_text(encoding="utf-8"))
     counted = Counter(row["song"] for row in payload["performances"] if row["withheld"] is None)
     for stat in payload["songs"]:
@@ -301,7 +302,7 @@ def test_an_unwindowed_bundle_still_reads_the_stored_statistics(tmp_path):
 def test_the_window_asked_for_is_recorded_beside_the_range_found(tmp_path):
     """Two fields because they answer different questions: a window opening before the data starts
     is complete, and a consumer with only `date_range` could not tell that from a gap."""
-    _code, out = _export(tmp_path, None, "--since", "2020-01-01", "--until", "2025-07-04")
+    _code, out = _export(tmp_path, "--since", "2020-01-01", "--until", "2025-07-04")
     generated = json.loads(out.read_text(encoding="utf-8"))["generated"]
     assert generated["window"] == {"since": "2020-01-01", "until": "2025-07-04"}
     assert generated["date_range"] == ["2025-07-04", "2025-07-04"]
@@ -309,7 +310,7 @@ def test_the_window_asked_for_is_recorded_beside_the_range_found(tmp_path):
 
 def test_credits_cover_only_the_tapes_in_the_window(tmp_path):
     """Crediting a taper for a reel the reader cannot see names them for absent work."""
-    _code, out = _export(tmp_path, None, "--since", "2025-07-05")
+    _code, out = _export(tmp_path, "--since", "2025-07-05")
     credited = {row["uploader"] for row in json.loads(out.read_text(encoding="utf-8"))["credits"]}
     # two@example.org taped only 2025-07-04, so the window must not credit them.
     assert len(credited) == 1
@@ -318,7 +319,7 @@ def test_credits_cover_only_the_tapes_in_the_window(tmp_path):
 def test_an_empty_window_is_not_reported_as_an_empty_store(tmp_path, capsys):
     """`derive` would cheerfully rewrite a correct table to prove a point about a year the band
     did not tour, so the two emptinesses must not share a message."""
-    code, _out = _export(tmp_path, None, "--since", "2099-01-01")
+    code, _out = _export(tmp_path, "--since", "2099-01-01")
     assert code == EXIT_NOTHING
     printed = capsys.readouterr().out
     assert "from 2099-01-01" in printed
@@ -361,7 +362,7 @@ def test_export_songbook_before_ingesting_says_so_rather_than_writing_an_empty_b
 
 
 def test_export_songbook_a_dry_run_reports_the_bundle_and_writes_nothing(tmp_path):
-    _code, out = _export_songbook(tmp_path, None, "--dry-run")
+    _code, out = _export_songbook(tmp_path, "--dry-run")
     assert not out.exists()
 
 
@@ -372,7 +373,7 @@ def test_export_songbook_is_replaced_whole_rather_than_written_in_place(tmp_path
 
 
 def test_export_songbook_a_window_narrows_the_shows_included(tmp_path):
-    _code, out = _export_songbook(tmp_path, None, "--since", "2025-07-05")
+    _code, out = _export_songbook(tmp_path, "--since", "2025-07-05")
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert [row["d"] for row in payload["shows"]] == ["2025-07-05"]
     assert payload["generated"]["window"] == {"since": "2025-07-05", "until": None, "spec": None}
@@ -421,7 +422,7 @@ def test_export_songbook_the_fingerprint_changes_when_the_corpus_changes(tmp_pat
     _code, out1 = _export_songbook(tmp_path)
     fp1 = json.loads(out1.read_text(encoding="utf-8"))["generated"]["corpus"]
     extra = _tape("example2025-08-01", "2025-08-01")
-    _code, out2 = _export_songbook(tmp_path, TAPES + [extra])
+    _code, out2 = _export_songbook(tmp_path, tapes=TAPES + [extra])
     fp2 = json.loads(out2.read_text(encoding="utf-8"))["generated"]["corpus"]
     assert fp1 != fp2
 

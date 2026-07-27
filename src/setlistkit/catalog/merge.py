@@ -47,7 +47,15 @@ from .parse import count_songs
 # A proxy, not a dict: this is a module global, and a caller who took the default and then
 # adjusted one rank would be adjusting it for the whole process.
 DEFAULT_RANKS = MappingProxyType({"description": 3, "tracks": 3,   # a tape of the show
+                                  # Structured AND carries segues, including the `->` that marks an
+                                  # improvisational one. Ranked with a tape because for setlist
+                                  # purposes it is as good as one: the thing a tape has over a
+                                  # setlist service is the segues, and this service has them.
+                                  "phish_net": 3,
                                   "setlist_fm": 2,                  # structured, no segues
+                                  # Structured, no segue field at all -- not empty, absent. Ranked
+                                  # below phish_net so a date both cover keeps its segues.
+                                  "phish_in": 2,
                                   "instagram": 1})                 # decoded from a picture
 
 # How complete a candidate has to be, against the best count known for its date, before it is

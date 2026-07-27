@@ -85,7 +85,7 @@ def test_explicit_missing_is_specific_error(tmp_path):
 
 
 def test_malformed_toml(tmp_path):
-    target = _write(tmp_path / "slkit.toml", "data_root = \nnope")
+    _write(tmp_path / "slkit.toml", "data_root = \nnope")
     with pytest.raises(DiagnosticError) as excinfo:
         load_config(env={}, cwd=tmp_path)
     assert "not valid TOML" in excinfo.value.diagnostic.summary

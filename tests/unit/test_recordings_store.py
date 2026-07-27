@@ -209,3 +209,60 @@ def test_a_second_ingest_replaces_the_listings_rather_than_accumulating_them(tmp
         store.tapes.replace_listings({"a": _listing("Rebubula", "Moth")})
         assert store.tapes.replace_listings({"a": _listing("Wormwood")}) == (1, 1)
         assert [e["song"] for e in store.tapes.listings()["a"]] == ["Wormwood"]
+
+
+def test_which_archive_a_tape_came_from_survives_the_round_trip(tmp_path):
+    """The mirror has two suppliers now, and the row has to say which one.
+
+    Recovered from the identifier is the alternative, and it is the thing this column exists to
+    stop: `phish_in-2042` looks like a phish.in id because of a naming convention, not a contract,
+    and a consumer that reads provenance out of a string builds a well-formed link to the wrong
+    archive without failing.
+    """
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([
+            dict(_tape("moe2024-06-01.flac16", "2024-06-01", 100.0), source="archive_org"),
+            dict(_tape("phish_in-2042", "2024-06-02", 200.0, uploader="phish.in"),
+                 source="phish_in")])
+        assert {r["identifier"]: r["source"] for r in store.tapes.recordings()} == {
+            "moe2024-06-01.flac16": "archive_org", "phish_in-2042": "phish_in"}
+
+
+def test_a_tape_handed_over_without_a_source_is_stored_as_unclaimed(tmp_path):
+    """Blank, not a default supplier. An unrecorded provenance must stay distinguishable."""
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([_tape("a", "2024-01-01", 100.0)])
+        assert store.tapes.recordings()[0]["source"] == ""
+
+
+def test_a_nights_tapes_are_counted_per_source_not_pooled(tmp_path):
+    """"How many" and "where do I hear them" are two facts, and the second is per source.
+
+    Pooling them reads fine for a band whose tapes come from one place and loses the only thing a
+    link can be built from the moment a second supplier arrives.
+    """
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([
+            dict(_tape("a", "2024-06-01", 100.0), source="archive_org"),
+            dict(_tape("b", "2024-06-01", 101.0), source="archive_org"),
+            dict(_tape("c", "2024-06-01", 102.0), source="phish_in"),
+            dict(_tape("d", "2024-06-02", 103.0), source="archive_org")])
+        assert store.tapes.counts_by_date() == {
+            "2024-06-01": {"archive_org": 2, "phish_in": 1},
+            "2024-06-02": {"archive_org": 1}}
+
+
+def test_a_night_with_no_tapes_is_absent_rather_than_zero(tmp_path):
+    """The caller knows which nights it is asking about; this does not.
+
+    A zero invented for every date in the corpus makes a night nobody has taped yet
+    indistinguishable from one this was never asked about.
+    """
+    with Store(tmp_path) as store:
+        store.init()
+        store.tapes.replace_recordings([dict(_tape("a", "2024-06-01", 100.0),
+                                             source="archive_org")])
+        assert "2024-06-02" not in store.tapes.counts_by_date()

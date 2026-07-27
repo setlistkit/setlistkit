@@ -18,11 +18,13 @@ from pathlib import Path
 
 from .. import __version__
 from ..catalog.lint import lint
+from ..catalog.normalizer import Normalizer
 from ..catalog.scaffold import starter_pack
 from ..catalog.suggest import render_markdown, suggest, titles_from_cache
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
-from ..importers import IMPORTERS
+from ..importers import IMPORTERS, secondary
+from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
 from ..store.raw_cache import RawCache
@@ -30,6 +32,8 @@ from .common import min_year, required_setting, resolve_pack_dir
 from .derive import derive
 from .export import export
 from .ingest import ingest
+from ..picks.drops import DEFAULT_DEPTH
+from .predict import drops_cmd, predict, replay
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
@@ -84,6 +88,12 @@ def _add_store(sub) -> None:
 def _add_dump(sub) -> None:
     """The ``slkit dump`` parser."""
     dump_cmd = sub.add_parser("dump", help="print a plain-text view of derived state")
+    dump_cmd.add_argument(
+        "what", nargs="?", choices=("all", "picks"), default="all",
+        help="which tables to print (default: %(default)s). `picks` is the prediction ledger, "
+             "and it is the strongest case for this command in the project: those tables are the "
+             "only ones here that cannot be rebuilt",
+    )
     # Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
     # someone reaches for when they already suspect something is wrong -- one bug at a time.
     dump_cmd.add_argument("--since", metavar="YYYY-MM-DD",
@@ -146,6 +156,92 @@ def _add_derive(sub) -> None:
                                help="pack directory to derive with (overrides [catalog] pack)")
     _add_dry_run(durations_cmd,
                  "read, reconcile and report in full, but write nothing to the database")
+
+
+def _add_predict(sub) -> None:
+    """The ``slkit predict`` parser."""
+    predict_cmd = sub.add_parser(
+        "predict", help="rank every song's chance of being played on one night")
+    predict_cmd.add_argument(
+        "--asof", metavar="YYYY-MM-DD",
+        help="the night to predict (default: the day after the last stored show, which is the "
+             "earliest date the corpus does not already hold). Nothing dated on or after it is "
+             "read, so naming a night inside the corpus gives a blinded re-prediction of it",
+    )
+    _add_model_flags(predict_cmd)
+    predict_cmd.add_argument(
+        "--set-len", type=int, metavar="N",
+        help="how many songs to assume will be played (overrides set_len in [model]). A live "
+             "prediction has to guess this; a replay is told it by the night it grades",
+    )
+
+
+def _add_replay(sub) -> None:
+    """The ``slkit replay`` parser."""
+    replay_cmd = sub.add_parser(
+        "replay",
+        help="predict every gradeable night in a window before revealing it, and grade the lot")
+    # Inclusive at both ends and spelled exactly as `dump` and `export` spell them. A range that
+    # means one thing in one command and something a day wider in another is a range nobody can
+    # check a published number against.
+    replay_cmd.add_argument("--since", metavar="YYYY-MM-DD",
+                            help="grade nights on or after this date (default: the window in "
+                                 "[model] replay_since_back, anchored on the last stored show)")
+    replay_cmd.add_argument("--until", metavar="YYYY-MM-DD",
+                            help="grade nights on or before this date")
+    _add_model_flags(replay_cmd)
+    _add_dry_run(replay_cmd, "predict and grade the whole window and report it, but write "
+                             "nothing to the picks ledger")
+    replay_cmd.add_argument(
+        "--force", action="store_true",
+        help="write even when the run leaves a ledger table with less than half the rows it "
+             "started with (see the no-shrink guard)",
+    )
+
+
+def _add_drops(sub) -> None:
+    """The ``slkit drops`` parser.
+
+    The window flags are spelled and defaulted exactly as ``replay`` spells them, deliberately: a
+    churn number and a recall number quoted off the same store have to be about the same nights,
+    and two commands that disagree about what "the window" means make that impossible to check.
+    """
+    drops_parser = sub.add_parser(
+        "drops",
+        help="predict every gradeable night in a window from several earlier cutoffs, and watch "
+             "the shortlist move")
+    drops_parser.add_argument("--since", metavar="YYYY-MM-DD",
+                              help="cover nights on or after this date (default: the window in "
+                                   "[model] replay_since_back, anchored on the last stored show)")
+    drops_parser.add_argument("--until", metavar="YYYY-MM-DD",
+                              help="cover nights on or before this date")
+    drops_parser.add_argument(
+        "--depth", type=int, metavar="N",
+        help=f"how many earlier cutoffs to predict each night from (default: {DEFAULT_DEPTH}). "
+             "The walk costs nights x depth predictions, so this is what decides whether it runs "
+             "in seconds or minutes",
+    )
+    _add_model_flags(drops_parser)
+    _add_dry_run(drops_parser, "walk the whole window and report it, but write nothing to the "
+                               "picks ledger")
+    drops_parser.add_argument(
+        "--force", action="store_true",
+        help="write even when the run leaves a ledger table with less than half the rows it "
+             "started with (see the no-shrink guard)",
+    )
+
+
+def _add_model_flags(parser: argparse.ArgumentParser) -> None:
+    """``--rollouts``, on both commands that draw.
+
+    An iteration flag rather than a setting: a lower count shows the direction of a model change
+    several times faster, and it is the wrong number to leave behind in a file a nightly run
+    reads. The cost of a prediction is in the scoring pass over the corpus, not the draws, so
+    lowering it buys less than it looks like it should.
+    """
+    parser.add_argument(
+        "--rollouts", type=int, metavar="N",
+        help="how many times to draw the night (overrides rollouts in [model])")
 
 
 def _add_export_common(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -236,6 +332,12 @@ def _add_pack(sub) -> None:
         help="a JSON array of raw title strings (e.g. raw/archive_org/titles.json)",
     )
     suggest_cmd.add_argument(
+        "--curated", metavar="PATH",
+        help="a JSON array of song names from a source that PUBLISHES titles (setlist.fm), "
+             "which are clustered with --from but win the canonical spelling. `slkit bootstrap` "
+             "reads these from the configured setlist sources automatically",
+    )
+    suggest_cmd.add_argument(
         "--out", metavar="DIR", required=True,
         help="directory to write vocabulary.json, aliases.json and SUGGESTIONS.md into",
     )
@@ -302,6 +404,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_pull(sub)
     _add_ingest(sub)
     _add_derive(sub)
+    _add_predict(sub)
+    _add_replay(sub)
+    _add_drops(sub)
     _add_export(sub)
     _add_pack(sub)
     _add_bootstrap(sub)
@@ -326,6 +431,16 @@ def _cmd_store(config, args) -> int:
 def _cmd_config_show(config) -> int:
     print(f"config file : {config.source_path}")
     print(f"data_root   : {config.data_root}")
+    # Resolved the same way the working commands resolve it (relative to this config's own
+    # directory, not the process cwd), so what prints here is the pack those commands will act on.
+    pack = config.section("catalog").get("pack")
+    if pack:
+        pack_path = Path(str(pack)).expanduser()
+        if not pack_path.is_absolute():
+            pack_path = config.source_path.parent / pack_path
+        print(f"pack        : {pack_path.resolve()}")
+    else:
+        print("pack        : (not set — pass --pack or set [catalog] pack)")
     print(f"user_agent  : {config.user_agent}")
     if config.user_agent_is_sentinel:
         print("            : (placeholder — network operations will refuse to run)")
@@ -387,9 +502,10 @@ def _cmd_dump(config, args) -> int:
     hand back an empty dump of the year that was asked for -- which reads as "there is nothing
     there", the one answer this view exists to make trustworthy.
     """
+    only = None if args.what == "all" else LEDGER_TABLES
     try:
         with Store(config.data_root) as store:
-            print(store.dump(since=args.since, until=args.until), end="")
+            print(store.dump(since=args.since, until=args.until, only=only), end="")
     except ValueError as exc:
         raise _malformed_date(exc, "print") from exc
     return EXIT_OK
@@ -404,6 +520,36 @@ def _malformed_date(exc: ValueError, verb: str) -> DiagnosticError:
                "mean what it looks like: `--until 2023` sorts below every date in 2023 and\n"
                f"would {verb} an empty range rather than the year you asked for.",
     ))
+
+
+def _cmd_predict(config, args) -> int:
+    """`slkit predict`, with the same refusal every other dated command gives."""
+    try:
+        return predict(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "predict from") from exc
+
+
+def _cmd_replay(config, args) -> int:
+    """`slkit replay`, likewise.
+
+    Wrapped here rather than inside the walk for the reason ``_cmd_export`` gives: a malformed
+    flag is a CLI fault, and the replay's job starts once the window is known to mean what it
+    says. Unwrapped, ``--since "the fall tour"`` arrives as a traceback -- which is the one shape
+    of output this program does not use to say no.
+    """
+    try:
+        return replay(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "grade") from exc
+
+
+def _cmd_drops(config, args) -> int:
+    """`slkit drops`, with the same refusal ``replay`` gives a window it cannot read."""
+    try:
+        return drops_cmd(config, args)
+    except ValueError as exc:
+        raise _malformed_date(exc, "walk") from exc
 
 
 def _cmd_export(config, args) -> int:
@@ -462,7 +608,15 @@ def _cmd_pull(config, args) -> int:
         print(f"pull {importer.display_name} (dry run): {result.listed} listed, "
               f"{result.cached} already cached, {result.planned} would be fetched"
               f"{across} (about {minutes:.0f} min)")
-        if result.planned_requests is None:
+        # What the dry run itself just spent. Sources that report it get an exact number; the rest
+        # keep the older prose. This used to be inferred from `planned_requests`, which meant every
+        # paged source was described as having fetched "the first page" -- false for a source that
+        # sizes the job from config and makes no request at all.
+        if result.probe_requests is not None:
+            spent = result.probe_requests
+            print(f"  This estimate cost {spent} request(s)." if spent else
+                  "  This estimate cost no requests at all: the job's size is known without asking.")
+        elif result.planned_requests is None:
             print("  No item metadata was requested. The listing itself was, because that is how\n"
                   "  this learns what is new; it is a few requests against thousands.")
         else:
@@ -612,9 +766,11 @@ def _nonempty_pack_file(path: Path) -> bool:
         return True
 
 
-def _cmd_pack_suggest(args) -> int:
-    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
-    source = Path(args.source).expanduser()
+def _read_titles(source: Path) -> list[str]:
+    """A JSON array of title strings from ``source``, or a diagnostic naming what was wrong.
+
+    Shared by ``--from`` and ``--curated`` so the two read the same shape and fail the same way.
+    """
     try:
         titles = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -630,8 +786,14 @@ def _cmd_pack_suggest(args) -> int:
             summary=f"{source} is not a JSON array of strings",
             detail="This command reads a flat list of raw title strings and clusters them.",
         ))
+    return titles
 
-    suggestion = suggest(titles, cutoff=args.cutoff)
+
+def _cmd_pack_suggest(args) -> int:
+    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
+    titles = _read_titles(Path(args.source).expanduser())
+    curated = _read_titles(Path(args.curated).expanduser()) if args.curated else []
+    suggestion = suggest(titles, cutoff=args.cutoff, curated=curated)
     out_dir = Path(args.out).expanduser()
     _write_suggestion(suggestion, out_dir, force=args.force)
     if (out_dir / "pack.json").is_file():
@@ -676,6 +838,11 @@ def _write_suggestion(suggestion, out_dir: Path, *, force: bool) -> None:
     folded = sum(c.size for c in suggestion.songs) - len(suggestion.songs)
     print(f"{suggestion.raw_count} raw titles -> {len(suggestion.songs)} song candidates "
           f"({folded} variants folded in), {len(suggestion.non_songs)} probable non-songs")
+    # Reported separately because the two numbers answer different questions: how many names a
+    # setlist source got to SPELL, and how many songs would not be in the draft at all without it.
+    if suggestion.curated:
+        print(f"  {len(suggestion.curated)} named by a setlist source "
+              f"({len(suggestion.backfilled)} of them on no tape at all)")
     for path in (vocab_path, aliases_path, sugg_path):
         print(f"  wrote {path}")
 
@@ -700,6 +867,37 @@ def _bootstrap_titles(config) -> list[str]:
     cached = client.cached_items(importer.identity(config),
                                  min_year=min_year(config, "archive_org", None))
     return titles_from_cache(cached.items)
+
+
+def _curated_titles(config) -> list[str]:
+    """Every distinct song name the configured SETLIST sources name as a performance.
+
+    The draft used to read the mirror and nothing else, so the dictionary every later stage is
+    judged against was built from taper prose while the source that publishes actual song titles
+    sat pulled, cached and unread. That is what this fixes; :func:`suggest` explains what changes
+    once the names are in its hands.
+
+    Read through each importer's own ``candidates`` rather than off the raw blobs, which buys two
+    things for free. A source that is not configured returns nothing and says nothing -- the same
+    quiet absence ``ingest`` already relies on -- so this needs no "is it set up" test of its own.
+    And ``non_song`` entries are already flagged by the parsers, which is how setlist.fm's ``tape``
+    marker (a song played over the PA, never performed) is kept out without a rule here that would
+    have to know what a tape marker is.
+
+    The normalizer is empty on purpose. There is no pack yet at draft time -- that is what is being
+    drafted -- so names arrive as the source spells them and the clustering does the rest.
+    """
+    cache = RawCache(config.data_root)
+    empty = Normalizer(vocabulary=[])
+    names: set[str] = set()
+    for importer in secondary():
+        for record in importer.candidates(config, cache, normalizer=empty,
+                                          min_year=min_year(config, importer.id, None)) or ():
+            for entries in list(record.get("sets") or ()) + [record.get("encore") or ()]:
+                for entry in entries:
+                    if not entry.get("non_song") and entry.get("song"):
+                        names.add(str(entry["song"]).strip())
+    return sorted(names, key=str.casefold)
 
 
 def _cmd_bootstrap(config, args) -> int:
@@ -738,7 +936,8 @@ def _cmd_bootstrap(config, args) -> int:
             detail="Nothing is cached for this collection and min_year. Run `slkit pull "
                    "archive_org` first (or re-run bootstrap without --skip-pull), then retry.",
         ))
-    _write_suggestion(suggest(titles, cutoff=args.cutoff), pack_dir, force=args.force)
+    _write_suggestion(suggest(titles, cutoff=args.cutoff, curated=_curated_titles(config)),
+                      pack_dir, force=args.force)
 
     _step(4, "pack init — scaffold the remaining pack files, clobbering none")
     _cmd_pack_init(argparse.Namespace(pack=str(pack_dir), force=False, config=args.config))
@@ -773,6 +972,9 @@ _COMMANDS = {
     "pull": _cmd_pull,
     "ingest": ingest,
     "derive": derive,
+    "predict": _cmd_predict,
+    "replay": _cmd_replay,
+    "drops": _cmd_drops,
     "export": _cmd_export,
     "dump": _cmd_dump,
     "bootstrap": _cmd_bootstrap,

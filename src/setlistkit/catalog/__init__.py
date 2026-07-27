@@ -14,8 +14,9 @@ from .merge import (COMPLETE_FRAC, DEFAULT_RANKS, MergePolicy, MergeResult, appl
                     merge_shows, override_disagreements, overrides_from_mapping, pick_show)
 from .normalizer import Normalizer
 from .pack import CorpusPolicy, Pack, load_pack
-from .parse import (ArchivePolicy, count_songs, parse_archive_item, parse_archive_items,
-                    title_band_filter)
+from .parse import count_songs
+from .parse_archive_org import (ArchivePolicy, parse_archive_item, parse_archive_items,
+                                title_band_filter)
 from .showtypes import ACOUSTIC, ALTEREGO, ELECTRIC, MIXED, ShowType, show_types
 
 __all__ = ["ACOUSTIC", "ALTEREGO", "COMPLETE_FRAC", "DEFAULT_RANKS", "ELECTRIC", "MIXED",

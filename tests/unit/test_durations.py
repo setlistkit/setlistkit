@@ -376,6 +376,24 @@ def test_priors_come_only_from_tapes_whose_filenames_explain_themselves():
                        "gone": 1200.0, "time": 1500.0, "bud": 1800.0}
 
 
+def test_a_track_with_no_readable_length_is_skipped_rather_than_counted_as_zero():
+    """``recording_tracks.seconds`` is nullable and this is the one place that reads it raw.
+
+    Everywhere else a duration goes through a vote, which never sees a track it could not time.
+    A median does, and it has two ways to be wrong about one: treating NULL as 0.0 drags the
+    prior toward the floor, and comparing NULL to a float raises. It raised -- on a corpus where
+    253 tracks came from nights the source lists but holds no audio for -- and the crash was the
+    lucky outcome, because the silent version is a prior that is quietly too low.
+    """
+    recordings, shows, _ = _offset_corpus()
+    untimed = dict(recordings[0])
+    untimed["identifier"] = "untimed"
+    untimed["tracks"] = tuple({**track, "seconds": None} for track in untimed["tracks"])
+    medians = D.provisional_medians(recordings + [untimed], shows, _Pack())
+    assert medians == {"buster": 300.0, "moth": 600.0, "meat": 900.0,
+                       "gone": 1200.0, "time": 1500.0, "bud": 1800.0}
+
+
 def test_a_description_opening_with_a_lineage_line_is_re_seated():
     """best_reading cannot catch this: with bare filenames there is nothing to compete, so the
     offset listing wins unopposed and the night is published confidently wrong. Only the

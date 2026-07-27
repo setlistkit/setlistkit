@@ -23,7 +23,7 @@ def test_init_applies_every_migration_in_order(tmp_path):
         assert "schema_migrations" in store.table_names()
 
 
-def test_init_is_idempotent(tmp_path):
+def test_store_init_is_idempotent(tmp_path):
     with Store(tmp_path) as store:
         store.init()
         # test that a second init applies nothing new

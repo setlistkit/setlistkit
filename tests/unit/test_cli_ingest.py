@@ -186,7 +186,7 @@ def test_a_date_changing_which_source_it_trusts_is_reported(tmp_path, capsys):
 def test_a_refusal_reason_with_no_label_yet_still_gets_a_line(capsys):
     """A module whose whole thesis is "say why a night is missing" must not answer a new kind of
     refusal with silence. The label table grows when the second source lands."""
-    from setlistkit.catalog.parse import Skipped
+    from setlistkit.catalog.parse_archive_org import Skipped
     from setlistkit.cli.ingest import _report_skipped
 
     class _Pack:

@@ -9,7 +9,7 @@ identity is the band's MusicBrainz id, a top-level config key (it names the band
 
 from __future__ import annotations
 
-from ..catalog.parse_setlistfm import parse_setlistfm
+from ..catalog.parse_setlist_fm import parse_setlist_fm
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..sources.setlist_fm import NAMESPACE, SetlistFmClient
 from .base import Importer
@@ -44,7 +44,7 @@ def _candidates(config, cache, *, normalizer, min_year) -> list[dict]:
     if not config.section("sources", NAMESPACE).get("api_key_file") or not config.mbid:
         return []
     pages = SetlistFmClient(config, cache).cached_pages(config.mbid)
-    return parse_setlistfm(pages, normalizer=normalizer, min_year=min_year) if pages else []
+    return parse_setlist_fm(pages, normalizer=normalizer, min_year=min_year) if pages else []
 
 
 IMPORTER = Importer(

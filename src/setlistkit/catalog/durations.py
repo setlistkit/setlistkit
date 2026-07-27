@@ -637,7 +637,12 @@ def provisional_medians(recordings: Iterable[Mapping], shows: Mapping[str, Mappi
         if len(reading) < MIN_MATCH_RATE * max(night.real_songs(normalizer), 1):
             continue                          # the filenames do not explain this tape
         for row in reading.rows:
-            if not normalizer.is_non_song(row.song):
+            # A track whose length could not be read is skipped rather than counted as zero. The
+            # mirror stores those as NULL seconds on purpose -- see recording_tracks -- and this
+            # is the one place that reaches straight into them without going through a vote, so
+            # it is the one place that has to say what NULL means. It means "no measurement", and
+            # a median is not entitled to an opinion about it.
+            if row.seconds is not None and not normalizer.is_non_song(row.song):
                 by_song[row.song].append(row.seconds)
     return {normalizer.squash(song): statistics.median(values)
             for song, values in by_song.items() if len(values) >= 3}

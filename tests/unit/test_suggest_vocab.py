@@ -10,8 +10,6 @@ appears as a candidate name.
 
 import json
 
-import pytest
-
 from setlistkit.catalog.suggest import (
     preclean_display,
     preclean_key,
@@ -198,3 +196,113 @@ def test_cli_pack_lint_still_defaults(tmp_path):
     """The pack dispatcher must not have broken the bare `pack lint` path: an empty directory is
     not a valid pack, so lint routes through and reports a diagnostic rather than crashing."""
     assert main(["pack", "lint", "--pack", str(tmp_path)]) == EXIT_DIAGNOSTIC
+
+
+# --- a curated source names the cluster ------------------------------------------------------
+#
+# The draft used to read the mirror alone, so the vocabulary was carved out of what tapers typed
+# into filenames while setlist.fm sat pulled, cached and unread. Every case below is real UM data.
+
+def test_a_curated_name_beats_the_majority_tape_spelling():
+    """The whole point. The medoid rule elects the spelling MOST tapes agree on, and tapers
+    agreeing with each other is not the band agreeing: five tapes say `Ja Junk`, setlist.fm says
+    `JaJunk`, and setlist.fm is the one publishing the title."""
+    tapes = ["Ja Junk", "Ja Junk >", "07 Ja Junk", "Ja Junk", "ja junk"]
+    result = suggest(tapes, curated=["JaJunk"])
+    assert len(result.songs) == 1
+    assert result.songs[0].canonical == "JaJunk"
+    assert result.songs[0].curated is True
+
+
+def test_the_taper_spelling_still_folds_in_and_still_earns_an_alias():
+    """Curated wins the LABEL; it does not evict the members. A tape spelling that reaches the
+    parser still has to resolve, which is exactly what the alias is for."""
+    result = suggest(["Ja Junk", "07 Ja Junk"], curated=["JaJunk"])
+    assert result.aliases().get("ja junk") == "JaJunk"
+    assert "Ja Junk" in result.songs[0].members
+
+
+def test_a_curated_name_strips_a_welded_track_number():
+    """`14 Sad Clint Eastwood` is in the real um-pack vocabulary. With only tape spellings the
+    number-led forms tie and the index survives into the canonical."""
+    result = suggest(["14 Sad Clint Eastwood", "14 Sad Clint Eastwood >"],
+                     curated=["Sad Clint Eastwood"])
+    assert result.vocabulary() == ["Sad Clint Eastwood"]
+
+
+def test_a_curated_name_no_tape_ever_spelled_still_becomes_a_candidate():
+    """The backfill half: 226 UM songs exist in setlist.fm and on no tape in the collection. A
+    source that only broke ties would leave every one of them out of the vocabulary."""
+    result = suggest(["Bridgeless"], curated=["Cemetery Walk II"])
+    assert "Cemetery Walk II" in result.vocabulary()
+    assert [c.canonical for c in result.backfilled] == ["Cemetery Walk II"]
+
+
+def test_a_title_both_sources_spell_identically_is_not_reported_as_backfilled():
+    """`on_tape` is tracked rather than inferred from cluster size: the members dedupe to one
+    string when the two sources agree exactly, and a size test would call that tape-less."""
+    result = suggest(["Bridgeless"], curated=["Bridgeless"])
+    assert result.backfilled == ()
+    assert result.songs[0].curated is True
+    assert result.songs[0].on_tape is True
+
+
+def test_curated_names_are_not_trusted_past_the_non_song_check():
+    """setlist.fm carries the same annotations tapers do -- `"Keyboard Galaxy"`, quoted, is a
+    spoken moment. A source being better is not a source being clean."""
+    result = suggest(["Bridgeless"], curated=["(Andy Farag Intro)"])
+    assert "(Andy Farag Intro)" in result.non_songs
+    assert "(Andy Farag Intro)" not in result.vocabulary()
+
+
+def test_two_curated_names_never_fold_into_each_other():
+    """`Cemetery Walk`, `Cemetery Walk I` and `Cemetery Walk II` are three different UM pieces with
+    55, 59 and 41 plays, and they squash to strings 0.96 similar. Folding them would be the most
+    expensive mistake this module could make, and no cutoff loose enough to still catch `cemetary`
+    keeps them apart -- which is why the rule is structural rather than a threshold."""
+    names = ["Cemetery Walk", "Cemetery Walk I", "Cemetery Walk II"]
+    assert sorted(suggest([], curated=names).vocabulary()) == names
+    # even wide open, where every pair of these merges on similarity alone
+    assert sorted(suggest([], cutoff=0.5, curated=names).vocabulary()) == names
+
+
+def test_the_same_names_do_fold_when_only_tapes_supply_them():
+    """The asymmetry stated as a test. Nothing about the similarity changed -- what changed is that
+    a source which publishes titles said these are three names, and a taper did not."""
+    names = ["Cemetery Walk", "Cemetery Walk I", "Cemetery Walk II"]
+    assert len(suggest(names, cutoff=0.5).songs) == 1
+
+
+def test_a_taper_typo_still_folds_into_the_curated_name_beside_a_sequel():
+    """The rule must not wall a curated name off from the noise it exists to absorb: `cemetary`
+    still has to reach `Cemetery Walk` while `Cemetery Walk II` stays its own song."""
+    result = suggest(["Cemetary Walk", "03 Cemetary Walk"],
+                     curated=["Cemetery Walk", "Cemetery Walk II"])
+    assert sorted(result.vocabulary()) == ["Cemetery Walk", "Cemetery Walk II"]
+    assert result.aliases().get("cemetary walk") == "Cemetery Walk"
+
+
+def test_no_curated_titles_leaves_every_label_exactly_as_it_was():
+    """The default path is untouched, so a pack drafted before this still drafts the same."""
+    titles = ["Bridgeless", "Bridgeless >", "09 Bridgeless", "Bridgelesss"]
+    assert suggest(titles) == suggest(titles, curated=[])
+
+
+def test_cli_reads_a_curated_file(tmp_path, capsys):
+    src = _titles_file(tmp_path, ["Ja Junk", "07 Ja Junk"])
+    curated = tmp_path / "curated.json"
+    curated.write_text(json.dumps(["JaJunk"]), encoding="utf-8")
+    out = tmp_path / "pack"
+    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(out),
+                 "--curated", str(curated)]) == EXIT_OK
+    assert json.loads((out / "vocabulary.json").read_text()) == ["JaJunk"]
+    assert "named by a setlist source" in capsys.readouterr().out
+
+
+def test_cli_bad_curated_file_is_a_diagnostic(tmp_path, capsys):
+    src = _titles_file(tmp_path, ["Ophelia"])
+    curated = tmp_path / "curated.json"
+    curated.write_text(json.dumps({"not": "an array"}), encoding="utf-8")
+    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(tmp_path / "pack"),
+                 "--curated", str(curated)]) == EXIT_DIAGNOSTIC
+    assert "not a JSON array of strings" in capsys.readouterr().err
