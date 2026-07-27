@@ -12,7 +12,12 @@ import pytest
 
 from setlistkit.config import load_config
 from setlistkit.diagnostics import DiagnosticError
-from setlistkit.model.settings import DEFAULT_REPLAY_SPAN, predict_config, replay_window
+from setlistkit.model.settings import (
+    DEFAULT_REPLAY_SPAN,
+    predict_config,
+    replay_window,
+    score_config,
+)
 
 BASE = ('data_root = "state"\n'
         'user_agent = "famoe.ly nightly (you@example.com)"\n')
@@ -106,3 +111,81 @@ def test_the_span_key_is_not_mistaken_for_an_unknown_one(tmp_path):
     stanza = '[model]\nreplay_since_back = "P1Y"\nrollouts = 100\n'
     assert predict_config(_config(tmp_path, stanza)).rollouts == 100
     assert replay_window(_config(tmp_path, stanza)).since_back == "P1Y"
+
+
+def test_a_band_that_says_nothing_about_scoring_gets_the_measured_defaults(tmp_path):
+    """The defaults are a measurement, not a placeholder. Silence must not move them."""
+    scoring = score_config(_config(tmp_path))
+    assert scoring.recency_halflife_days == 200.0
+    assert scoring.era_full_from_year == 2023
+    assert scoring.cooldown == (0.12, 0.55, 0.82, 0.93)
+
+
+def test_a_band_may_state_its_own_half_life_without_moving_anybody_elses(tmp_path):
+    """The whole reason this stanza exists: two bands, one scorer, two corpora.
+
+    `era_full_from_year = 2023` is a fact about moe. wearing the costume of a constant, and a
+    band whose corpus starts in 2009 has to be able to say so in its own config.
+    """
+    scoring = score_config(_config(
+        tmp_path, "[model.score]\nrecency_halflife_days = 900\nera_full_from_year = 2009\n"))
+    assert scoring.recency_halflife_days == 900.0
+    assert scoring.era_full_from_year == 2009
+    # Untouched fields keep the measured defaults rather than being reset alongside.
+    assert scoring.gap_weight == 0.35
+    assert score_config(_config(tmp_path)).recency_halflife_days == 200.0
+
+
+def test_a_whole_number_is_fine_where_a_fraction_is_allowed(tmp_path):
+    """900 and 900.0 are the same half-life, and refusing one of them helps nobody."""
+    assert score_config(_config(
+        tmp_path, "[model.score]\nrecency_halflife_days = 900\n")).recency_halflife_days == 900.0
+
+
+def test_a_fraction_is_refused_where_only_a_whole_number_makes_sense(tmp_path):
+    """A year is not 2009.5, and coercing it would hide the fact that somebody meant something."""
+    with pytest.raises(DiagnosticError):
+        score_config(_config(tmp_path, "[model.score]\nera_full_from_year = 2009.5\n"))
+
+
+def test_a_quoted_half_life_is_refused_rather_than_coerced(tmp_path):
+    """Same lesson as `min_year`: `int("900")` papers over it here and not downstream.
+
+    Named for its stanza rather than for its lesson, because the `[model]` test above teaches the
+    same lesson and shared the same name -- which meant the later definition shadowed the earlier
+    and one of the two silently stopped running.
+    """
+    with pytest.raises(DiagnosticError):
+        score_config(_config(tmp_path, '[model.score]\nrecency_halflife_days = "900"\n'))
+
+
+def test_an_unknown_scoring_key_is_refused_because_it_is_a_change_nobody_made(tmp_path):
+    with pytest.raises(DiagnosticError) as caught:
+        score_config(_config(tmp_path, "[model.score]\nhalflife = 900\n"))
+    assert "halflife" in str(caught.value)
+
+
+def test_the_cooldown_cannot_be_set_from_config_at_all(tmp_path):
+    """Deliberately unreachable, and the refusal says so.
+
+    It is a tuple indexed by shows-since-last-play and the largest single lever in the scorer.
+    A four-element TOML array typed in the wrong order is a silent, plausible catastrophe.
+    """
+    with pytest.raises(DiagnosticError) as caught:
+        score_config(_config(tmp_path, "[model.score]\ncooldown = [0.12, 0.55, 0.82, 0.93]\n"))
+    assert "cooldown" in str(caught.value)
+
+
+def test_a_typo_in_the_stanza_name_is_refused_by_the_command_that_wanted_it(tmp_path):
+    """`[model.scores]` would otherwise read as an empty table and silently yield defaults."""
+    with pytest.raises(DiagnosticError) as caught:
+        score_config(_config(tmp_path, "[model.scores]\nrecency_halflife_days = 900\n"))
+    assert "scores" in str(caught.value)
+
+
+def test_the_scoring_sub_table_does_not_make_the_parent_stanza_complain(tmp_path):
+    """`[model.score]` arrives as a key named "score" inside `[model]`, and must be known there."""
+    config = _config(tmp_path, "[model]\nrollouts = 200\n\n[model.score]\ngap_cap = 4.0\n")
+    assert predict_config(config).rollouts == 200
+    assert replay_window(config).since_back == DEFAULT_REPLAY_SPAN
+    assert score_config(config).gap_cap == 4.0

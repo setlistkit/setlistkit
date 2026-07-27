@@ -10,8 +10,6 @@ appears as a candidate name.
 
 import json
 
-import pytest
-
 from setlistkit.catalog.suggest import (
     preclean_display,
     preclean_key,

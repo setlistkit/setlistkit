@@ -18,7 +18,7 @@ from setlistkit.catalog.normalizer import Normalizer
 from setlistkit.catalog.parse import count_songs
 from setlistkit.catalog.parse_setlist_fm import parse_setlist_fm
 from setlistkit.sources.client import Response
-from setlistkit.sources.setlist_fm import NAMESPACE, SetlistFmClient
+from setlistkit.sources.setlist_fm import SetlistFmClient
 from setlistkit.config import load_config
 from setlistkit.store.raw_cache import RawCache
 
@@ -70,7 +70,7 @@ def test_tape_song_is_kept_but_flagged_non_song():
     assert count_songs(rec["sets"], rec["encore"]) == 1        # only Mantis counts
 
 
-def test_min_year_floors_the_parse():
+def test_min_year_floors_the_setlist_fm_parse():
     pages = [_page(_setlist("new", "01-02-2024", ([_song("Mantis")], None)),
                    _setlist("old", "01-02-2019", ([_song("Mantis")], None)))]
     dates = {r["date"] for r in parse_setlist_fm(pages, normalizer=NZ, min_year=2020)}

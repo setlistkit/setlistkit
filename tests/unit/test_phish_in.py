@@ -13,14 +13,12 @@ import inspect
 import json
 import urllib.parse
 
-import pytest
-
 from setlistkit.catalog.normalizer import Normalizer
 from setlistkit.catalog.parse_phish_in import parse_phish_in
 from setlistkit.config import load_config
 from setlistkit.sources.base import SourceClient
 from setlistkit.sources.client import Response
-from setlistkit.sources.phish_in import (NAMESPACE, PhishInClient, show_dates_in, shows_in,
+from setlistkit.sources.phish_in import (PhishInClient, show_dates_in, shows_in,
                                          tracks_in)
 from setlistkit.store.raw_cache import RawCache
 
@@ -310,7 +308,7 @@ def test_progress_is_reported_per_show(tmp_path, monkeypatch):
     assert seen == [(1, 3), (2, 3), (3, 3)]
 
 
-def test_the_client_satisfies_the_source_contract_by_shape():
+def test_the_phish_in_client_satisfies_the_source_contract_by_shape():
     """Locked now, before an importer registers it -- the pull surface is structural, so drift
     here is what would stop a registry entry from being a drop-in."""
     assert issubclass(PhishInClient, SourceClient)

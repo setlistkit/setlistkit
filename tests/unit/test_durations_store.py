@@ -12,6 +12,7 @@ from setlistkit.catalog.lengths import (ELECTRIC, TAPES_DISAGREE, Consensus, Per
 from setlistkit.store import Store
 
 
+# pylint: disable=too-many-arguments
 def _perf(song="Rebubula", date="2024-01-01", set_label="1", position=1, seconds=600.0,
           *, suspect=False, segued=False, show_type=ELECTRIC, excluded=None, sandwich=None,
           n_tapes=3, resolved_by=None):

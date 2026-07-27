@@ -37,9 +37,17 @@ import json
 import os
 import sys
 
+# A script run from a checkout, not an installed package: the path fix has to precede the
+# import it enables, so both linters are told the order is deliberate.
+# pylint: disable=wrong-import-position
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from setlistkit.catalog.normalizer import Normalizer, normalize  # noqa: E402
+
+
+# What phish.net puts in `slug` when a row names something its catalog has no entry for. The
+# marker, not the id number behind it: the number is theirs to change, the marker is what it means.
+_NO_CATALOG_ID = "custom"
 
 
 def _rows(blob_dir: str, artist_slug: str):
@@ -58,16 +66,53 @@ def _rows(blob_dir: str, artist_slug: str):
 
 
 def _canon_by_id(blob_dir: str, artist_slug: str):
-    """``songid`` -> the spelling phish.net used most, plus the raw tally behind each one."""
-    spellings: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
+    """``songid`` -> the spelling phish.net used most, plus the raw tally behind each one.
+
+    ONE SONGID IS NOT A SONG. phish.net files anything with no catalog entry -- a one-off cover, a
+    guest's tune, a named medley -- under a single catch-all id, and marks it by setting ``slug``
+    to the literal ``custom``. Over 2009-2026 that id carries 826 rows and dozens of distinct
+    titles. Treated as an id like any other it would elect one spelling as the canon for all of
+    them, and the collision check below would (correctly) refuse to write anything at all.
+
+    So the sentinel is keyed on the SOURCE'S OWN MARKER rather than on the id number: ``slug`` is
+    what phish.net sets to say "this row has no catalog identity", and the number behind it is an
+    implementation detail that can change. Those rows fall back to their title as their identity,
+    which is the only thing they have.
+
+    Under ``artist_slug = phish`` this is 8 rows of 14,289, and 6 of the 8 are ordinary songs that
+    also hold a real id elsewhere -- so they fold into their own entry by title and cost nothing.
+    """
+    spellings: dict[object, collections.Counter] = collections.defaultdict(collections.Counter)
     for row in _rows(blob_dir, artist_slug):
         song, songid = row.get("song"), row.get("songid")
-        if song and songid is not None:
+        if not song:
+            continue
+        if row.get("slug") == _NO_CATALOG_ID:
+            spellings[("custom", normalize(song))][song] += 1
+        elif songid is not None:
             spellings[songid][song] += 1
     # sorted() before max() so a tie resolves the same way on every run. Set and dict iteration
     # order over equal counts is not something to leave to chance in a file that gets committed.
-    return {sid: max(sorted(counter), key=counter.__getitem__)
-            for sid, counter in spellings.items()}, spellings
+    canon = {sid: max(sorted(counter), key=counter.__getitem__)
+             for sid, counter in spellings.items()}
+    return _fold_uncataloged(canon), spellings
+
+
+def _fold_uncataloged(canon: dict) -> dict:
+    """Drop any title-keyed entry that a real song id already answers for.
+
+    A song can appear BOTH ways: filed under its id on most nights and under the catch-all on the
+    one night somebody entered it by hand. Kept apart those are two vocabulary entries for one
+    song, which is the same corpus damage a collision causes, arrived at from the other direction.
+    Measured over 2009-2026: 6 of the 8 title-keyed entries are this.
+
+    The real id always wins, and that is not arbitrary -- it is the entry the other several
+    thousand plays of that song are already filed under. Only a title nothing else claims survives
+    as its own entry, which is the case the fallback exists for.
+    """
+    known = {normalize(song) for sid, song in canon.items() if not isinstance(sid, tuple)}
+    return {sid: song for sid, song in canon.items()
+            if not isinstance(sid, tuple) or normalize(song) not in known}
 
 
 def _collisions(canon_by_id: dict) -> dict:
@@ -110,6 +155,9 @@ def _phish_in_gaps(blob_dir: str, vocabulary: list[str]):
     return hit, missed
 
 
+# A report-printing main: the locals ARE the report, and naming each one is what makes the
+# output legible. Splitting it into helpers would move lines without moving meaning.
+# pylint: disable=too-many-locals
 def main() -> int:
     """Draft the vocabulary, write it, and print everything it declined to decide."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -132,7 +180,7 @@ def main() -> int:
     collisions = _collisions(canon_by_id)
     print(f"  normalized-key collisions between ids: {len(collisions)}")
     for key, members in collisions.items():
-        print(f"    {key!r}: {sorted(members)}")
+        print(f"    {key!r}: {sorted(members, key=repr)}")
     if collisions:
         print("  REFUSING to write: a collision folds two real songs into one.")
         return 1

@@ -33,8 +33,7 @@ from dataclasses import replace
 from ..catalog.window import resolve_explained
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..model.predict import predict_night
-from ..model.scores import ScoreConfig
-from ..model.settings import predict_config, replay_window
+from ..model.settings import predict_config, replay_window, score_config
 from ..picks.drops import DEFAULT_DEPTH, drops as walk_drops
 from ..picks.replay import ReplaySpec, replay as walk
 from ..store import Store
@@ -59,7 +58,11 @@ def _configs(config, args):
         predicting = replace(predicting, rollouts=args.rollouts)
     if getattr(args, "set_len", None):
         predicting = replace(predicting, set_len=args.set_len)
-    return ScoreConfig(), predicting
+    # Read from the band's own config rather than constructed from the defaults. The defaults
+    # were fitted on moe. and `era_full_from_year = 2023` in particular is a fact about moe.'s
+    # corpus; a second band has to be able to say its own corpus measured differently. See
+    # `settings.score_config` for the bar a value written there has to clear.
+    return score_config(config), predicting
 
 
 def _corpus(store) -> tuple[list[dict], str, str]:
@@ -93,12 +96,12 @@ def _next_night(last: str) -> str:
 
 def predict(config, args) -> int:
     """`slkit predict`: one night's ranked chances and the setlist they construct."""
-    score_config, predicting = _configs(config, args)
+    scoring, predicting = _configs(config, args)
     with Store(config.data_root) as store:
         store.init()
         shows, _first, last = _corpus(store)
         asof = check_date(args.asof, "--asof") or _next_night(last)
-        prediction = predict_night(shows, score_config, predicting, asof=asof)
+        prediction = predict_night(shows, scoring, predicting, asof=asof)
     print(f"predict {prediction.asof}: reading {len(shows)} show(s) through {last}")
     print(f"  {predicting.rollouts} rollouts, seed {predicting.seed}, "
           f"set of {prediction.set_len}, top {predicting.top_n} recorded")
@@ -139,12 +142,12 @@ def _window(config, store, args) -> tuple[str, str, str]:
 
 def replay(config, args) -> int:
     """`slkit replay`: predict and grade every gradeable night in the window, oldest first."""
-    score_config, predicting = _configs(config, args)
+    scoring, predicting = _configs(config, args)
     with Store(config.data_root) as store:
         store.init()
         shows, _first, last = _corpus(store)
         since, until, how = _window(config, store, args)
-        spec = ReplaySpec(score=score_config, predict=predicting, since=since, until=until)
+        spec = ReplaySpec(score=scoring, predict=predicting, since=since, until=until)
         print(f"replay {since} .. {until} ({how}); corpus of {len(shows)} show(s) through {last}")
         print(f"  {predicting.rollouts} rollouts, seed {predicting.seed}, "
               f"top {predicting.top_n} recorded, grading nights of "
@@ -165,13 +168,13 @@ def drops_cmd(config, args) -> int:
     off the same corpus have to be talking about the same nights, and two commands that spell
     "the last six months" differently make that impossible to check.
     """
-    score_config, predicting = _configs(config, args)
+    scoring, predicting = _configs(config, args)
     depth = args.depth or DEFAULT_DEPTH
     with Store(config.data_root) as store:
         store.init()
         shows, _first, last = _corpus(store)
         since, until, how = _window(config, store, args)
-        spec = ReplaySpec(score=score_config, predict=predicting, since=since, until=until)
+        spec = ReplaySpec(score=scoring, predict=predicting, since=since, until=until)
         print(f"drops {since} .. {until} ({how}); corpus of {len(shows)} show(s) through {last}")
         print(f"  depth {depth}: each night predicted from its last {depth} cutoff(s), "
               f"{predicting.rollouts} rollouts, top {predicting.top_n} recorded")

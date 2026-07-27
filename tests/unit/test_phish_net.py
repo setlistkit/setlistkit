@@ -153,7 +153,7 @@ def test_field_types_are_coerced_not_branched_on():
     assert rec["identifier"] == "phish_net-99"
 
 
-def test_min_year_floors_the_parse():
+def test_min_year_floors_the_phish_net_parse():
     payload = _year(_srow("2024-07-01", "New"), _srow("2019-07-01", "Old"))
     dates = {r["date"] for r in parse_phish_net([payload], normalizer=NZ, min_year=2020)}
     assert dates == {"2024-07-01"}
@@ -424,7 +424,7 @@ def test_cached_years_round_trips_and_skips_a_gap(tmp_path, monkeypatch):
     assert client.cached_show_dates("phish", 2024) == {"2024-07-01", "2026-07-01"}
 
 
-def test_the_client_satisfies_the_source_contract_by_shape():
+def test_the_phish_net_client_satisfies_the_source_contract_by_shape():
     """Locked now, before an importer registers it. The pull surface is structural -- no base
     class enforces it -- so the moment this client drifts from the keyword block every other
     source presents is the moment a registry entry would stop being a drop-in."""

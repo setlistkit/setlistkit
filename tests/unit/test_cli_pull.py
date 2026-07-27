@@ -117,7 +117,7 @@ def test_pull_without_a_collection_says_which_table_to_set_it_in(tmp_path, capsy
     assert client.calls == []
 
 
-def test_pull_refuses_the_placeholder_user_agent(tmp_path, capsys, client):
+def test_the_pull_command_refuses_the_placeholder_user_agent(tmp_path, capsys, client):
     body = f'data_root = "state"\nuser_agent = "{SENTINEL_USER_AGENT}"\n'
     assert main(["--config", _cfg(tmp_path, body), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
     assert "refusing to touch the network" in capsys.readouterr().err

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from ..catalog.window import WindowError, WindowSpec, parse_offset
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
+from .scores import ScoreConfig
 from .setlists import PredictConfig
 
 # field -> whether a float is acceptable there. Everything else must be a whole number, CHECKED
@@ -37,10 +38,32 @@ _PREDICT_FIELDS = {"set_len": False, "encore_len": False, "rollouts": False, "se
 # unknown-key check sees one vocabulary rather than rejecting a key this module itself reads.
 _SPAN_KEY = "replay_since_back"
 
+# `[model.score]` arrives as a sub-table of `[model]`, so it shows up here as a key named "score".
+# Named rather than "allow any dict", so a typo'd `[model.scores]` is still refused.
+_SCORE_KEY = "score"
+
 # How far back a replay walks when the config does not say. Eighteen months of recent history is
 # roughly ninety gradeable nights for this corpus, which is enough for the standard error on the
 # aggregate to mean something without the walk taking long enough that nobody runs it.
 DEFAULT_REPLAY_SPAN = "P18M"
+
+# `[model.score]` field -> the type TOML must hand over. `int` means a whole number and refuses a
+# float; `(int, float)` accepts either and stores a float, because a half-life of 400 and 400.0
+# are the same number and refusing one of them helps nobody.
+_SCORE_FIELDS: dict[str, type | tuple[type, ...]] = {
+    "recency_halflife_days": (int, float),
+    "era_full_from_year": int,
+    "era_weight_before": (int, float),
+    "gap_weight": (int, float),
+    "gap_cap": (int, float),
+    "min_show_songs": int,
+    "lookback_years": int,
+}
+_SCORE_NAMES = {key: ("a whole number" if wanted is int else "a number")
+                for key, wanted in _SCORE_FIELDS.items()}
+_SCORE_EXAMPLES = {"recency_halflife_days": "900", "era_full_from_year": "2009",
+                   "era_weight_before": "0.5", "gap_weight": "0.35", "gap_cap": "3.0",
+                   "min_show_songs": "5", "lookback_years": "12"}
 
 
 def _refuse(config, summary: str, detail: str) -> DiagnosticError:
@@ -50,7 +73,7 @@ def _refuse(config, summary: str, detail: str) -> DiagnosticError:
 
 
 def _check_keys(config, raw) -> None:
-    known = set(_PREDICT_FIELDS) | {_SPAN_KEY}
+    known = set(_PREDICT_FIELDS) | {_SPAN_KEY, _SCORE_KEY}
     extra = set(raw) - known
     if extra:
         raise _refuse(
@@ -85,6 +108,60 @@ def predict_config(config) -> PredictConfig:
                 f"Write it unquoted:\n\n    [model]\n    {key} = {example}")
         values[key] = float(value) if allow_float else int(value)
     return PredictConfig(**values)
+
+
+def score_config(config) -> ScoreConfig:
+    """`[model.score]` as a :class:`~setlistkit.model.scores.ScoreConfig`, defaults where silent.
+
+    THIS STANZA IS AN EXCEPTION TO THE RULE AT THE TOP OF THIS MODULE, and it is worth saying why
+    rather than letting the exception quietly become the rule.
+
+    The rule is that a measured claim lives in source. It was written when there was one band, and
+    it was right: ``ScoreConfig``'s docstring IS the measurement, taken over moe.'s corpus, and a
+    config key would have let somebody move a number without moving the evidence.
+
+    A second band breaks it, and not at the margin. ``era_full_from_year = 2023`` is a fact about
+    moe. wearing the costume of a constant. ``recency_halflife_days = 200`` was fitted against a
+    band whose rotation is dominated by the last few years; against one that returns to material
+    it has not played in half a decade, the same number does not mean the same thing -- it means
+    the deep catalog is weighted to nothing, which the source docstring already reports as "87% of
+    the corpus cannot reach this scorer at all".
+
+    So the defaults stay exactly where they are and stay the measured claim. What this adds is the
+    ability for a band to say, in its own config, that its own corpus measured differently. THE
+    BAR FOR WRITING A KEY HERE IS THE SAME BAR THE DEFAULTS MET: a walk-forward sweep on a window
+    that is not the window the result is reported from. A value typed in because it looked better
+    in sample is the exact failure the scores docstring records this scorer's ancestor making.
+
+    ``cooldown`` is deliberately NOT readable here. It is a tuple whose index means shows-since-
+    last-play, it is the largest single lever in the scorer, and a TOML array offers no way to say
+    that -- a four-element list typed in the wrong order is a silent, plausible catastrophe. It
+    stays in source until there is a reason and a shape for moving it.
+    """
+    # The parent stanza is checked too, so a typo'd `[model.scores]` is caught by the command that
+    # wanted the scores rather than silently read as defaults by the one command that would notice.
+    _check_keys(config, config.section("model"))
+    raw = config.section("model", "score")
+    extra = set(raw) - set(_SCORE_FIELDS)
+    if extra:
+        raise _refuse(
+            config, f"[model.score] has unknown key(s): {', '.join(sorted(extra))}",
+            f"Known keys are: {', '.join(sorted(_SCORE_FIELDS))}.\n\n"
+            "`cooldown` is deliberately absent: it is a tuple indexed by shows-since-last-play,\n"
+            "and a TOML array gives no way to say so.")
+    values = {}
+    for key, wanted in _SCORE_FIELDS.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if key == "lookback_years" and value is None:
+            continue                     # explicit null means "the whole corpus", the default
+        if not isinstance(value, wanted) or isinstance(value, bool):
+            raise _refuse(
+                config, f"[model.score] {key} must be {_SCORE_NAMES[key]}, got {value!r}",
+                f"Write it unquoted:\n\n    [model.score]\n    {key} = {_SCORE_EXAMPLES[key]}")
+        values[key] = float(value) if wanted is not int else int(value)
+    return ScoreConfig(**values)
 
 
 def replay_window(config) -> WindowSpec:

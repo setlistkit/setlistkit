@@ -39,7 +39,7 @@ def _store(tmp_path):
 def test_a_show_survives_the_round_trip_exactly(store):
     store.corpus.replace_shows([SHOW])
     read, = store.corpus.shows()
-    assert read == {k: v for k, v in SHOW.items()}
+    assert read == dict(SHOW)
 
 
 def test_a_transition_code_survives_the_round_trip(store):

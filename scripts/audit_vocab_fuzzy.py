@@ -28,6 +28,9 @@ import json
 import os
 import sys
 
+# A script run from a checkout, not an installed package: the path fix has to precede the
+# import it enables, so both linters are told the order is deliberate.
+# pylint: disable=wrong-import-position
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from setlistkit.catalog.normalizer import normalize  # noqa: E402
@@ -66,6 +69,9 @@ def _titles(raw_root: str, artist_slug: str) -> tuple[collections.Counter, colle
     return live, flagged
 
 
+# A report-printing main: the locals ARE the report, and naming each one is what makes the
+# output legible. Splitting it into helpers would move lines without moving meaning.
+# pylint: disable=too-many-locals,too-many-branches
 def main() -> int:
     """Classify every raw title by the rung that answered it, and print the risky ones."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])

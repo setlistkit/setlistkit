@@ -62,7 +62,7 @@ def test_init_force_overwrites(tmp_path):
     assert json.loads((dest / "pack.json").read_text())["name"] == "pack"
 
 
-def test_init_is_idempotent(tmp_path, capsys):
+def test_pack_init_is_idempotent(tmp_path, capsys):
     dest = tmp_path / "pack"
     assert main(["pack", "init", "--pack", str(dest)]) == EXIT_OK
     capsys.readouterr()

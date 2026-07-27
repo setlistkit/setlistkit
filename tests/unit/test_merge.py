@@ -439,6 +439,7 @@ def test_a_song_only_in_an_encore_is_still_a_disagreement():
     assert reports[0]["missing"] == ["Timmy Tucker"]
 
 
+# pylint: disable=invalid-name
 def test_a_non_song_that_IS_in_the_vocabulary_is_not_a_disagreement():
     """the case the vocabulary filter cannot catch: a service lists "Intro" as a song, and it is
     in the dictionary, so only is_non_song can tell it is not music."""

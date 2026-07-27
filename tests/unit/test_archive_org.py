@@ -146,7 +146,7 @@ def test_pull_reports_a_404_instead_of_caching_a_stub(tmp_path):
     assert RawCache(tmp_path).get("archive_org", "gone") is None
 
 
-def test_pull_refuses_the_placeholder_user_agent(tmp_path):
+def test_the_archive_org_client_refuses_the_placeholder_user_agent(tmp_path):
     from setlistkit.config import SENTINEL_USER_AGENT
     from setlistkit.diagnostics import DiagnosticError
 
