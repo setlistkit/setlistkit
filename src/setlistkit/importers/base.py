@@ -46,8 +46,18 @@ class Importer:
     also needs the raw items for tapes and durations. A setlist source returns its records and
     feeds no mirror.
 
-    ``feeds_mirror`` says whether the source carries audio: archive.org yes, setlist.fm no. It is
-    what ``ingest`` splits the primary read from the fold-ins on.
+    ``feeds_mirror`` says whether this source IS the mirror -- the one ``ingest`` reads explicitly,
+    because it needs the raw items for tapes, listings and show types as well as for setlists. It
+    is what ``ingest`` splits the primary read from the fold-ins on, and exactly one source can be
+    it. It does NOT mean "carries audio": see ``tapes``.
+
+    ``tapes(config, cache, *, min_year)`` returns mirror recordings a source contributes WITHOUT
+    being the mirror, or is ``None`` for a source with no audio. phish.in is why the two are
+    separate. It carries per-track durations and it is a fold-in setlist source at the same time,
+    which ``feeds_mirror`` cannot express: setting it there would take phish.in out of the merge
+    (``secondary()`` skips mirror sources) to gain the tapes, and the merge is where its setlists
+    have to be. So the audio arrives on its own hook, and a source can supply either, both, or
+    neither.
     """
 
     id: str
@@ -56,3 +66,4 @@ class Importer:
     make_client: Callable[[Config, RawCache], SourceClient]
     identity: Callable[[Config], str]
     candidates: Callable | None = None
+    tapes: Callable | None = None

@@ -3,8 +3,12 @@
 """The phish.in importer: a setlist source, and the one that holds the clock.
 
 No segues, so it ranks below phish.net in the merge and loses any date they both carry. It earns
-its place on the dates phish.net's filters drop and on the per-track durations nothing else has --
-though durations are a separate pipeline, and what this importer folds in is setlists.
+its place on the dates phish.net's filters drop and on the per-track durations nothing else has.
+
+IT IS THE ONLY SOURCE THAT DOES BOTH JOBS. Its setlists fold into the merge and usually lose;
+its tapes are the only clock the band has, because archive.org carries no Phish. Those travel on
+separate hooks -- ``candidates`` and ``tapes`` -- and :mod:`setlistkit.importers` explains at
+length why ``feeds_mirror`` could not have expressed the pair.
 
 Its identity is a constant. phish.in is a single-band archive with no artist dimension in any
 endpoint, so there is nothing for config to name and inventing a knob that can only hold one
@@ -13,7 +17,7 @@ value would be worse than saying so.
 
 from __future__ import annotations
 
-from ..catalog.parse_phish_in import parse_phish_in
+from ..catalog.parse_phish_in import parse_phish_in, phish_in_tapes
 from ..sources.phish_in import ARTIST, NAMESPACE, PhishInClient
 from .base import Importer
 
@@ -38,6 +42,18 @@ def _candidates(config, cache, *, normalizer, min_year) -> list[dict]:
     return parse_phish_in(shows, normalizer=normalizer, min_year=min_year) if shows else []
 
 
+def _tapes(config, cache, *, min_year) -> list[dict]:
+    """phish.in's shows as mirror recordings: one official transfer a night, with track lengths.
+
+    Reads the same cached payloads :func:`_candidates` reads, and that is deliberate rather than
+    wasteful. One pull, two projections -- setlists into the merge, durations into the mirror --
+    so the tape and the setlist for a night can never come from different fetches of a source
+    that is still adding audio to old shows.
+    """
+    shows = PhishInClient(config, cache).cached_shows(min_year)
+    return phish_in_tapes(shows, min_year=min_year) if shows else []
+
+
 IMPORTER = Importer(
     id=NAMESPACE,
     display_name="phish.in",
@@ -45,4 +61,5 @@ IMPORTER = Importer(
     make_client=PhishInClient,
     identity=_identity,
     candidates=_candidates,
+    tapes=_tapes,
 )

@@ -62,11 +62,12 @@ def replace_recordings(conn: sqlite3.Connection, records: Iterable[Mapping]) -> 
         conn.execute("DELETE FROM recording_tracks")
         conn.execute("DELETE FROM recordings")
         conn.executemany(
-            "INSERT INTO recordings(identifier, date, uploader, audio_format, n_tracks) "
-            "VALUES(?, ?, ?, ?, ?)",
+            "INSERT INTO recordings(identifier, date, uploader, audio_format, n_tracks, source) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
             [(str(record["identifier"]), str(record["date"]), str(record.get("uploader") or ""),
               str(record.get("audio_format") or ""),
-              len(record.get("duration_tracks") or ())) for record in rows])
+              len(record.get("duration_tracks") or ()),
+              str(record.get("source") or "")) for record in rows])
         conn.executemany(
             "INSERT INTO recording_tracks(identifier, idx, name, title, length_raw, seconds) "
             "VALUES(?, ?, ?, ?, ?, ?)", tracks)
@@ -176,12 +177,13 @@ def recordings(conn: sqlite3.Connection) -> list[dict]:
     """
     out: dict[str, dict] = {}
     for row in conn.execute(
-            "SELECT identifier, date, uploader, audio_format, n_tracks FROM recordings "
+            "SELECT identifier, date, uploader, audio_format, n_tracks, source FROM recordings "
             "ORDER BY date, identifier"):
         out[row["identifier"]] = {"identifier": row["identifier"], "date": row["date"],
                                   "uploader": row["uploader"],
                                   "audio_format": row["audio_format"],
-                                  "n_tracks": row["n_tracks"], "tracks": []}
+                                  "n_tracks": row["n_tracks"], "source": row["source"],
+                                  "tracks": []}
     for row in conn.execute(
             "SELECT identifier, idx, name, title, length_raw, seconds FROM recording_tracks "
             "ORDER BY identifier, idx"):
@@ -191,6 +193,30 @@ def recordings(conn: sqlite3.Connection) -> list[dict]:
         record["tracks"].append({"idx": row["idx"], "name": row["name"], "title": row["title"],
                                  "length_raw": row["length_raw"], "seconds": row["seconds"]})
     return list(out.values())
+
+
+def counts_by_date(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """date -> source -> how many tapes of that night that source gave us.
+
+    Nested rather than flattened to one number a night, because the two facts a page wants are
+    "how many" and "where do I go to hear them", and the second is per source. A band whose tapes
+    come from one place makes that look like pointless structure right up until a second supplier
+    arrives -- which is exactly what happened, and is why ``source`` is a column at all.
+
+    A date with no tapes is ABSENT rather than zero. The caller knows which dates it is asking
+    about and this does not; inventing a zero for every night in the corpus would make a night
+    nobody has taped yet indistinguishable from one this never looked at.
+
+    Counted in SQL for the reason :func:`uploader_counts` is: the caller wants a tally, and
+    reading four thousand tapes and their seventy-five thousand tracks to produce one is a cost
+    that gets noticed a year later as "the build is slow".
+    """
+    out: dict[str, dict[str, int]] = {}
+    for row in conn.execute(
+            "SELECT date, source, COUNT(*) AS n FROM recordings "
+            "GROUP BY date, source ORDER BY date, source"):
+        out.setdefault(row["date"], {})[row["source"]] = row["n"]
+    return out
 
 
 def uploader_counts(conn: sqlite3.Connection, since: str | None = None,

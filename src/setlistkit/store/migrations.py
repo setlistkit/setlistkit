@@ -396,6 +396,32 @@ def _transition_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE show_entries ADD COLUMN transition INTEGER")
 
 
+def _recording_source(conn: sqlite3.Connection) -> None:
+    """Add `recordings.source`: which importer supplied this tape.
+
+    THE MIRROR USED TO HAVE ONE SUPPLIER AND NOW HAS TWO, and nothing on the row said which. That
+    was tolerable while every tape came from archive.org, because the answer was a constant. It
+    stopped being tolerable the moment phish.in started feeding the mirror, and the symptom is
+    specific: every consumer that wants to LINK to a tape has to reconstruct its origin, and the
+    only thing available to reconstruct it from is the shape of the identifier. `phish_in-2042`
+    looks like a phish.in id today and is a naming convention, not a contract -- the first source
+    whose ids happen to collide with the pattern gets its tapes linked to the wrong archive, and
+    the page still renders.
+
+    A NEW MIGRATION RATHER THAN AN EDIT TO MIGRATION 1, deliberately, and migration 3 is why: a
+    column folded into migration 1 after databases exist gives migration 1 two meanings, and there
+    is no version number that tells the two apart. Added here, every store passes through the same
+    steps in the same order and there is one history.
+
+    Defaulted to '' rather than to 'archive_org'. Backfilling a guess would make an unknown
+    provenance indistinguishable from a measured one, which is the exact confusion the column is
+    being added to end. The next ingest rewrites the mirror whole and fills it truthfully.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recordings)")}
+    if "source" not in columns:
+        conn.execute("ALTER TABLE recordings ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+
+
 def _m0001_initial(conn: sqlite3.Connection) -> None:
     """The whole schema, as one step, in dependency order.
 
@@ -424,6 +450,9 @@ MIGRATIONS: list[Migration] = [
     # function: migration 1 means two different schemas depending on when it ran, and this is
     # what makes them the same schema again.
     Migration(3, "transition_column", _transition_column),
+    # The mirror gained a second supplier (phish.in) and the rows could not say so. Not folded
+    # into migration 1, for the reason migration 3 spells out at length.
+    Migration(4, "recording_source", _recording_source),
 ]
 
 

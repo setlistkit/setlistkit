@@ -31,17 +31,13 @@ from dataclasses import dataclass, field
 
 from ..catalog import durations as tapes
 from ..catalog import lengths
+from ..catalog import tapelinks
 from ..catalog.normalizer import Normalizer
 from ..catalog.pack import load_pack
 from ..store import Store
 from .common import resolve_pack_dir
 
 EXIT_OK = 0
-
-# Where a reviewer goes to listen. Stored on the row rather than built at read time so a dumped
-# review queue is self-contained -- the point of the queue is to be worked through somewhere other
-# than here.
-_ARCHIVE_ITEM = "https://archive.org/details/"
 
 # Why a tape produced no measurement. Counted under these names so the report and the stored
 # review rows use one vocabulary rather than two that drift.
@@ -166,7 +162,8 @@ def _read_tapes(recordings, reader: _Reader) -> _Timed:
         reading = _usable_reading(tape, night, reader.normalizer)
         if reading is None:
             out.outcome[UNNAMED] += 1
-            out.review.append(_review_row(tape, night, listing, reader.normalizer))
+            out.review.append(_review_row(tape, night, listing, reader.normalizer,
+                                          str(record.get("source") or "")))
             continue
         out.outcome["timed"] += 1
         votes, non_song = lengths.observations_of(
@@ -180,17 +177,24 @@ def _read_tapes(recordings, reader: _Reader) -> _Timed:
     return out
 
 
-def _review_row(tape, night, listing, normalizer) -> dict:
+def _review_row(tape, night, listing, normalizer, source: str = "") -> dict:
     """One unreadable tape, with the three counts that failed to reconcile.
 
     All three, because which pair disagrees is the diagnosis. Tracks against setlist is a tape of
     part of a night, or a setlist we are missing songs from. Tracks against description is a
     listing we read wrong. Description against setlist is a taper who wrote down a different show.
+
+    ``url`` asks the source where the tape lives instead of assuming archive.org. This row exists
+    to be opened by a person checking our reading against the audio, so a link that resolves to
+    nothing costs exactly the thing the row is for. Falls back to the night's page for a source
+    that addresses recordings by date, and to empty when there is no page to name -- a review row
+    with no link is still a usable review row.
     """
+    url = (tapelinks.item_url(source, tape.identifier)
+           or tapelinks.night_url(source, tape.date) or "")
     return {"identifier": tape.identifier, "date": tape.date,
             "n_tracks": len(tape.tracks), "n_setlist": night.real_songs(normalizer),
-            "n_desc": len(listing or ()), "reason": UNNAMED,
-            "url": f"{_ARCHIVE_ITEM}{tape.identifier}"}
+            "n_desc": len(listing or ()), "reason": UNNAMED, "url": url}
 
 
 def _durations(config, args) -> int:

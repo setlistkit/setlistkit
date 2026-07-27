@@ -247,6 +247,10 @@ class _Tapes(_Namespace):
         """who posted -> how many of their tapes we hold, most prolific first."""
         return recordings.uploader_counts(self.conn, since, until)
 
+    def counts_by_date(self) -> dict[str, dict[str, int]]:
+        """date -> source -> how many tapes of that night came from it. Dates with none absent."""
+        return recordings.counts_by_date(self.conn)
+
 
 class _Durations(_Namespace):
     """What the durations chain concluded: performances, statistics, and what was skipped."""

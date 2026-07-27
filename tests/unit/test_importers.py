@@ -15,7 +15,7 @@ import pytest
 from setlistkit.cli import main as cli
 from setlistkit.config import load_config
 from setlistkit.diagnostics import DiagnosticError
-from setlistkit.importers import IMPORTERS, secondary
+from setlistkit.importers import IMPORTERS, secondary, tape_sources
 from setlistkit.importers.base import Importer
 from setlistkit.sources.archive_org import ArchiveOrgClient
 from setlistkit.sources.base import SourceClient
@@ -71,6 +71,26 @@ def test_a_mirror_source_folds_in_no_candidates_and_a_setlist_source_does():
         assert not imp.feeds_mirror and callable(imp.candidates)
     # `secondary()` is exactly the fold-in sources -- the setlist ones, never the mirror.
     assert [imp.id for imp in secondary()] == ["setlist_fm", "phish_net", "phish_in"]
+
+
+def test_carrying_audio_and_being_the_mirror_are_separate_capabilities():
+    """The rule above is about which source ``ingest`` reads explicitly, NOT about who has audio.
+
+    phish.in is why they had to come apart. It folds setlists into the merge and it holds the only
+    clock a band with no archive.org tapes has, and ``feeds_mirror`` cannot say both: it selects
+    the single primary, so setting it there would have taken phish.in out of ``secondary()`` -- out
+    of the merge entirely -- in exchange for its durations.
+
+    Asserting the pairing per source rather than just counting, because the regression this catches
+    is a ``tapes=`` hook quietly dropped from one descriptor. The tapes stop arriving, the merge is
+    unaffected, every existing test passes, and the Tape Measure goes empty on one band.
+    """
+    assert [imp.id for imp in tape_sources()] == ["phish_in"]
+    assert callable(IMPORTERS["phish_in"].tapes)
+    # A setlist source with no audio must not claim any, and the mirror source must not appear
+    # here: its tapes are read by ingest directly, and a second read would double every one.
+    for silent in ("setlist_fm", "phish_net", "archive_org"):
+        assert IMPORTERS[silent].tapes is None
 
 
 def _keyword_only_shape(func):
