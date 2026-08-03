@@ -83,6 +83,20 @@ class Config:
             node = node.get(name, {})
         return dict(node) if isinstance(node, dict) else {}
 
+    def has_section(self, *names: str) -> bool:
+        """True when the table was WRITTEN, even with every key commented out.
+
+        ``section`` cannot answer this: it returns ``{}`` for a table nobody wrote and for a table
+        written empty, and those mean opposite things where a table is an opt-in. Measured on one
+        real config, whose ``[sources.setlist_fm]`` held only comments and so opted nothing in.
+        """
+        node: object = self.raw
+        for name in names:
+            if not isinstance(node, dict) or name not in node:
+                return False
+            node = node[name]
+        return True
+
     @property
     def user_agent_is_sentinel(self) -> bool:
         """True while user_agent still bears the shipped CHANGE-ME marker."""

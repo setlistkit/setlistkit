@@ -70,7 +70,9 @@ def configured(config) -> list[Importer]:
     That last point is the reason this is a registry query rather than a list: a source added
     after today must work by being registered and configured, without a second place to update.
     """
-    return [imp for imp in IMPORTERS.values() if config.section("sources", imp.id)]
+    # Written, not non-empty. A table whose every key is commented out still says this operator
+    # has the source, and reading it as absent hides it from every report while exiting 0.
+    return [imp for imp in IMPORTERS.values() if config.has_section("sources", imp.id)]
 
 
 def mirror(config) -> Importer | None:

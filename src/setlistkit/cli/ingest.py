@@ -154,7 +154,7 @@ def _fold_in_tapes(mirror: _Mirror, config, cache, args) -> None:
     an empty listing for one would put it in the count of tapes whose listing we could not read.
     """
     for importer in tape_sources():
-        if not config.section("sources", importer.id):
+        if not config.has_section("sources", importer.id):
             continue
         got = importer.tapes(config, cache,
                              min_year=min_year(config, importer.id, args.min_year))
@@ -178,7 +178,7 @@ def _mirror_source(config, args) -> str | None:
     fails loudly. That is the correct behavior for a half-configured archive.org.
     """
     chosen = IMPORTERS.get(getattr(args, "source", "") or "")
-    if chosen is not None and chosen.feeds_mirror and config.section("sources", chosen.id):
+    if chosen is not None and chosen.feeds_mirror and config.has_section("sources", chosen.id):
         return chosen.id
     found = mirror_source(config)
     return found.id if found else None

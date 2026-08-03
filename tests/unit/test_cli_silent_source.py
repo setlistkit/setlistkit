@@ -149,6 +149,19 @@ def test_check_passes_when_every_source_table_is_known(tmp_path, loud_fm, capsys
     assert "matches no source" not in capsys.readouterr().err
 
 
+def test_an_empty_source_table_still_opts_the_source_in(tmp_path, loud_fm, capsys):
+    """A table written with every key commented out is an opt-in, and reads as one.
+
+    Measured on the real moe-pack config, whose `[sources.setlist_fm]` held only comments. The
+    presence test was the table's truthiness, so an empty table was indistinguishable from a table
+    nobody wrote, and the source went missing from every report while check exited 0.
+    """
+    cfg = _cfg(tmp_path, tmp_path / "pack", sources="[sources.loud_fm]\n")
+
+    assert main(["--config", cfg, "check"]) == EXIT_OK
+    assert "loud_fm" in capsys.readouterr().out
+
+
 def test_bootstrap_names_a_configured_source_that_gave_nothing(
         tmp_path, mute_fm, loud_fm, capsys):
     """The draft step reports each source's contribution, so a zero cannot pass unseen.
