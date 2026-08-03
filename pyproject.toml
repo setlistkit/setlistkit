@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
     "jsonschema>=4.0",
     "isodate>=0.7",
+    "shtab",
 ]
 
 [project.optional-dependencies]
