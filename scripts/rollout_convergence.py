@@ -66,7 +66,7 @@ def _corpus(config_path: str):
         store.init()
         span = store.corpus.first_and_last()
         if span is None:
-            raise SystemExit(f"the corpus in {config.data_root} is empty; run `slkit ingest`")
+            raise SystemExit(f"the corpus in {config.data_root} is empty; run `slkit build`")
         return list(store.corpus.shows()), span[1], predict_config(config)
 
 

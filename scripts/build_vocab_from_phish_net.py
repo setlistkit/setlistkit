@@ -3,11 +3,11 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """Draft a pack's vocabulary from a cached phish.net pull, and report what it cannot answer.
 
-``slkit pack suggest-vocab`` exists and is the wrong tool here. It carves a vocabulary out of a
+``slkit pack draft`` exists and is the wrong tool here. It carves a vocabulary out of a
 bag of archive.org FLAC titles -- a stranger's filenames, full of track numbers and taper sigils --
 by fuzzy-clustering near-duplicates for a human to trim. That work is unnecessary against
 phish.net, which ships a stable ``songid`` beside every ``song``. The identity question
-suggest-vocab has to guess at is already answered by the source, so guessing at it again can only
+a draft has to guess at is already answered by the source, so guessing at it again can only
 lose.
 
 WHY phish.net AND NOT phish.in. The merge is configured so a phish.net record wins any date it

@@ -13,7 +13,7 @@ Two protections follow from that, and both are here rather than in the caller:
 
 * **The no-shrink rule.** A run that leaves a table with less than half of what it started with is
   assumed broken rather than authoritative. Ported from the version this comes from, which arrived
-  at it the hard way, and it is the same guard ``slkit ingest`` applies to the corpus.
+  at it the hard way, and it is the same guard ``slkit build`` applies to the corpus.
 * **Nothing else writes these tables.** ``replace_shows`` does not touch them, and a test asserts
   it: an ingest that quietly took the ledger with it would be unrecoverable and silent.
 
@@ -40,12 +40,12 @@ from datetime import datetime, timezone
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..model.rollout import SongChance
 
-# The three tables this module owns. Named here so the no-shrink guard, `slkit dump picks` and the
+# The three tables this module owns. Named here so the no-shrink guard, `slkit show picks` and the
 # ingest-does-not-touch-them test all count the same set rather than three hand-typed lists.
 LEDGER_TABLES = ("pick_iterations", "picks", "pick_outcomes")
 
 # Below this fraction of what a run started with, a table is assumed to have lost rows by accident.
-# The same number and the same reasoning as the corpus guard in `slkit ingest`.
+# The same number and the same reasoning as the corpus guard in `slkit build`.
 NO_SHRINK_FRAC = 0.5
 
 

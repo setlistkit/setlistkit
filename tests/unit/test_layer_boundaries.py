@@ -120,7 +120,7 @@ def test_layer_does_not_import_forbidden_siblings(layer, forbidden):
 
 
 # The cache is gitignored, so anything reading it works on the machine that pulled and comes back
-# empty everywhere else. `slkit ingest` is the ONE command allowed to open it -- it is the command
+# empty everywhere else. `slkit build` is the ONE command allowed to open it -- it is the command
 # whose job is to project raw payloads into tables -- and every later command reads those tables.
 #
 # This is not a hypothetical. The previous implementation read the uploader out of the raw payload

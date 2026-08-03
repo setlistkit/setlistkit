@@ -257,7 +257,7 @@ def _nothing_message(since: str | None, until: str | None) -> str:
     table to prove it.
     """
     if since is None and until is None:
-        return "nothing to export: no durations are stored. Run `slkit derive durations` first."
+        return "nothing to export: no durations are stored. Run `slkit build --stage=durations` first."
     return (f"nothing to export: no performances fall in {daterange.label(since, until)}. "
             "The store may hold others outside it -- `slkit store status` counts them all.")
 
@@ -265,7 +265,7 @@ def _nothing_message(since: str | None, until: str | None) -> str:
 def _nothing_songbook(since: str | None, until: str | None) -> str:
     """Why an empty bundle was refused before the show floor even ran."""
     if since is None and until is None:
-        return "nothing to export: no shows are stored. Run `slkit ingest` first."
+        return "nothing to export: no shows are stored. Run `slkit build` first."
     return (f"nothing to export: no shows fall in {daterange.label(since, until)}. "
             "The store may hold others outside it -- `slkit store status` counts them all.")
 

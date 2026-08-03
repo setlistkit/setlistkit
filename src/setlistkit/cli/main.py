@@ -2,11 +2,12 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """``slkit`` command dispatch.
 
-The one job of this module is to be the single place that catches a
-:class:`DiagnosticError` and turns it into rendered stderr output plus a non-zero exit
-code. Every other layer raises well-formed diagnostics and stays out of the presentation
-business. Subcommands grow here phase by phase; for now the scaffold ships ``config``,
-which is enough to exercise config resolution and the diagnostic renderer end to end.
+This module has one job. It is the single place that catches a :class:`DiagnosticError` and
+turns it into rendered stderr output and a non-zero exit code. Every other layer raises a
+well-formed diagnostic and stays out of the presentation business.
+
+Each command gets one builder function and one entry in ``_COMMANDS``. A command that reads
+no config resolves it later, and ``_run`` names those.
 """
 
 from __future__ import annotations
@@ -57,6 +58,9 @@ _SECONDS_PER_REQUEST = 1.5
 # config's [sources.*] tables) still lets argparse reject an unknown name with a usage line.
 _SOURCES = tuple(IMPORTERS)
 
+# `slkit build` stages, in the order a run applies them.
+_STAGES = ("ingest", "durations")
+
 # argparse wraps help to the terminal, which on a wide window is unreadable.
 _MAX_HELP_WIDTH = 90
 
@@ -94,7 +98,10 @@ def _set_formatter(parser: argparse.ArgumentParser) -> None:
         if not isinstance(action, argparse._SubParsersAction):  # pylint: disable=protected-access
             continue
         for child in action.choices.values():
-            child.formatter_class = _WrappedHelp
+            # Only the ones still on argparse's default. A command that asked for the raw
+            # formatter did so because its description is shaped, and wrapping would undo it.
+            if child.formatter_class is argparse.HelpFormatter:
+                child.formatter_class = _WrappedHelp
             _set_formatter(child)
 
 
@@ -102,11 +109,10 @@ def _set_formatter(parser: argparse.ArgumentParser) -> None:
 _ROOT_DESCRIPTION = """\
 setlistkit predicts what a band plays next, from the tapes and setlists of what it played before.
 
-The work moves in one direction. Each stage reads what the stage before it published:
+The work moves in one direction. Each step reads what the step before it published:
 
   pull      fetch raw data from each configured source into a local cache
-  ingest    parse the cache with a band pack, merge the sources, publish a corpus
-  derive    compute what ingest did not, such as how long each song runs
+  build     parse the cache with a band pack, merge the sources, publish a corpus
   predict   rank every song's chance on one night
   replay    predict past nights blind, and grade the model against them
   export    write a bundle for another program to draw
@@ -115,8 +121,34 @@ The work moves in one direction. Each stage reads what the stage before it publi
 
 Two inputs decide the result, and both are yours. The config names the sources that take part.
 The band pack names the songs. A mistake in the config makes a source silent; a gap in the pack
-makes a real song invisible. Neither raises an error, so `slkit config check` and `slkit pack
-lint` exist to ask.\
+makes a real song invisible. Neither raises an error, so `slkit check` and `slkit pack check`
+exist to ask.\
+"""
+
+
+# Wrapped by hand, because a shaped list needs the raw formatter and the raw formatter wraps
+# nothing at all. Keep these inside the width above.
+_BUILD_DESCRIPTION = """\
+Turn the cached raw data into a published corpus. The stages run in order:
+
+  ingest      parse the cache, merge every configured source, publish it
+  durations   reconcile every tape of a night, so each song gets one length
+
+Run `slkit pull` first; nothing here touches the network. The band pack decides
+which titles become songs, so a gap in the pack shows up here as a song that is
+quietly absent. The run reports what it dropped and why. A merge that shrinks the
+store far below what it already holds is refused, and --force overrides that guard.\
+"""
+
+_COMPGEN_DESCRIPTION = """\
+Print a completion script to standard output. The script is generated from this
+program's own parser, so it names every command and flag that exists now. Nothing
+is installed and nothing is written. Load it with:
+
+  eval "$(slkit compgen)"
+
+Put that line in your shell's startup file to keep it. Regenerate after an upgrade;
+a script from an older version completes the older tree.\
 """
 
 
@@ -131,23 +163,37 @@ def _add_dry_run(parser: argparse.ArgumentParser, help_text: str) -> None:
                         help=help_text)
 
 
-def _add_config(sub) -> None:
-    """The ``slkit config`` parser."""
-    config_cmd = sub.add_parser(
-        "config", help="inspect the resolved configuration",
-        description="Show what setlistkit read from disk, and check that it can run. The config "
-                    "decides which sources take part, which pack the parser trusts, and where "
-                    "state goes.")
-    config_sub = config_cmd.add_subparsers(dest="config_action")
-    config_sub.add_parser(
-        "show", help="print the resolved configuration",
-        description="Print the configuration after every default, override and path is resolved. "
-                    "Use it to see the values the program uses, not the values the file holds.")
-    config_sub.add_parser(
-        "check", help="validate the config, including network identity",
+def _add_check(sub) -> None:
+    """The ``slkit check`` parser."""
+    sub.add_parser(
+        "check", help="validate the config, and ask each source whether it can name its band",
         description="Validate the config file. Then ask each configured source whether it can "
                     "name its band. A source that cannot name its band contributes nothing to a "
-                    "merge, and every other command still exits 0, so this is where you find it.")
+                    "merge, and every other command still exits 0, so this is where you find it. "
+                    "Run it after any edit to the config.")
+
+
+def _add_show(sub) -> None:
+    """The ``slkit show`` parser."""
+    show_cmd = sub.add_parser(
+        "show", help="print what is on disk, as plain text",
+        description="Print what is on disk, as plain text. Nothing here writes, and nothing here "
+                    "reaches the network. Use it to read what a run left behind, without a "
+                    "database client.")
+    show_sub = show_cmd.add_subparsers(dest="show_action")
+    show_sub.add_parser(
+        "config", help="the configuration, after every default and path is resolved",
+        description="Print the configuration after every default, override and path is resolved. "
+                    "Use it to see the values the program uses, not the values the file holds.")
+    show_sub.add_parser(
+        "corpus", help="every derived table, narrowed by --since and --until",
+        description="Print the derived tables. A table with no date axis is printed in full, and "
+                    "says so.")
+    show_sub.add_parser(
+        "picks", help="the prediction ledger",
+        description="Print the prediction ledger. These are the only tables here that cannot be "
+                    "rebuilt from the cache, which makes this the strongest case for reading them "
+                    "before anything else.")
 
 
 def _add_store(sub) -> None:
@@ -168,37 +214,18 @@ def _add_store(sub) -> None:
                     "whether a run wrote what you expected.")
 
 
-def _add_dump(sub) -> None:
-    """The ``slkit dump`` parser."""
-    dump_cmd = sub.add_parser(
-        "dump", help="print a plain-text view of derived state",
-        description="Print derived state as plain text. Use it to read what a command wrote, "
-                    "without a database client. The command writes nothing.")
-    dump_cmd.add_argument(
-        "what", nargs="?", choices=("all", "picks"), default="all",
-        help="which tables to print. `picks` is the prediction ledger, "
-             "and it is the strongest case for this command in the project: those tables are the "
-             "only ones here that cannot be rebuilt",
-    )
-    # Inclusive at both ends. A half-open range is the classic off-by-one, and this is the view
-    # someone reaches for when they already suspect something is wrong -- one bug at a time.
-    dump_cmd.add_argument("--since", metavar="YYYY-MM-DD",
-                          help="only rows on or after this date (tables with no date axis are "
-                               "printed in full, and say so)")
-    dump_cmd.add_argument("--until", metavar="YYYY-MM-DD",
-                          help="only rows on or before this date")
-
-
 def _add_pull(sub) -> None:
     """The ``slkit pull`` parser."""
     pull_cmd = sub.add_parser(
         "pull", help="fetch raw source data into the cache",
         description="Fetch raw data from one source into the on-disk cache under data_root. "
-                    "Nothing is parsed and nothing reaches the corpus here; run `slkit ingest` "
+                    "Nothing is parsed and nothing reaches the corpus here; run `slkit build` "
                     "next. Each request is rate-limited, and carries the user_agent the config "
                     "names. A cached item is re-asked conditionally, so an unchanged item moves "
                     "no bytes.")
-    pull_cmd.add_argument("source", choices=_SOURCES, help="which source to fetch from")
+    pull_cmd.add_argument(
+        "--source", metavar="a,b", type=_source_list,
+        help="comma-separated sources to fetch (default: every source the config declares)")
     pull_cmd.add_argument(
         "--force-rescan", action="store_true",
         help="re-ask for data already cached (still rate-limited, and conditional: an "
@@ -212,55 +239,29 @@ def _add_pull(sub) -> None:
                            "without fetching any of it")
 
 
-def _add_ingest(sub) -> None:
-    """The ``slkit ingest`` parser."""
-    ingest_cmd = sub.add_parser(
-        "ingest", help="parse the cached raw data and publish the merged corpus",
-        description="Parse the cached raw data, merge every configured source into one corpus, "
-                    "then publish it. Run `slkit pull` first; this step touches no network. The "
-                    "band pack decides which titles become songs, so a gap in the pack shows up "
-                    "here as a song that is quietly absent. The run reports what it dropped and "
-                    "why. A merge that shrinks the store far below what is stored is refused; "
-                    "--force overrides that guard.")
-    ingest_cmd.add_argument("source", choices=_SOURCES, nargs="?", default=_SOURCES[0],
-                            help="which cached source to parse")
-    ingest_cmd.add_argument("--pack", metavar="PATH",
-                            help="pack directory to parse with (overrides [catalog] pack)")
-    ingest_cmd.add_argument("--min-year", type=int, metavar="YEAR",
-                            help="the min_year the cache was pulled under, if not the configured "
-                                 "one (a listing is cached per collection and min_year)")
-    _add_dry_run(ingest_cmd, "parse, merge and report in full, but write nothing to the database")
-    ingest_cmd.add_argument(
+def _add_build(sub) -> None:
+    """The ``slkit build`` parser."""
+    build_cmd = sub.add_parser(
+        "build", help="turn the cached raw data into a published corpus",
+        description=_BUILD_DESCRIPTION, formatter_class=_WrappedRawHelp)
+    build_cmd.add_argument(
+        "--stage", choices=_STAGES, default=None,
+        help="run one stage only (default: every stage, in order)")
+    build_cmd.add_argument("--min-year", type=int, metavar="YEAR",
+                           help="the min_year the cache was pulled under, if not the configured "
+                                "one (a listing is cached per collection and min_year)")
+    _add_dry_run(build_cmd, "parse, merge and report in full, but write nothing to the database")
+    build_cmd.add_argument(
         "--force", action="store_true",
         help="publish even when the merge produced far fewer shows than are stored (see the "
              "no-shrink guard)",
     )
-    ingest_cmd.add_argument(
+    build_cmd.add_argument(
         "--profile", metavar="PATH",
         help="write the funnel's per-decision counts to PATH as JSON (see catalog.funnel); the "
              "counts are always taken during a parse, this only decides whether they are "
              "written out",
     )
-
-
-def _add_derive(sub) -> None:
-    """The ``slkit derive`` parser."""
-    derive_cmd = sub.add_parser(
-        "derive", help="compute derived state from what ingest published",
-        description="Compute state that `slkit ingest` does not publish directly. Each "
-                    "sub-command reads the published corpus, and writes its own tables. Run "
-                    "ingest first.")
-    derive_sub = derive_cmd.add_subparsers(dest="derive_action")
-    durations_cmd = derive_sub.add_parser(
-        "durations", help="how long each song runs, reconciled across every tape of a night",
-        description="Give each performance one length. Several tapes of a night disagree about "
-                    "where a song starts and stops, so the run reconciles them and reports how it "
-                    "settled each night. A song that no tape times keeps no length, and is "
-                    "counted.")
-    durations_cmd.add_argument("--pack", metavar="PATH",
-                               help="pack directory to derive with (overrides [catalog] pack)")
-    _add_dry_run(durations_cmd,
-                 "read, reconcile and report in full, but write nothing to the database")
 
 
 def _add_predict(sub) -> None:
@@ -299,11 +300,6 @@ def _add_replay(sub) -> None:
     # Inclusive at both ends and spelled exactly as `dump` and `export` spell them. A range that
     # means one thing in one command and something a day wider in another is a range nobody can
     # check a published number against.
-    replay_cmd.add_argument("--since", metavar="YYYY-MM-DD",
-                            help="grade nights on or after this date (default: the window in "
-                                 "[model] replay_since_back, anchored on the last stored show)")
-    replay_cmd.add_argument("--until", metavar="YYYY-MM-DD",
-                            help="grade nights on or before this date")
     _add_model_flags(replay_cmd)
     _add_dry_run(replay_cmd, "predict and grade the whole window and report it, but write "
                              "nothing to the picks ledger")
@@ -330,11 +326,6 @@ def _add_drops(sub) -> None:
                     "nears the night. A song that holds its place across every pass is a stable "
                     "pick; a song that only arrives at the last pass is not. The walk costs "
                     "nights times depth predictions.")
-    drops_parser.add_argument("--since", metavar="YYYY-MM-DD",
-                              help="cover nights on or after this date (default: the window in "
-                                   "[model] replay_since_back, anchored on the last stored show)")
-    drops_parser.add_argument("--until", metavar="YYYY-MM-DD",
-                              help="cover nights on or before this date")
     drops_parser.add_argument(
         "--depth", type=int, metavar="N",
         help=f"how many earlier cutoffs to predict each night from (default: {DEFAULT_DEPTH}). "
@@ -364,26 +355,6 @@ def _add_model_flags(parser: argparse.ArgumentParser) -> None:
         help="how many times to draw the night (overrides rollouts in [model])")
 
 
-def _add_export_common(parser: argparse.ArgumentParser, help_text: str) -> None:
-    """Add --since/--until to one export sub-verb's parser, each carrying its own explanation.
-
-    Mirrors ``_add_dry_run``'s idiom: one implementation, called once per sub-verb with the text
-    that explains what narrowing means for THAT bundle, because the two do not mean the same
-    thing (the Tape Measure recomputes statistics over the window; the Songbook floors and
-    dedupes over it). NOT added to the parent ``export`` parser: argparse would then require
-    ``slkit export --since ... songbook``, and ``slkit export songbook --help`` would not list the
-    flag at all -- the same recursive-help complaint ``_add_dry_run`` already exists to avoid.
-
-    Spelled and bounded exactly as ``slkit dump`` spells them -- inclusive at both ends, same
-    YYYY-MM-DD, same two names. A range that means one thing in one command and something a day
-    wider in another is a range nobody can check a published number against.
-    """
-    parser.add_argument("--since", metavar="YYYY-MM-DD",
-                        help=f"only {help_text}, on or after this date")
-    parser.add_argument("--until", metavar="YYYY-MM-DD",
-                        help=f"only {help_text}, on or before this date")
-
-
 def _add_export(sub) -> None:
     """The ``slkit export`` parser."""
     export_cmd = sub.add_parser(
@@ -401,29 +372,22 @@ def _add_export(sub) -> None:
     tapemeasure_cmd = export_sub.add_parser(
         "tapemeasure", help="song lengths, features, credits and caveats as one JSON bundle",
         description="Write song lengths, features, tape credits and caveats as one JSON bundle. "
-                    "Run `slkit derive durations` first, or the lengths are absent. Every "
+                    "Run `slkit build --stage=durations` first, or the lengths are absent. Every "
                     "statistic is recomputed over the window --since and --until name; none is "
                     "read whole-corpus and then given the window as a label.")
     tapemeasure_cmd.add_argument("--out", metavar="PATH", default="tapemeasure.json",
                                  help="where to write the bundle")
-    _add_export_common(tapemeasure_cmd,
-                       "performances (song statistics are recomputed over the window, not "
-                       "read whole-corpus)")
     _add_dry_run(tapemeasure_cmd, "build the bundle and report it, but write no file")
 
     songbook_cmd = export_sub.add_parser(
         "songbook", help="every show's songs, sorted into a vocabulary, as one JSON bundle",
         description="Write every show's songs, sorted into the pack vocabulary, as one JSON "
-                    "bundle. A show below the floor, and a song the pack does not name, are both "
-                    "counted and reported. Neither is dropped without a number to show for it.")
+                    "bundle. --since and --until choose the shows, and the floor and the "
+                    "de-duplication run over that window. A show below the floor, and a song the "
+                    "pack does not name, are both counted and reported. Neither is dropped "
+                    "without a number to show for it.")
     songbook_cmd.add_argument("--out", metavar="PATH", default="songbook.json",
                               help="where to write the bundle")
-    songbook_cmd.add_argument(
-        "--pack", metavar="PATH",
-        help="pack directory to canonicalize song names with (overrides [catalog] pack)")
-    _add_export_common(songbook_cmd,
-                       "shows (below-floor shows and out-of-vocabulary songs are still "
-                       "counted and reported, never silently dropped)")
     _add_dry_run(songbook_cmd, "build the bundle and report it, but write no file")
 
 
@@ -441,73 +405,76 @@ def _add_pack(sub) -> None:
         description="Create the starter files a valid pack needs. A file that already exists is "
                     "left alone, unless you give --force.")
     init_cmd.add_argument(
-        "--pack", metavar="DIR", required=True,
-        help="pack directory to scaffold (created if absent)")
-    init_cmd.add_argument(
         "--force", action="store_true",
         help="overwrite scaffold files that already exist (default: leave them untouched)")
-    lint_cmd = pack_sub.add_parser(
-        "lint", help="validate a pack and run conformance checks",
+    check_cmd = pack_sub.add_parser(
+        "check", help="validate a pack and run conformance checks",
         description="Check that a pack is well formed, then check its rules against the cached "
                     "corpus. Reports a rule that never fires, a rule another rule already covers, "
-                    "an alias nothing can reach, and a title no rule names. The corpus checks "
-                    "read titles the parser KEPT, so a song on no tape at all cannot reach them; "
-                    "`slkit pack suggest-vocab --diff` is the check that finds those.")
-    lint_cmd.add_argument(
-        "--pack", metavar="PATH",
-        help="pack directory to lint (overrides [catalog] pack in config)",
-    )
-    lint_cmd.add_argument(
+                    "an alias nothing can reach, and a title no rule names. It reads titles the "
+                    "parser KEPT, so a song on no tape at all cannot reach it. `slkit pack "
+                    "missing` asks that other question.")
+    check_cmd.add_argument(
         "--format", choices=("human", "json"), default="human",
         help="output format",
     )
-    lint_cmd.add_argument(
+    check_cmd.add_argument(
         "--no-corpus", action="store_true",
         help="skip the checks that read the cached corpus (dead rules, redundant rules, "
              "unreachable aliases, unknown titles)",
     )
-    suggest_cmd = pack_sub.add_parser(
-        "suggest-vocab",
-        help="draft a pack's vocabulary/aliases from a bag of raw archive.org titles",
-        description="Cluster raw tape titles into a draft vocabulary and alias map. A source that "
-                    "publishes song names wins the canonical spelling, so a title welded to a "
-                    "track number does not become a song. The draft is a starting point: read it "
-                    "before you trust it. The command has two shapes. With --out it WRITES the "
-                    "draft. With --diff it writes nothing, and only names the candidates the pack "
-                    "does not already know.",
+    draft_cmd = pack_sub.add_parser(
+        "draft",
+        help="draft a pack's vocabulary and aliases from raw tape titles",
+        description="Cluster raw tape titles into a draft vocabulary and alias map, and WRITE "
+                    "them to --out. A source that publishes song names wins the canonical "
+                    "spelling, so a title welded to a track number does not become a song. The "
+                    "draft is a starting point: read it before you trust it. To ask what the "
+                    "pack is missing without writing anything, run `slkit pack missing`.",
     )
-    suggest_cmd.add_argument(
+    draft_cmd.add_argument(
         "--from", dest="source", metavar="PATH",
         help="a JSON array of raw title strings (e.g. raw/archive_org/titles.json). Omit it to "
              "read the mirror source's cache, which is where `slkit bootstrap` reads",
     )
-    suggest_cmd.add_argument(
+    draft_cmd.add_argument(
         "--curated", metavar="PATH",
         help="a JSON array of song names from a source that PUBLISHES titles (setlist.fm), "
              "which are clustered with --from but win the canonical spelling. Read from the "
              "configured setlist sources when --from is omitted",
     )
-    suggest_cmd.add_argument(
-        "--diff", action="store_true",
-        help="list the candidates the pack does not already name, and write nothing. This is the "
-             "question to ask after a later pull: which published songs is the pack still "
-             "missing, including songs on no tape at all",
+    draft_cmd.add_argument(
+        "--out", metavar="DIR", required=True,
+        help="directory to write vocabulary.json, aliases.json and SUGGESTIONS.md into",
     )
-    suggest_cmd.add_argument(
-        "--pack", metavar="PATH",
-        help="pack directory to compare against under --diff (overrides [catalog] pack)")
-    suggest_cmd.add_argument(
-        "--out", metavar="DIR",
-        help="directory to write vocabulary.json, aliases.json and SUGGESTIONS.md into "
-             "(required unless --diff)",
-    )
-    suggest_cmd.add_argument(
+    draft_cmd.add_argument(
         "--cutoff", type=float, default=0.88, metavar="RATIO",
         help="difflib similarity at which two titles merge; higher is more conservative",
     )
-    suggest_cmd.add_argument(
+    draft_cmd.add_argument(
         "--force", action="store_true",
         help="overwrite existing non-empty vocabulary.json / aliases.json in --out",
+    )
+    missing_cmd = pack_sub.add_parser(
+        "missing",
+        help="name the drafted candidates the pack does not already know",
+        description="Draft candidates the same way `slkit pack draft` does, then name the ones "
+                    "the pack does not already know. Writes nothing. This is the question to ask "
+                    "after a later pull, and `slkit pack check` cannot ask it: check reads the "
+                    "corpus, so a published song on no tape at all never reaches it.",
+    )
+    missing_cmd.add_argument(
+        "--from", dest="source", metavar="PATH",
+        help="a JSON array of raw title strings. Omit it to read the mirror source's cache",
+    )
+    missing_cmd.add_argument(
+        "--curated", metavar="PATH",
+        help="a JSON array of song names from a source that PUBLISHES titles. Read from the "
+             "configured setlist sources when --from is omitted",
+    )
+    missing_cmd.add_argument(
+        "--cutoff", type=float, default=0.88, metavar="RATIO",
+        help="difflib similarity at which two titles merge; higher is more conservative",
     )
 
 
@@ -520,15 +487,7 @@ def _add_compgen(sub) -> None:
     """The ``slkit compgen`` parser."""
     compgen_cmd = sub.add_parser(
         "compgen", help="print a shell completion script for this command tree",
-        description="Print a completion script to standard output. The script is generated from "
-                    "this program's own parser, so it names every command and flag that exists "
-                    "now. Nothing is installed and nothing is written. Load it with:\n"
-                    "\n"
-                    "  eval \"$(slkit compgen)\"\n"
-                    "\n"
-                    "Put that line in your shell's startup file to keep it. Regenerate after an "
-                    "upgrade; a script from an older version completes the older tree.",
-        formatter_class=_WrappedRawHelp)
+        description=_COMPGEN_DESCRIPTION, formatter_class=_WrappedRawHelp)
     compgen_cmd.add_argument(
         "shell", nargs="?", default=_default_shell(),
         help="which shell to write for (default: read from $SHELL). shtab decides which shells "
@@ -548,14 +507,11 @@ def _add_bootstrap(sub) -> None:
                     "then ingests. The config decides which sources take part: a [sources.*] "
                     "table is the opt-in, and no source name is built into this command. A source "
                     "that returns nothing is named in the report, not treated as an error. Review "
-                    "the drafted pack afterwards, and run `slkit pack lint`.",
+                    "the drafted pack afterwards, and run `slkit pack check`.",
     )
     boot.add_argument(
-        "--pack", metavar="DIR",
-        help="pack directory to draft and scaffold into (overrides [catalog] pack in config)")
-    boot.add_argument(
         "--cutoff", type=float, default=0.88, metavar="RATIO",
-        help="suggest-vocab merge similarity; higher is more conservative")
+        help="draft merge similarity; higher is more conservative")
     boot.add_argument(
         "--skip-pull", action="store_true",
         help="do not touch the network; draft and ingest from whatever is already cached")
@@ -589,15 +545,26 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="path to a config file (overrides SLKIT_CONFIG and the default search order)",
     )
+    # Global, because each one meant the same thing on every command that had it, and a window
+    # that is a day wider in one command is a number nobody can check against another.
+    parser.add_argument(
+        "--pack", metavar="DIR",
+        help="pack directory to work with (overrides [catalog] pack in config)")
+    parser.add_argument(
+        "--since", metavar="YYYY-MM-DD",
+        help="ignore anything before this date. Inclusive, and read only by the commands that "
+             "carry a date axis")
+    parser.add_argument(
+        "--until", metavar="YYYY-MM-DD",
+        help="ignore anything after this date. Inclusive")
 
     sub = parser.add_subparsers(dest="command")
 
-    _add_config(sub)
+    _add_check(sub)
+    _add_show(sub)
     _add_store(sub)
-    _add_dump(sub)
     _add_pull(sub)
-    _add_ingest(sub)
-    _add_derive(sub)
+    _add_build(sub)
     _add_predict(sub)
     _add_replay(sub)
     _add_drops(sub)
@@ -610,10 +577,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_config(config, args) -> int:
-    """`slkit config [show|check]`, defaulting to show."""
-    if args.config_action == "check":
-        return _cmd_config_check(config)
+def _cmd_show(config, args) -> int:
+    """`slkit show [config|corpus|picks]`, defaulting to the configuration."""
+    action = getattr(args, "show_action", None)
+    if action in ("corpus", "picks"):
+        return _cmd_dump(config, argparse.Namespace(
+            what="all" if action == "corpus" else "picks",
+            since=args.since, until=args.until))
     return _cmd_config_show(config)
 
 
@@ -789,18 +759,46 @@ def _cmd_export(config, args) -> int:
         raise _malformed_date(exc, "write") from exc
 
 
+def _source_list(value: str):
+    """Parse ``--source=a,b`` into importer ids, refusing a name the registry does not hold."""
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    unknown = [name for name in names if name not in IMPORTERS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown source(s): {', '.join(unknown)}. Known: {', '.join(_SOURCES)}")
+    return names
+
+
 def _cmd_pull(config, args) -> int:
-    """Fetch a source into the raw cache. Writes nothing to the database.
+    """Fetch each named source into the raw cache. Writes nothing to the database.
 
-    The refusal comes first and comes from :func:`require_network_identity`, so a run with the
-    placeholder ``user_agent`` stops here rather than at the first request -- there is no state
-    to half-write, and the message is the same one ``slkit config check`` gives.
-
-    Every setting is looked up under ``args.source``, never under a hard-coded table name. With
-    one source those are the same string; with two, a hard-coded one makes ``slkit pull setlist_fm``
-    quietly read the archive.org table and pull archive.org.
+    A source named but not configured is skipped and said aloud, because a silent skip and a
+    source that returned nothing look the same afterwards.
     """
     require_network_identity(config)
+    # A source named by hand is run whatever the config holds, so the importer's own diagnostic
+    # gets to name the exact setting that is missing. Only the default list is filtered, because
+    # there "every source" can only mean the ones this deployment opted into.
+    if args.source is None:
+        running = configured(config)
+    else:
+        running = [IMPORTERS[name] for name in args.source]
+    if not running:
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary="no configured source to pull",
+            detail="A [sources.<id>] table in the config is what opts a source in. Add one,\n"
+                   "or name a source you have configured.",
+        ))
+    for importer in running:
+        if len(running) > 1:
+            print(f"\n-- {importer.display_name} --", flush=True)
+        _pull_one(config, args, importer)
+    return EXIT_OK
+
+
+def _pull_one(config, args, importer) -> int:
+    """Fetch one source. Every setting is read under that source's own id, never a fixed name."""
     cache = RawCache(config.data_root)
 
     # flush=True on both, because a pull of a whole collection runs for hours and Python buffers
@@ -816,9 +814,7 @@ def _cmd_pull(config, args) -> int:
         print(f"batch {batch_id} (sent in the User-Agent of every request this run)", flush=True)
 
     # One path for every source: the importer names its client and what the pull is keyed on (an
-    # archive collection, a MusicBrainz id). Both clients' pull() take the same keyword shape, so
-    # the branch that used to sit here is now a registry lookup.
-    importer = IMPORTERS[args.source]
+    # archive collection, a MusicBrainz id). Both clients' pull() take the same keyword shape.
     result = importer.make_client(config, cache).pull(
         importer.identity(config), min_year=min_year(config, importer.id, args.min_year),
         force_rescan=args.force_rescan, dry_run=args.dry_run,
@@ -909,18 +905,16 @@ def _cmd_bootstrap(config, args) -> int:
         _step(2, "pull — SKIPPED (--skip-pull); drafting from the existing cache")
     else:
         _step(2, "pull — fetch raw data into the cache, one configured source at a time")
-        for importer in sources:
-            print(f"\n-- {importer.display_name} --", flush=True)
-            _cmd_pull(config, argparse.Namespace(
-                source=importer.id, min_year=None,
-                force_rescan=args.force_rescan, dry_run=args.dry_run))
+        _cmd_pull(config, argparse.Namespace(
+            source=[importer.id for importer in sources], min_year=None,
+            force_rescan=args.force_rescan, dry_run=args.dry_run))
 
     if args.dry_run:
         print("\ndry run: stopping before draft, scaffold and ingest. "
               "Re-run without --dry-run to build.")
         return EXIT_OK
 
-    _step(3, f"suggest-vocab — draft a vocabulary into {pack_dir}")
+    _step(3, f"pack draft — draft a vocabulary into {pack_dir}")
     # Two inputs, and a deployment can have either one alone. Tape titles come from the mirror
     # source. Published song names come from the setlist sources. A band that nobody taped has
     # only the names, and those are the better input: a person typed them on purpose.
@@ -943,43 +937,58 @@ def _cmd_bootstrap(config, args) -> int:
     _step(4, "pack init — scaffold the remaining pack files, clobbering none")
     pack_init(argparse.Namespace(pack=str(pack_dir), force=False, config=args.config))
 
-    _step(5, "pack lint — validate the drafted pack")
+    _step(5, "pack check — validate the drafted pack")
     if pack_lint(argparse.Namespace(
             pack=str(pack_dir), format="human", no_corpus=False, config=args.config)) != EXIT_OK:
         print("  (lint reported findings — expected for a fresh draft; they are a worklist, "
               "not a failure)")
 
-    _step(6, "ingest — parse the cache and publish the merged corpus")
+    _step(6, "build --stage=ingest — parse the cache and publish the merged corpus")
     # No source is named here. Ingest reads the mirror the config declares, and it folds each
     # configured setlist source on top of it.
     ingest(config, argparse.Namespace(
         source=None, pack=str(pack_dir), min_year=None,
         dry_run=False, force=False, profile=None, config=args.config))
 
-    _step(7, "derive durations — reconcile each song's length across every tape of a night")
+    _step(7, "build --stage=durations — reconcile each song's length across every tape of a night")
     derive(config, argparse.Namespace(
         derive_action="durations", pack=str(pack_dir), dry_run=False, config=args.config))
 
     print(f"\nbootstrap complete. The corpus is ingested and durations are derived — "
           f"`slkit export`\nwill now write a bundle to report from. Review "
           f"{pack_dir / 'SUGGESTIONS.md'}, trim vocabulary.json\nby hand, then re-run "
-          f"`slkit ingest` and `slkit derive durations` to apply your edits.")
+          f"`slkit build` and `slkit build --stage=durations` to apply your edits.")
     return EXIT_OK
 
 
 # Command name -> handler. A table rather than an if-chain, so adding a subcommand is one
 # entry here and one parser above, and the dispatcher itself stops growing a branch per phase.
+def _cmd_build(config, args) -> int:
+    """Run the build stages in order, or the one ``--stage`` names.
+
+    A later stage reads what the one before it published, so a run that stops on a failure stops
+    there rather than carrying on with a corpus that was never written.
+    """
+    stages = {"ingest": ingest, "durations": derive}
+    for name in ([args.stage] if args.stage else _STAGES):
+        if len(_STAGES) > 1 and not args.stage:
+            print(f"\n== {name} ==", flush=True)
+        code = stages[name](config, args)
+        if code != EXIT_OK:
+            return code
+    return EXIT_OK
+
+
 _COMMANDS = {
-    "config": _cmd_config,
+    "check": lambda config, args: _cmd_config_check(config),
+    "show": _cmd_show,
     "store": _cmd_store,
     "pull": _cmd_pull,
-    "ingest": ingest,
-    "derive": derive,
+    "build": _cmd_build,
     "predict": _cmd_predict,
     "replay": _cmd_replay,
     "drops": _cmd_drops,
     "export": _cmd_export,
-    "dump": _cmd_dump,
     "bootstrap": _cmd_bootstrap,
 }
 

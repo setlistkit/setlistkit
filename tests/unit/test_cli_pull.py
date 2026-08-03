@@ -68,49 +68,49 @@ def _client(monkeypatch):
 
 
 def test_pull_reports_what_it_fetched(tmp_path, capsys, client):
-    assert main(["--config", _cfg(tmp_path), "pull", "archive_org"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "3 listed, 1 fetched, 2 already cached" in out
 
 
 def test_pull_prints_the_batch_id_the_source_will_also_see(tmp_path, capsys, client):
     """A tracking id only one side of the conversation knows is half a tracking id."""
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     assert "batch 3f7a9c21" in capsys.readouterr().out
 
 
 def test_pull_passes_the_configured_collection(tmp_path, client):
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     assert client.calls == [{"collection": "moe", "min_year": None, "force_rescan": False,
                              "dry_run": False}]
 
 
 def test_pull_force_rescan_reaches_the_client(tmp_path, client):
-    main(["--config", _cfg(tmp_path), "pull", "archive_org", "--force-rescan"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org", "--force-rescan"])
     assert client.calls[0]["force_rescan"] is True
 
 
 def test_pull_reads_min_year_from_config(tmp_path, client):
-    main(["--config", _cfg(tmp_path, CONFIG + "min_year = 2020\n"), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path, CONFIG + "min_year = 2020\n"), "pull", "--source", "archive_org"])
     assert client.calls[0]["min_year"] == 2020
 
 
 def test_pull_flag_overrides_the_configured_min_year(tmp_path, client):
     main(["--config", _cfg(tmp_path, CONFIG + "min_year = 2020\n"),
-          "pull", "archive_org", "--min-year", "2015"])
+          "pull", "--source", "archive_org", "--min-year", "2015"])
     assert client.calls[0]["min_year"] == 2015
 
 
 def test_pull_rejects_a_quoted_min_year(tmp_path, capsys, client):
     body = CONFIG + 'min_year = "2020"\n'
-    assert main(["--config", _cfg(tmp_path, body), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path, body), "pull", "--source", "archive_org"]) == EXIT_DIAGNOSTIC
     assert "min_year must be a number" in capsys.readouterr().err
     assert client.calls == []
 
 
 def test_pull_without_a_collection_says_which_table_to_set_it_in(tmp_path, capsys, client):
     body = 'data_root = "state"\nuser_agent = "famoe.ly nightly (you@example.com)"\n'
-    assert main(["--config", _cfg(tmp_path, body), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path, body), "pull", "--source", "archive_org"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "[sources.archive_org] collection is not set" in err
     assert "[sources.archive_org]" in err
@@ -119,7 +119,7 @@ def test_pull_without_a_collection_says_which_table_to_set_it_in(tmp_path, capsy
 
 def test_the_pull_command_refuses_the_placeholder_user_agent(tmp_path, capsys, client):
     body = f'data_root = "state"\nuser_agent = "{SENTINEL_USER_AGENT}"\n'
-    assert main(["--config", _cfg(tmp_path, body), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path, body), "pull", "--source", "archive_org"]) == EXIT_DIAGNOSTIC
     assert "refusing to touch the network" in capsys.readouterr().err
     assert client.calls == []
 
@@ -127,7 +127,7 @@ def test_the_pull_command_refuses_the_placeholder_user_agent(tmp_path, capsys, c
 def test_pull_names_the_items_the_metadata_api_did_not_have(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=2, fetched=1, cached=0, missing=("gone",)))
     _inject(monkeypatch, fake)
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     out = capsys.readouterr().out
     assert "1 listed item(s) the metadata API does not have" in out
     assert "gone" in out
@@ -136,7 +136,7 @@ def test_pull_names_the_items_the_metadata_api_did_not_have(tmp_path, capsys, mo
 def test_pull_warns_loudly_when_the_listing_was_truncated(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=20000, fetched=0, cached=20000, truncated=True))
     _inject(monkeypatch, fake)
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     out = capsys.readouterr().out
     # An ingest over a truncated listing looks complete and is not, so this cannot be silent.
     assert "PREFIX of the collection" in out
@@ -146,14 +146,14 @@ def test_pull_warns_loudly_when_the_listing_was_truncated(tmp_path, capsys, monk
 def test_every_spelling_of_dry_run_reaches_the_client(tmp_path, client, flag):
     """Which one is "the" name is pure habit, and getting it wrong on the command whose whole
     purpose is to be safe to try is a bad first experience."""
-    main(["--config", _cfg(tmp_path), "pull", "archive_org", flag])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org", flag])
     assert client.calls[0]["dry_run"] is True
 
 
 def test_a_dry_pull_reports_the_cost_of_the_real_one(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=4614, cached=392, planned=4222))
     _inject(monkeypatch, fake)
-    assert main(["--config", _cfg(tmp_path), "pull", "archive_org", "-n"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org", "-n"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "4614 listed, 392 already cached, 4222 would be fetched" in out
     # The number that turns "4222 items" into a decision.
@@ -168,7 +168,7 @@ def test_a_dry_pull_estimates_from_requests_when_a_source_batches_records(tmp_pa
     records -- and the line reconciles the two so "2919 records / about 4 min" is not a puzzle."""
     fake = FakeClient(PullResult(listed=2939, cached=20, planned=2919, planned_requests=147))
     _inject(monkeypatch, fake)
-    assert main(["--config", _cfg(tmp_path), "pull", "archive_org", "-n"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org", "-n"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "2919 would be fetched across 147 requests" in out
     assert "about 4 min" in out                       # 147 requests * 1.5s, not 2919 records
@@ -177,14 +177,17 @@ def test_a_dry_pull_estimates_from_requests_when_a_source_batches_records(tmp_pa
 
 def test_pull_rejects_an_unknown_source(tmp_path, capsys, client):
     with pytest.raises(SystemExit):
-        main(["--config", _cfg(tmp_path), "pull", "myspace"])
-    assert "invalid choice" in capsys.readouterr().err
+        main(["--config", _cfg(tmp_path), "pull", "--source", "myspace"])
+    err = capsys.readouterr().err
+    assert "unknown source" in err
+    # The refusal names what IS known, so the fix does not need a second command.
+    assert "archive_org" in err
 
 
 def test_pull_names_the_items_the_source_could_not_serve(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=3, fetched=2, failed=("moe2003-02-22.km150.shn",)))
     _inject(monkeypatch, fake)
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     out = capsys.readouterr().out
     assert "1 item(s) the source could not serve, even after retries" in out
     assert "moe2003-02-22.km150.shn" in out
@@ -194,7 +197,7 @@ def test_pull_names_the_items_the_source_could_not_serve(tmp_path, capsys, monke
 def test_pull_counts_listing_docs_that_carried_no_identifier(tmp_path, capsys, monkeypatch):
     fake = FakeClient(PullResult(listed=1, fetched=1, unidentified=2))
     _inject(monkeypatch, fake)
-    main(["--config", _cfg(tmp_path), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"])
     assert "2 listed item(s) carried no identifier" in capsys.readouterr().out
 
 
@@ -204,7 +207,7 @@ def test_pull_reads_settings_from_the_table_named_by_the_source_argument(tmp_pat
     monkeypatch_sources = getattr(cli, "_SOURCES")
     assert "archive_org" in monkeypatch_sources
     body = CONFIG + '[sources.other]\ncollection = "not-this-one"\n'
-    main(["--config", _cfg(tmp_path, body), "pull", "archive_org"])
+    main(["--config", _cfg(tmp_path, body), "pull", "--source", "archive_org"])
     assert client.calls[0]["collection"] == "moe"
 
 
@@ -223,7 +226,7 @@ def test_pull_renders_an_upstream_failure_instead_of_a_traceback(tmp_path, capsy
             raise error
 
     _inject(monkeypatch, Failing())
-    assert main(["--config", _cfg(tmp_path), "pull", "archive_org"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path), "pull", "--source", "archive_org"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "the source could not be read" in err and expected in err
     assert "Nothing was lost" in err

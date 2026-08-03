@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""``slkit ingest``: parse the cached raw payloads, merge them, and publish the corpus.
+"""``slkit build``: parse the cached raw payloads, merge them, and publish the corpus.
 
 The parsing and the merging are the catalog's, and this module calls them without deciding
 anything they decide. What lives HERE is the three things Phase 3 deliberately kept out of

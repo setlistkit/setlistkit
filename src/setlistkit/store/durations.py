@@ -97,7 +97,7 @@ def _rows(records: Iterable[Mapping], columns: Sequence[str]) -> list[tuple]:
 def _edge_rows(edges: Iterable) -> list[tuple]:
     """Edges flattened, their detail dicts serialized.
 
-    ``sort_keys`` so two runs over the same corpus write byte-identical JSON and a `slkit dump`
+    ``sort_keys`` so two runs over the same corpus write byte-identical JSON and a `slkit show corpus`
     diff stays about the findings rather than about dictionary ordering. ``default=str`` because a
     detail dict carries whatever the call that raised it thought was worth recording, and an edge
     that cannot be serialized would abort a run over something that is, by construction, a note.
@@ -149,7 +149,7 @@ def _read(conn: sqlite3.Connection, table: str, columns: Sequence[str],
 
     ``since``/``until`` narrow to an inclusive window on the table's own ``date`` column. Every
     table read through here has one; the clause is built by :mod:`setlistkit.store.daterange`, the
-    same place ``slkit dump`` gets its range from, so the two commands cannot disagree about what
+    same place ``slkit show corpus`` gets its range from, so the two commands cannot disagree about what
     "on or after" means.
     """
     where, params = daterange.clause('"date"', since, until)

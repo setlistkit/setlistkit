@@ -3,7 +3,7 @@
 """What each configured source holds in the cache, read the same way by every command.
 
 Two commands draft a pack vocabulary: ``bootstrap`` on a new deployment, and ``pack
-suggest-vocab`` on one under revision. Both need the same two inputs. Both must find them the
+pack draft`` on one under revision. Both need the same two inputs. Both must find them the
 same way, or a redraft answers a different question than the draft it replaces.
 
 The functions here are that one way. Each reads the cache alone and makes no network call.
@@ -84,7 +84,7 @@ def report_inputs(titles: list[str], by_source: dict[str, list[str]], config) ->
               + ("   <- configured, gave nothing" if not names else ""))
     if any(not names for names in by_source.values()):
         print("  A configured source that gives nothing has a setting missing or a cache that\n"
-              "  was never pulled. Run `slkit config check` to see which.")
+              "  was never pulled. Run `slkit check` to see which.")
 
 
 def flatten(by_source: dict[str, list[str]]) -> list[str]:

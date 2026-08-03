@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""tests for pack conformance linting and the `slkit pack lint` command.
+"""tests for pack conformance linting and the `slkit pack check` command.
 
 The three hard-error checks each map to a bug the old repo hit: a rule that would delete a
 protected song, a rule that contradicts its own counter-example, and an alias pointing at a
@@ -99,7 +99,7 @@ def test_all_findings_accumulate_rather_than_short_circuiting(tmp_path):
 # --- the CLI command ----------------------------------------------------------------------
 
 def test_cli_lint_clean_pack_exits_ok(capsys):
-    assert main(["pack", "lint", "--pack", str(EXAMPLE_PACK)]) == EXIT_OK
+    assert main(["--pack", str(EXAMPLE_PACK), "pack", "check"]) == EXIT_OK
     assert "0 error(s)" in capsys.readouterr().out
 
 
@@ -107,11 +107,11 @@ def test_cli_lint_broken_pack_exits_nonzero(tmp_path, capsys):
     pack = _write_pack(tmp_path, **{
         "pack.json": IDENTITY, "vocabulary.json": '["Real Song"]',
         "aliases.json": '{"foo": "Ghost Song"}'})
-    assert main(["pack", "lint", "--pack", str(pack)]) == EXIT_DIAGNOSTIC
+    assert main(["--pack", str(pack), "pack", "check"]) == EXIT_DIAGNOSTIC
 
 
 def test_cli_lint_json_format(capsys):
-    assert main(["pack", "lint", "--pack", str(EXAMPLE_PACK), "--format", "json"]) == EXIT_OK
+    assert main(["--pack", str(EXAMPLE_PACK), "pack", "check", "--format", "json"]) == EXIT_OK
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data, list) and data[0]["severity"] in {"note", "warning", "error"}
 
@@ -121,13 +121,13 @@ def test_cli_lint_resolves_pack_from_config(tmp_path, capsys):
     cfg.write_text(
         'data_root = "data"\nuser_agent = "test (me@example.com)"\n'
         f'[catalog]\npack = "{EXAMPLE_PACK}"\n', encoding="utf-8")
-    assert main(["--config", str(cfg), "pack", "lint"]) == EXIT_OK
+    assert main(["--config", str(cfg), "pack", "check"]) == EXIT_OK
 
 
 def test_cli_lint_without_pack_or_config_entry_is_an_error(tmp_path, capsys):
     cfg = tmp_path / "slkit.toml"
     cfg.write_text('data_root = "data"\nuser_agent = "test (me@example.com)"\n', encoding="utf-8")
-    assert main(["--config", str(cfg), "pack", "lint"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", str(cfg), "pack", "check"]) == EXIT_DIAGNOSTIC
     assert "no pack" in capsys.readouterr().err
 
 
@@ -139,7 +139,7 @@ def test_cli_lint_folds_a_structural_failure_into_an_error(tmp_path, capsys):
     pack = _write_pack(tmp_path, **{
         "pack.json": IDENTITY, "vocabulary.json": '["Aurora"]',
         "classifiers.json": '{"non_song": [{"pattern": "(unclosed", "why": "x"}]}'})
-    assert main(["pack", "lint", "--pack", str(pack)]) == EXIT_DIAGNOSTIC
+    assert main(["--pack", str(pack), "pack", "check"]) == EXIT_DIAGNOSTIC
     assert "invalid regex" in capsys.readouterr().out
 
 

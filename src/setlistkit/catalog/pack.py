@@ -36,7 +36,7 @@ on purpose -- see ``_OVERRIDES_SCHEMA`` -- because
 better, naming the set and the entry that is wrong.
 
 Corpus-aware checks (a rule that matches nothing, an alias target missing from the
-vocabulary) live in ``slkit pack lint``, not here: they need the cached corpus, and a pack
+vocabulary) live in ``slkit pack check``, not here: they need the cached corpus, and a pack
 is structurally valid without them.
 """
 
@@ -822,7 +822,7 @@ def _load_overrides(pack_dir: Path, normalizer: Normalizer) -> dict[str, dict]:
     """Load the optional ``overrides.json``: whole shows someone confirmed by ear.
 
     Validated at load like every other pack file, rather than lazily when ingest asks for them.
-    A correction that will not parse is worth knowing about from ``slkit pack lint``, not from a
+    A correction that will not parse is worth knowing about from ``slkit pack check``, not from a
     run that has already fetched a collection.
     """
     file = pack_dir / OVERRIDES_FILE

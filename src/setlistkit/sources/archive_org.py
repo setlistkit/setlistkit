@@ -21,7 +21,7 @@ An item whose metadata fetch fails simply is not cached, and the next run picks 
 next run lists everything again.
 
 :meth:`ArchiveOrgClient.cached_items` is the other half of that seam: it reassembles show items
-from the cache without touching the network, which is what ``slkit ingest`` reads. Both halves
+from the cache without touching the network, which is what ``slkit build`` reads. Both halves
 build their cache keys with the same helpers, deliberately -- a reader that guessed at the key
 layout would come back empty on a cache that is in fact full, and say "no data" about it.
 
@@ -564,7 +564,7 @@ class ArchiveOrgClient:
     def cached_items(self, collection: str, *, min_year: int | None = None) -> CachedItems:
         """Reassemble every cached show item. Never touches the network.
 
-        This is what ``slkit ingest`` reads, and it is a pure cache walk on purpose: parsing is
+        This is what ``slkit build`` reads, and it is a pure cache walk on purpose: parsing is
         re-run constantly during development, and re-running it must not cost archive.org a
         single request. The listing pages are read from the cache too, because they carry the
         half of each item -- its listing ``date`` -- that the metadata blob does not.

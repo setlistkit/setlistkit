@@ -83,7 +83,7 @@ def test_config_check_fails_on_a_source_that_cannot_name_its_band(tmp_path, mute
     """The check asks each configured source to resolve its identity, and reports every refusal."""
     cfg = _cfg(tmp_path, tmp_path / "pack", sources="[sources.mute_fm]\nkey = 1\n")
 
-    assert main(["--config", cfg, "config", "check"]) != EXIT_OK
+    assert main(["--config", cfg, "check"]) != EXIT_OK
     err = capsys.readouterr().err
     assert "mute.fm is configured but cannot name its band" in err
     # The source's OWN diagnostic reaches the operator. A message composed here would have to
@@ -101,7 +101,7 @@ def test_config_check_reports_every_broken_source_not_only_the_first(
     cfg = _cfg(tmp_path, tmp_path / "pack",
                sources="[sources.mute_fm]\nkey = 1\n[sources.mute2_fm]\nkey = 1\n")
 
-    assert main(["--config", cfg, "config", "check"]) != EXIT_OK
+    assert main(["--config", cfg, "check"]) != EXIT_OK
     err = capsys.readouterr().err
     assert "mute.fm is configured but cannot name its band" in err
     assert "mute2.fm is configured but cannot name its band" in err
@@ -111,7 +111,7 @@ def test_config_check_passes_and_names_the_sources_it_asked(tmp_path, loud_fm, c
     """A config whose sources can all name their band passes, and says which it asked."""
     cfg = _cfg(tmp_path, tmp_path / "pack", sources="[sources.loud_fm]\nkey = 1\n")
 
-    assert main(["--config", cfg, "config", "check"]) == EXIT_OK
+    assert main(["--config", cfg, "check"]) == EXIT_OK
     assert "loud_fm" in capsys.readouterr().out
 
 
@@ -129,6 +129,6 @@ def test_bootstrap_names_a_configured_source_that_gave_nothing(
     out = capsys.readouterr().out
     assert "0 published song name(s) from mute_fm" in out
     assert "configured, gave nothing" in out
-    assert "slkit config check" in out
+    assert "slkit check" in out
     # The working source is reported by the same line, so the two are comparable at a glance.
     assert "1 published song name(s) from loud_fm" in out

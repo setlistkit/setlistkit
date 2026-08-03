@@ -77,7 +77,7 @@ def _corpus(store) -> tuple[list[dict], str, str]:
         raise DiagnosticError(Diagnostic(
             severity=ERROR,
             summary="nothing to predict from: the corpus is empty",
-            detail="Run `slkit ingest` first. A prediction is made out of play history, and\n"
+            detail="Run `slkit build` first. A prediction is made out of play history, and\n"
                    "there is none stored.",
         ))
     return store.corpus.shows(), span[0], span[1]

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""Tests for `slkit ingest`, driven end to end through the shipped example pack.
+"""Tests for `slkit build`, driven end to end through the shipped example pack.
 
 Nothing here mocks the parser or the merge. The cache is populated with the payload shapes
 archive.org actually returns, and the assertions are on what lands in SQLite and on what the
@@ -74,7 +74,7 @@ def _shows(tmp_path):
 
 def test_ingest_publishes_the_shows_it_could_parse(tmp_path, capsys):
     _cache(tmp_path)
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_OK
     shows = _shows(tmp_path)
     assert [show["date"] for show in shows] == ["2025-07-04"]
     assert [entry["song"] for entry in shows[0]["sets"][0]] == ["Aurora", "Wormhole", "Tuning"]
@@ -83,7 +83,7 @@ def test_ingest_publishes_the_shows_it_could_parse(tmp_path, capsys):
 
 def test_a_tagged_non_song_is_kept_and_a_segue_survives_to_sqlite(tmp_path):
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     entries = _shows(tmp_path)[0]["sets"][0]
     assert entries[1] == {"song": "Wormhole", "segue": True, "non_song": False}
     assert entries[2] == {"song": "Tuning", "segue": False, "non_song": True}
@@ -91,7 +91,7 @@ def test_a_tagged_non_song_is_kept_and_a_segue_survives_to_sqlite(tmp_path):
 
 def test_ingest_says_why_each_refused_item_is_missing(tmp_path, capsys):
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "refused 3 of 4 item(s):" in out
     assert "1: title names a different band" in out
@@ -103,14 +103,14 @@ def test_a_dropped_date_reports_the_reason_the_pack_gave_for_it(tmp_path, capsys
     """The reason is the only thing a later reader can check the call against, and it lives in a
     file nobody opens during a run. So the run repeats it."""
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "2025-10-31 (1 tape(s)): Halloween covers set." in out
     assert "[...]" in out                             # the paragraph is shortened, not dumped
 
 
 def test_ingest_refuses_to_run_with_nothing_cached(tmp_path, capsys):
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "no usable cached listing" in err
     assert "slkit pull archive_org" in err
@@ -120,7 +120,7 @@ def test_ingest_refuses_to_run_with_nothing_cached(tmp_path, capsys):
 
 def test_a_second_ingest_reports_the_diff_rather_than_the_totals(tmp_path, capsys):
     _cache(tmp_path, {k: ITEMS[k] for k in ("example2025-07-04",)})
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     capsys.readouterr()
 
     extra = dict(ITEMS)
@@ -128,7 +128,7 @@ def test_a_second_ingest_reports_the_diff_rather_than_the_totals(tmp_path, capsy
         "title": "The Example Live at Northlands on 2025-07-05", "date": "2025-07-05",
         "description": "Set 1:\n01. Aurora\n02. Jamboree\n"}
     _cache(tmp_path, extra)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "(was 1 shows / 3 songs)" in out
     assert "+1 new date(s): ['2025-07-05']" in out
@@ -138,7 +138,7 @@ def test_a_long_list_of_new_dates_is_abbreviated_but_says_how_many_it_cut(tmp_pa
     """A first ingest of a real collection adds hundreds of dates, and printing them all pushes
     every warning above it off the scrollback. Never a silent truncation, though."""
     _cache(tmp_path, _many(20))
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "+20 new date(s)" in out
     assert "and 8 more" in out
@@ -150,17 +150,17 @@ def test_a_date_leaving_the_corpus_is_never_silent(tmp_path, capsys):
         "title": "The Example Live at Northlands on 2025-07-05", "date": "2025-07-05",
         "description": "Set 1:\n01. Aurora\n02. Jamboree\n03. Wormhole\n"}
     _cache(tmp_path, both)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     capsys.readouterr()
 
     _cache(tmp_path, {k: ITEMS[k] for k in ("example2025-07-04",)})
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "-1 removed date(s): ['2025-07-05']" in capsys.readouterr().out
 
 
 def test_ingest_reports_the_source_that_won_each_date(tmp_path, capsys):
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "winners by source: {'description': 1}" in capsys.readouterr().out
 
 
@@ -173,11 +173,11 @@ def test_a_date_changing_which_source_it_trusts_is_reported(tmp_path, capsys):
         "files": [{"format": "Flac", "title": t} for t in
                   ("Aurora", "Wormhole", "Jamboree", "Sound Asleep")]}}
     _cache(tmp_path, thin)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "winners by source: {'tracks': 1}" in capsys.readouterr().out
 
     _cache(tmp_path, {k: ITEMS[k] for k in ("example2025-07-04",)})
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "1 date(s) changed source:" in out
     assert "2025-07-04: tracks -> description" in out
@@ -200,7 +200,7 @@ def test_a_refusal_reason_with_no_label_yet_still_gets_a_line(capsys):
 
 def test_refusals_with_no_dropped_dates_do_not_print_an_empty_heading(tmp_path, capsys):
     _cache(tmp_path, {k: ITEMS[k] for k in ("example2025-07-04", "other2025-01-01")})
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "refused 1 of 2 item(s):" in out
     assert "dropped date" not in out
@@ -215,7 +215,7 @@ def test_a_truncated_cached_listing_is_flagged_at_ingest_too(tmp_path, capsys):
                   json.dumps({"response": {"docs": docs, "numFound": 9999}}).encode("utf-8"))
         cache.put("archive_org", f"example{page}",
                   json.dumps({"metadata": ITEMS["example2025-07-04"], "files": []}).encode("utf-8"))
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "PREFIX of the\n  collection" in capsys.readouterr().out
 
 
@@ -234,11 +234,11 @@ def test_a_collapsed_merge_is_refused_rather_than_published(tmp_path, capsys):
     corpus in which every other number looks reasonable."""
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     capsys.readouterr()
 
     _cache(tmp_path, dict(list(full.items())[:3]))     # an upstream that went missing
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "refusing to publish: shows fell from 10 to 3" in err
     assert "--force" in err
@@ -248,9 +248,9 @@ def test_a_collapsed_merge_is_refused_rather_than_published(tmp_path, capsys):
 def test_force_publishes_a_shrink_the_operator_meant(tmp_path, capsys):
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     _cache(tmp_path, dict(list(full.items())[:3]))
-    assert main(["--config", _cfg(tmp_path), "ingest", "--force"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--force"]) == EXIT_OK
     assert len(_shows(tmp_path)) == 3
 
 
@@ -270,13 +270,13 @@ def test_a_song_leaving_every_show_is_reported_even_though_no_date_moved(tmp_pat
         "title": f"The Example Live at Northlands on 2025-07-0{n}", "date": f"2025-07-0{n}",
         "description": "Set 1:\n01. Aurora\n02. Moon Sonnet\n03. Wormhole\n"} for n in range(1, 7)}
     _cache(tmp_path, items)
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     capsys.readouterr()
 
     corpus = json.loads((pack / "corpus.json").read_text(encoding="utf-8"))
     corpus["junk_patterns"].append({"pattern": r"moon\s+sonnet", "why": "we think it is a note"})
     (pack / "corpus.json").write_text(json.dumps(corpus), encoding="utf-8")
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
 
     assert "6 shows / 12 songs from 6 items (was 6 shows / 18 songs)" in out
@@ -296,7 +296,7 @@ def test_a_collapse_in_songs_alone_is_refused(tmp_path, capsys):
         "description": "Set 1:\n01. Aurora\n02. Moon Sonnet\n03. Star Waltz\n"}
         for n in range(1, 7)}
     _cache(tmp_path, items)
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     capsys.readouterr()
 
     # Two of the three titles now match a junk fragment: every date survives, two thirds of the
@@ -305,7 +305,7 @@ def test_a_collapse_in_songs_alone_is_refused(tmp_path, capsys):
     corpus["junk_patterns"].append({"pattern": r"moon\s+sonnet|star\s+waltz",
                                     "why": "a bad edit"})
     (pack / "corpus.json").write_text(json.dumps(corpus), encoding="utf-8")
-    assert main(["--config", _cfg_for(tmp_path, pack), "ingest"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "refusing to publish: songs fell from 18 to 6" in err
     assert "junk or gear fragment" in err
@@ -317,10 +317,10 @@ def test_the_report_runs_before_the_guard_refuses(tmp_path, capsys):
     """The guard tells you to go and look at what changed; this run already knows."""
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     capsys.readouterr()
     _cache(tmp_path, dict(list(full.items())[:3]))
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out, err = capsys.readouterr()
     assert "-7 removed date(s):" in out             # the evidence, not withheld
     assert "refusing to publish" in err
@@ -331,10 +331,10 @@ def test_dry_run_says_what_would_be_refused_instead_of_refusing(tmp_path, capsys
     safe to run while diagnosing a shrink the one command that will not tell you about it."""
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     capsys.readouterr()
     _cache(tmp_path, dict(list(full.items())[:3]))
-    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--dry-run"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "a real run would refuse this (shows fell from 10 to 3)" in out
     assert "-7 removed date(s):" in out
@@ -344,16 +344,16 @@ def test_dry_run_says_what_would_be_refused_instead_of_refusing(tmp_path, capsys
 def test_a_modest_shrink_is_allowed_through(tmp_path):
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     _cache(tmp_path, dict(list(full.items())[:8]))     # 80%, well over the bar
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_OK
     assert len(_shows(tmp_path)) == 8
 
 
 def test_the_first_ingest_is_never_a_shrink(tmp_path):
     # Nothing stored means nothing to measure against, and a fresh install must not need --force.
     _cache(tmp_path, {k: ITEMS[k] for k in ("example2025-07-04",)})
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_OK
 
 
 @pytest.mark.parametrize("kept, allowed", [(5, True), (4, False)])
@@ -362,16 +362,16 @@ def test_the_floor_is_exactly_half(tmp_path, kept, allowed):
     only one of them matches what the constant is documented to mean."""
     full = _many(10)
     _cache(tmp_path, full)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     _cache(tmp_path, dict(list(full.items())[:kept]))
-    code = main(["--config", _cfg(tmp_path), "ingest"])
+    code = main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert (code == EXIT_OK) is allowed
     assert len(_shows(tmp_path)) == (kept if allowed else 10)
 
 
 def test_dry_run_reports_everything_and_writes_nothing(tmp_path, capsys):
     _cache(tmp_path)
-    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--dry-run"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "dry run: nothing written" in out
     assert "refused 3 of 4 item(s):" in out            # the whole report still runs
@@ -383,7 +383,7 @@ def test_dry_run_reports_everything_and_writes_nothing(tmp_path, capsys):
 def test_an_item_with_no_readable_metadata_is_named_not_skipped(tmp_path, capsys):
     _cache(tmp_path)
     RawCache(tmp_path / "state").put("archive_org", "example2025-07-04", b'{"metadata": {"tit')
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "1 listed item(s) have no readable cached metadata" in out
     assert "example2025-07-04" in out
@@ -399,7 +399,7 @@ def test_a_long_absent_list_is_capped_but_says_how_many_it_cut(tmp_path, capsys)
             for n in range(30)]
     cache.put("archive_org", "advancedsearch/example/None/p1",
               json.dumps({"response": {"docs": docs, "numFound": 30}}).encode("utf-8"))
-    main(["--config", _cfg(tmp_path), "ingest", "-n"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "-n"])
     out = capsys.readouterr().out
     assert "30 listed item(s) have no readable cached metadata" in out
     assert "... and 18 more" in out
@@ -409,7 +409,7 @@ def test_a_long_absent_list_is_capped_but_says_how_many_it_cut(tmp_path, capsys)
 
 def test_a_listing_that_promised_more_than_it_named_is_flagged(tmp_path, capsys):
     _cache(tmp_path, num_found=99)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "promised 99; the pull did not finish" in capsys.readouterr().out
 
 
@@ -418,7 +418,7 @@ def test_a_cached_error_document_is_refused_not_published_as_an_empty_corpus(tmp
     `expected` is None because no numFound was readable, which switches off the only count."""
     RawCache(tmp_path / "state").put("archive_org", "advancedsearch/example/None/p1",
                                      json.dumps({"error": "rate limited"}).encode("utf-8"))
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "no usable cached listing" in err
     assert "error document the source returned with status\n  200" in err
@@ -430,7 +430,7 @@ def test_a_listing_with_no_item_count_says_it_cannot_check_completeness(tmp_path
     """`expected` is the only completeness check that counts anything, and it is absent exactly
     when the listing payload was damaged. Its absence is itself news."""
     _cache(tmp_path, num_found="omit")
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "recorded no item count, so this run cannot tell whether it is complete" \
         in capsys.readouterr().out
 
@@ -442,7 +442,7 @@ def test_a_cached_listing_doc_with_no_identifier_is_counted(tmp_path, capsys):
             {"date": "2025-07-05"}]                # a doc nothing could ever be fetched for
     cache.put("archive_org", "advancedsearch/example/None/p1",
               json.dumps({"response": {"docs": docs, "numFound": 2}}).encode("utf-8"))
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "1 cached listing doc(s) carry no identifier" in out
 
@@ -463,7 +463,7 @@ def test_an_override_on_a_dropped_date_is_never_silently_discarded(tmp_path, cap
         "reason": "Confirmed by ear: they opened with two of their own before the covers set.",
         "sets": [["Aurora", "Wormhole", "Jamboree"]]}}}), encoding="utf-8")
     _cache(tmp_path)
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "1 override(s) NOT applied, because the date is in drop_dates: ['2025-10-31']" in out
     assert "Remove it from" in out
@@ -489,7 +489,7 @@ def test_a_losing_tape_can_still_raise_an_override_review(tmp_path, capsys):
                           "description": ("Set 1:\n01. Aurora\n02. Jamboree\n"
                                           "03. Sound Asleep\n04. The Long One\n")},
     })
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "['Wormhole']" in out                    # only the LOSING tape has it
     assert "aaa2025-07-04" in out
@@ -519,7 +519,7 @@ def _cfg_for(tmp_path, pack):
 
 def test_an_override_replaces_the_parsed_show(tmp_path, capsys, pack_with_override):
     _cache(tmp_path)
-    assert main(["--config", _cfg_for(tmp_path, pack_with_override), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg_for(tmp_path, pack_with_override), "build", "--stage", "ingest"]) == EXIT_OK
     show, = _shows(tmp_path)
     assert [entry["song"] for entry in show["sets"][0]] == ["Aurora", "The Long One", "Wormhole"]
     assert show["source"] == "override"
@@ -543,7 +543,7 @@ def test_a_source_carrying_a_song_the_override_lacks_is_put_in_front_of_a_person
         "sets": [["Aurora"]], "encore": ["Jamboree"]}}}), encoding="utf-8")
 
     _cache(tmp_path)
-    main(["--config", _cfg_for(tmp_path, pack), "ingest"])
+    main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "override review (1):" in out
     assert "2025-07-04: the override has 2 songs" in out
@@ -559,7 +559,7 @@ def test_a_broken_override_file_stops_the_run_with_a_caret(tmp_path, capsys):
         json.dumps({"overrides": {"2025-07-04": {"reason": "   ", "sets": [["Aurora"]]}}}),
         encoding="utf-8")
     _cache(tmp_path)
-    assert main(["--config", _cfg_for(tmp_path, pack), "ingest"]) == EXIT_DIAGNOSTIC
+    assert main(["--config", _cfg_for(tmp_path, pack), "build", "--stage", "ingest"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "every override needs a non-empty 'reason'" in err
     assert "no reason given" in err                    # the caret caption, so it is positioned
@@ -599,13 +599,13 @@ def test_ingest_mirrors_the_tapes_it_accepted_and_only_those(tmp_path):
     twenty-minute "song" would land in the same table the length statistics read.
     """
     _cache(tmp_path, TAPED)
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_OK
     assert [r["identifier"] for r in _mirror(tmp_path)] == ["example2025-07-04"]
 
 
 def test_the_mirrored_tape_carries_its_uploader_and_its_tracks_in_order(tmp_path):
     _cache(tmp_path, TAPED)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     tape, = _mirror(tmp_path)
     assert tape["uploader"] == "nate@example.org"
     assert tape["audio_format"] == "Flac"
@@ -625,7 +625,7 @@ def test_the_mirror_and_the_corpus_agree_about_which_night_a_tape_belongs_to(tmp
         "description": "Set 1:\n01. Aurora\n02. Wormhole\n",
         "uploader": "nate@example.org", "files": FLAC}}
     _cache(tmp_path, items)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     tape, = _mirror(tmp_path)
     assert tape["date"] == "2025-06-14"                       # not the 2024 it claims
     assert [s["date"] for s in _shows(tmp_path)] == ["2025-06-14"]
@@ -655,7 +655,7 @@ def test_show_types_are_stored_for_every_night_and_tallied_in_the_report(tmp_pat
             "description": "Set 1:\n01. Aurora\n02. Wormhole\n"},
     }
     _cache(tmp_path, items)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "show types: {'acoustic': 1, 'alterego': 1, 'electric': 1}" in capsys.readouterr().out
     with Store(tmp_path / "state") as store:
         assert store.tapes.show_types() == {"2025-07-04": "electric", "2025-08-01": "alterego",
@@ -674,7 +674,7 @@ def test_the_show_type_of_a_corrected_night_lands_on_the_night_it_was_played(tmp
                        "Set 1:\n01. Aurora\n02. Wormhole\n",
         "files": FLAC}}
     _cache(tmp_path, items)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     with Store(tmp_path / "state") as store:
         # The tag is on 2025, the year the show happened -- not on the 2024 the uploader typed.
         assert store.tapes.show_types() == {"2025-06-14": "alterego"}
@@ -684,7 +684,7 @@ def test_the_report_counts_tapes_and_tracks_separately(tmp_path, capsys):
     """They fail independently. A format list that stopped matching what archive.org labels its
     derivatives stores every tape, measures none of them, and reports an identical tape count."""
     _cache(tmp_path, TAPED)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "mirror: 1 tape(s) / 2 track(s)" in capsys.readouterr().out
 
 
@@ -693,7 +693,7 @@ def test_a_tape_with_no_readable_durations_is_stored_and_counted_out_loud(tmp_pa
     items = {"example2025-07-04": dict(ITEMS["example2025-07-04"],
                                        files=[{"format": "JPEG", "name": "cover.jpg"}])}
     _cache(tmp_path, items)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "1 tape(s) carry no readable durations" in capsys.readouterr().out
     tape, = _mirror(tmp_path)
     assert tape["n_tracks"] == 0
@@ -702,7 +702,7 @@ def test_a_tape_with_no_readable_durations_is_stored_and_counted_out_loud(tmp_pa
 def test_a_dry_run_reports_the_mirror_and_writes_none_of_it(tmp_path, capsys):
     """The half of the ingest most likely to be what someone is checking must not go silent."""
     _cache(tmp_path, TAPED)
-    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--dry-run"]) == EXIT_OK
     assert "mirror: 1 tape(s) / 2 track(s)" in capsys.readouterr().out
     with Store(tmp_path / "state") as store:
         assert store.tapes.recording_count() == 0 and store.tapes.track_count() == 0
@@ -711,9 +711,9 @@ def test_a_dry_run_reports_the_mirror_and_writes_none_of_it(tmp_path, capsys):
 def test_the_mirror_is_rebuilt_whole_on_every_ingest(tmp_path):
     """It is recomputed from the entire cache each run, exactly like the corpus."""
     _cache(tmp_path, TAPED)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     _cache(tmp_path, {"example2025-07-04": dict(ITEMS["example2025-07-04"], files=FLAC[:1])})
-    main(["--config", _cfg(tmp_path), "ingest", "--force"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--force"])
     tape, = _mirror(tmp_path)
     assert tape["n_tracks"] == 1
 
@@ -725,7 +725,7 @@ def test_adding_the_mirror_did_not_move_a_single_setlist(tmp_path):
     end-to-end one: the same cache, ingested by the same command, still publishes the same songs.
     """
     _cache(tmp_path, TAPED)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     shows = _shows(tmp_path)
     assert [show["date"] for show in shows] == ["2025-07-04"]
     assert [entry["song"] for entry in shows[0]["sets"][0]] == ["Aurora", "Wormhole", "Tuning"]
@@ -749,7 +749,7 @@ def test_a_tape_whose_description_yields_no_setlist_is_mirrored_and_explained(tm
             "files": [dict(f, title="") for f in FLAC]},
     }
     _cache(tmp_path, items)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     out = capsys.readouterr().out
     assert "1 date(s) have a tape but no setlist the merge would take" in out
     assert "['2025-09-09']" in out
@@ -763,14 +763,14 @@ def test_a_tape_whose_description_yields_no_setlist_is_mirrored_and_explained(tm
 
 def test_ingest_writes_no_profile_by_default(tmp_path, capsys):
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "profile written" not in capsys.readouterr().out
 
 
 def test_profile_flag_writes_the_funnel_counts_as_json(tmp_path, capsys):
     _cache(tmp_path)
     out = tmp_path / "funnel.json"
-    assert main(["--config", _cfg(tmp_path), "ingest", "--profile", str(out)]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--profile", str(out)]) == EXIT_OK
     assert f"profile written to {out}" in capsys.readouterr().out
     payload = json.loads(out.read_text())
     assert payload["counts"]["s1.start"] == 4        # the four cached items in ITEMS
@@ -784,12 +784,12 @@ def test_profile_is_written_on_a_dry_run_too(tmp_path):
     still parses everything, so it can still be asked to show its work."""
     _cache(tmp_path)
     out = tmp_path / "funnel.json"
-    assert main(["--config", _cfg(tmp_path), "ingest", "--dry-run",
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest", "--dry-run",
                 "--profile", str(out)]) == EXIT_OK
     assert out.is_file()
 
 
 def test_a_healthy_ingest_never_prints_an_imbalance_warning(tmp_path, capsys):
     _cache(tmp_path)
-    main(["--config", _cfg(tmp_path), "ingest"])
+    main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"])
     assert "does not reconcile" not in capsys.readouterr().out

@@ -51,14 +51,32 @@ TAPES = [
 ]
 
 
+def _split_globals(args):
+    """Split a test's extra flags into the ones argparse wants before the verb, and the rest.
+
+    --since, --until and --pack are global. --dry-run and --out belong to the sub-verb. A test
+    passes both kinds the same way, so the helper sorts them.
+    """
+    lead, tail, index = [], [], 0
+    while index < len(args):
+        if args[index] in ("--since", "--until", "--pack"):
+            lead.extend(args[index:index + 2])
+            index += 2
+            continue
+        tail.append(args[index])
+        index += 1
+    return lead, tail
+
+
 def _export(tmp_path, *args, tapes=None):
     """Ingest, derive and export, as three commands sharing only the database."""
     _cache(tmp_path, tapes if tapes is not None else TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
-    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "durations"]) == EXIT_OK
     out = tmp_path / "bundle.json"
-    code = main(["--config", config, "export", "tapemeasure", "--out", str(out), *args])
+    lead, tail = _split_globals(args)
+    code = main([*lead, "--config", config, "export", "tapemeasure", "--out", str(out), *tail])
     return code, out
 
 
@@ -66,9 +84,10 @@ def _export_songbook(tmp_path, *args, tapes=None):
     """Ingest, then export songbook -- no derive step, because the bundle needs none."""
     _cache(tmp_path, tapes if tapes is not None else TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     out = tmp_path / "songbook.json"
-    code = main(["--config", config, "export", "songbook", "--out", str(out), *args])
+    lead, tail = _split_globals(args)
+    code = main([*lead, "--config", config, "export", "songbook", "--out", str(out), *tail])
     return code, out
 
 
@@ -331,10 +350,10 @@ def test_a_malformed_window_date_is_refused_rather_than_compared(tmp_path):
     it: it returns rows, and the rows are wrong."""
     _cache(tmp_path, TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
-    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "durations"]) == EXIT_OK
     out = tmp_path / "bundle.json"
-    code = main(["--config", config, "export", "tapemeasure", "--out", str(out), "--until", "2025"])
+    code = main(["--until", "2025", "--config", config, "export", "tapemeasure", "--out", str(out)])
     assert code != EXIT_OK
     assert not out.exists()
 
@@ -385,9 +404,9 @@ def test_a_malformed_window_date_is_refused_for_songbook_too(tmp_path):
     `export tapemeasure` refuse it -- through `cli.main._cmd_export`'s shared `_malformed_date`."""
     _cache(tmp_path, TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     out = tmp_path / "songbook.json"
-    code = main(["--config", config, "export", "songbook", "--out", str(out), "--until", "2025"])
+    code = main(["--until", "2025", "--config", config, "export", "songbook", "--out", str(out)])
     assert code != EXIT_OK
     assert not out.exists()
 
@@ -401,10 +420,9 @@ def test_export_songbook_uses_the_pack_flag_to_pick_the_vocabulary(tmp_path):
     (empty_pack / "vocabulary.json").write_text(json.dumps(["Some Other Song"]), encoding="utf-8")
     _cache(tmp_path, TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     out = tmp_path / "songbook.json"
-    assert main(["--config", config, "export", "songbook", "--out", str(out),
-                "--pack", str(empty_pack)]) == EXIT_OK
+    assert main(["--pack", str(empty_pack), "--config", config, "export", "songbook", "--out", str(out)]) == EXIT_OK
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert len(payload["unknown"]) == len(payload["vocab"]) == len(SONGS)
     assert payload["generated"]["catalog"] == 1     # the empty pack's own vocabulary size
@@ -440,7 +458,7 @@ def _cfg_with_reports(tmp_path, reports_toml):
 def test_explain_prints_the_anchor_and_show_count(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     code = main(["--config", config, "export", "--explain"])
     assert code == EXIT_OK
     printed = capsys.readouterr().out
@@ -452,7 +470,7 @@ def test_explain_prints_the_anchor_and_show_count(tmp_path, capsys):
 def test_explain_restates_the_literal_in_words_and_prints_the_resolved_date(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", config, "export", "--explain"])
     printed = capsys.readouterr().out
     assert "songbook" in printed
@@ -466,7 +484,7 @@ def test_explain_prints_a_clamp_note_only_when_clamping_actually_fires(tmp_path,
     _cache(tmp_path, TAPES)
     clamps = _cfg_with_reports(
         tmp_path, '[reports.clampy.window]\nanchor = "2025-03-31"\nsince_back = "P1M"\n')
-    assert main(["--config", clamps, "ingest"]) == EXIT_OK
+    assert main(["--config", clamps, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", clamps, "export", "--explain"])
     printed = capsys.readouterr().out
     assert "clamped to 2025-02-28" in printed
@@ -485,7 +503,7 @@ def test_explain_states_a_reports_own_anchor_when_it_differs_from_last_show(tmp_
     _cache(tmp_path, TAPES)
     clamps = _cfg_with_reports(
         tmp_path, '[reports.clampy.window]\nanchor = "2025-03-31"\nsince_back = "P10D"\n')
-    assert main(["--config", clamps, "ingest"]) == EXIT_OK
+    assert main(["--config", clamps, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", clamps, "export", "--explain"])
     printed = capsys.readouterr().out
     assert "anchor: 2025-03-31" in printed
@@ -502,7 +520,7 @@ def test_explain_skips_scalar_reports_keys_like_out_dir_and_templates(tmp_path, 
         tmp_path,
         '[reports]\nout_dir = "site"\ntemplates = "templates"\n\n'
         '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     assert main(["--config", config, "export", "--explain"]) == EXIT_OK
     printed = capsys.readouterr().out
     assert "songbook" in printed        # the real report is still explained
@@ -513,7 +531,7 @@ def test_explain_skips_scalar_reports_keys_like_out_dir_and_templates(tmp_path, 
 def test_explain_stays_quiet_about_clamping_when_it_did_not_fire(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", config, "export", "--explain"])
     printed = capsys.readouterr().out
     assert "clamped" not in printed
@@ -526,7 +544,7 @@ def test_explain_includes_a_show_dated_exactly_on_the_resolved_since(tmp_path, c
     instead of 2."""
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1D"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", config, "export", "--explain"])
     printed = capsys.readouterr().out
     assert "2025-07-04 .. 2025-07-05" in printed
@@ -537,7 +555,7 @@ def test_explain_builds_nothing(tmp_path, capsys):
     """The point of `--explain`: it is safe to run against a config nobody has committed yet."""
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     main(["--config", config, "export", "--explain"])
     assert not (tmp_path / "tapemeasure.json").exists()
 
@@ -545,7 +563,7 @@ def test_explain_builds_nothing(tmp_path, capsys):
 def test_explain_with_no_reports_configured_says_so(tmp_path, capsys):
     _cache(tmp_path, TAPES)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     code = main(["--config", config, "export", "--explain"])
     assert code == EXIT_OK
     assert "nothing else to explain" in capsys.readouterr().out
@@ -565,7 +583,7 @@ def test_explain_with_no_shows_stored_says_so_and_exits_nothing(tmp_path, capsys
 def test_songbook_resolves_its_window_from_config_when_no_flags_are_given(tmp_path):
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     out = tmp_path / "songbook.json"
     assert main(["--config", config, "export", "songbook", "--out", str(out)]) == EXIT_OK
     payload = json.loads(out.read_text(encoding="utf-8"))
@@ -581,10 +599,9 @@ def test_songbook_an_explicit_flag_still_wins_over_a_configured_window(tmp_path)
     still comes from config, since no `--until` flag was given here."""
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.songbook.window]\nsince_back = "P1M"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     out = tmp_path / "songbook.json"
-    assert main(["--config", config, "export", "songbook", "--out", str(out),
-                "--since", "2025-07-05"]) == EXIT_OK
+    assert main(["--since", "2025-07-05", "--config", config, "export", "songbook", "--out", str(out)]) == EXIT_OK
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["generated"]["window"] == {"since": "2025-07-05", "until": "2025-07-05",
                                               "spec": None}
@@ -595,8 +612,8 @@ def test_tapemeasure_resolves_its_window_from_config_when_no_flags_are_given(tmp
     window is not a songbook-only feature."""
     _cache(tmp_path, TAPES)
     config = _cfg_with_reports(tmp_path, '[reports.tapemeasure.window]\nsince_back = "P1D"\n')
-    assert main(["--config", config, "ingest"]) == EXIT_OK
-    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "durations"]) == EXIT_OK
     out = tmp_path / "tapemeasure.json"
     assert main(["--config", config, "export", "tapemeasure", "--out", str(out)]) == EXIT_OK
     payload = json.loads(out.read_text(encoding="utf-8"))

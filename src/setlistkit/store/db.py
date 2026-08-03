@@ -24,7 +24,7 @@ from .raw_cache import RawCache
 DB_FILENAME = "setlistkit.sqlite"
 
 # Columns whose value is a timestamp or run marker: real content, but they change every run
-# and would bury the signal in a diff of `slkit dump`. We drop them from the dump only.
+# and would bury the signal in a diff of `slkit show corpus`. We drop them from the dump only.
 VOLATILE_COLUMNS = frozenset({
     "applied_at", "fetched_at", "created_at", "updated_at", "run_ts", "scored_asof",
 })
@@ -387,7 +387,7 @@ class Store:
         """Render derived state to deterministic plain text, for reviewable diffs.
 
         Volatile timestamp columns are dropped and rows are sorted, so two dumps of the same
-        logical state are byte-identical. This is the ``slkit dump`` view: the thing that
+        logical state are byte-identical. This is the ``slkit show corpus`` view: the thing that
         makes a bad write to an otherwise-opaque SQLite blob show up as a text diff.
 
         ``since`` and ``until`` narrow it to a date range, inclusive at both ends. Whole-database

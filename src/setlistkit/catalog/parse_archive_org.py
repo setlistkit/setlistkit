@@ -314,7 +314,7 @@ class Skipped:
 class Census:
     """Every cleaned token the parser met, and what became of it.
 
-    This is what the corpus-aware checks in ``slkit pack lint`` need, and it is emphatically NOT
+    This is what the corpus-aware checks in ``slkit pack check`` need, and it is emphatically NOT
     the stored corpus. A junk or gear rule DROPS what it matches, so by the time a show reaches
     the database every token those rules ever removed is gone from it. A check that asked "does
     this pattern match anything in the corpus" against the stored shows would find nothing for

@@ -12,7 +12,7 @@ It also carries what the consumer would otherwise have to hold for itself. ``cre
 because the previous dashboard read the raw archive.org cache to find out who to thank -- a
 gitignored directory the publishing machine did not have, so the credits page was empty in
 production and complete on a workstation. A consumer is never expected to hold data the exporter
-did not give it; that is the same rule ``slkit derive`` follows one layer down, applied outward.
+did not give it; that is the same rule ``slkit build`` follows one layer down, applied outward.
 
 ``schema`` carries a major version and the consumer asserts on it. The version changes when a
 consumer that ignored the change would draw something WRONG, not when a field is added.
@@ -68,7 +68,7 @@ _ALONE = 2
 
 @dataclass(frozen=True)
 class Concluded:
-    """Everything one ``slkit derive durations`` run stored, as the store hands it back.
+    """Everything one ``slkit build --stage=durations`` run stored, as the store hands it back.
 
     One argument rather than five, for the same reason the store writes those five tables in one
     transaction: they are five views of ONE run, and any two of them taken from different runs are

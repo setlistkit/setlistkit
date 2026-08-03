@@ -68,7 +68,7 @@ def test_compgen_names_the_deepest_command_in_the_tree(capsys):
     """A sub-sub-command reaches the script, so the walk is not stopping at depth one."""
     assert main(["compgen", "bash"]) == EXIT_OK
     out = capsys.readouterr().out
-    assert "suggest-vocab" in out
+    assert "missing" in out
     assert "tapemeasure" in out
 
 

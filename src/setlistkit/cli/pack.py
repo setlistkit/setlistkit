@@ -35,13 +35,13 @@ EXIT_DIAGNOSTIC = 2
 def _lint_corpus(args) -> list:
     """The cached mirror items to lint against, or empty when there is no usable cache.
 
-    Best-effort by design. ``pack lint --pack PATH`` works with no config at all, and a pack
+    Best-effort by design. ``slkit --pack PATH pack check`` works with no config at all, and a pack
     author who checks their own file must not have to configure a data_root first. The checks
     that need a corpus report themselves skipped when there is none.
 
     Absence is fine here; a malformed config is not. No config file, or a config that declares no
     mirror, are both ordinary states. A config that EXISTS and is wrong is a different thing. A
-    quoted min_year or unreadable TOML is a fault that ``slkit ingest`` treats as fatal. This once
+    quoted min_year or unreadable TOML is a fault that ``slkit build`` treats as fatal. This once
     swallowed it, and then told the operator to run a pull they had already run.
 
     The mirror comes from the config, never from a name written here. A deployment with no mirror
@@ -59,15 +59,15 @@ def _lint_corpus(args) -> list:
     try:
         identity = importer.identity(config)
     except DiagnosticError:
-        # The mirror is declared but cannot name what it fetches. `slkit config check` reports
+        # The mirror is declared but cannot name what it fetches. `slkit check` reports
         # that fault with the exact setting to add. A lint run states what it lost and continues.
         print(f"warning: {importer.display_name} is configured but cannot name its band, so "
-              "corpus-aware\n  checks are skipped. Run `slkit config check`.", file=sys.stderr)
+              "corpus-aware\n  checks are skipped. Run `slkit check`.", file=sys.stderr)
         return []
     client = importer.make_client(config, RawCache(config.data_root))
     cached = client.cached_items(identity, min_year=min_year(config, importer.id, None))
     if cached.truncated or cached.absent:
-        # The same facts `slkit ingest` refuses to publish over. A lint run against a fragment of
+        # The same facts `slkit build` refuses to publish over. A lint run against a fragment of
         # the corpus reports most of a pack dead, and it ranks unknown titles against a fraction
         # of the real play counts. Every one of those findings recommends a deletion.
         print(f"warning: the cached corpus is incomplete ({len(cached.absent)} listed item(s) "
@@ -100,21 +100,23 @@ def pack_lint(args) -> int:
 
 
 def pack_cmd(args) -> int:
-    """`slkit pack [init|lint|suggest-vocab]`, defaulting to lint (the original behavior)."""
+    """`slkit pack [init|draft|check|missing]`, defaulting to check."""
     action = getattr(args, "pack_action", None)
     if action == "init":
         return pack_init(args)
-    if action == "suggest-vocab":
-        return pack_suggest(args)
+    if action == "draft":
+        return pack_draft(args)
+    if action == "missing":
+        return pack_missing(args)
     return pack_lint(args)
 
 
 def pack_init(args) -> int:
     """Drop the starter files a valid pack needs into --pack, never clobbering existing ones.
 
-    Writes only files that are absent, so it composes with suggest-vocab in either order: run it
-    first for an empty skeleton suggest-vocab then fills, or run it after to add the pack.json and
-    policy files a suggest-vocab run leaves out -- and in that second case it leaves the
+    Writes only files that are absent, so it composes with `pack draft` in either order: run it
+    first for an empty skeleton a draft then fills, or run it after to add the pack.json and
+    policy files a draft run leaves out -- and in that second case it leaves the
     already-written vocabulary.json and aliases.json exactly as they are. ``--force`` overwrites.
     """
     pack_dir = Path(args.pack).expanduser()
@@ -140,7 +142,7 @@ def pack_init(args) -> int:
     if not created:
         print(f"{pack_dir} already has every starter file; nothing to do")
     else:
-        print("\nEdit pack.json (add a band_name), fill vocabulary.json, then `slkit pack lint`.")
+        print("\nEdit pack.json (add a band_name), fill vocabulary.json, then `slkit pack check`.")
     return EXIT_OK
 
 
@@ -206,7 +208,7 @@ def _suggest_inputs(args) -> tuple[list[str], list[str]]:
 def _pack_diff(args, suggestion) -> int:
     """Report the drafted candidates that the pack does not already name. Write nothing.
 
-    This answers a question no other command answers. ``pack lint`` reads the corpus and reports
+    This answers a question no other command answers. ``pack check`` reads the corpus and reports
     titles the parser KEPT but the pack cannot name. This reads the sources and reports songs
     they PUBLISH that the pack lacks. A song on no tape at all still appears.
 
@@ -232,41 +234,42 @@ def _pack_diff(args, suggestion) -> int:
     return EXIT_OK
 
 
-def pack_suggest(args) -> int:
-    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
+def _candidates(args):
+    """The clustered draft both `pack draft` and `pack missing` work from."""
     titles, curated = _suggest_inputs(args)
     if not titles and not curated:
         raise DiagnosticError(Diagnostic(
             severity=ERROR,
             summary="no titles to draft from",
             detail="Pass --from PATH, or configure the sources and pull them. Then run\n"
-                   "`slkit config check` to confirm each one can name its band.",
+                   "`slkit check` to confirm each one can name its band.",
         ))
-    suggestion = suggest(titles, cutoff=args.cutoff, curated=curated)
-    if args.diff:
-        return _pack_diff(args, suggestion)
-    if not args.out:
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary="--out is required when a draft is written",
-            detail="Pass --out DIR to write the draft, or pass --diff to compare against the\n"
-                   "pack and write nothing.",
-        ))
+    return suggest(titles, cutoff=args.cutoff, curated=curated)
+
+
+def pack_missing(args) -> int:
+    """Name the drafted candidates the pack does not know. Writes nothing."""
+    return _pack_diff(args, _candidates(args))
+
+
+def pack_draft(args) -> int:
+    """Write vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
+    suggestion = _candidates(args)
     out_dir = Path(args.out).expanduser()
     write_suggestion(suggestion, out_dir, force=args.force)
     if (out_dir / "pack.json").is_file():
-        print("\nReview SUGGESTIONS.md, trim by hand, then `slkit pack lint`.")
+        print("\nReview SUGGESTIONS.md, trim by hand, then `slkit pack check`.")
     else:
         print(f"\nReview SUGGESTIONS.md and trim by hand. This is not a complete pack yet: run\n"
               f"  slkit pack init --pack {out_dir}\nto add pack.json and the policy files, "
-              f"then `slkit pack lint`.")
+              f"then `slkit pack check`.")
     return EXIT_OK
 
 
 def write_suggestion(suggestion, out_dir: Path, *, force: bool) -> None:
     """Write vocabulary.json, aliases.json and SUGGESTIONS.md into ``out_dir``.
 
-    Shared by ``pack suggest-vocab`` and ``bootstrap`` so the refuse-to-clobber rule and the
+    Shared by ``pack draft`` and ``bootstrap`` so the refuse-to-clobber rule and the
     summary line are defined once. A non-empty vocabulary/aliases already present is refused
     unless ``force``; SUGGESTIONS.md is always safe to rewrite (it is only ever read by a human).
     """

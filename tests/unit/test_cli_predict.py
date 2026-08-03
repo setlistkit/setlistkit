@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""Tests for `slkit predict`, `slkit replay`, and `slkit dump picks`, driven through ``main``.
+"""Tests for `slkit predict`, `slkit replay`, and `slkit show picks`, driven through ``main``.
 
 Nothing here mocks the model. A corpus is written into a real store, the commands are invoked the
 way a person invokes them, and the assertions are on what lands on stdout and in SQLite.
@@ -164,7 +164,7 @@ def test_a_dry_run_says_so_and_writes_nothing(ready, tmp_path, capsys):
 
 
 def test_replay_narrows_to_the_dates_given(ready, capsys):
-    _run("--config", ready, "replay", "--since", "2026-01-05", "--until", "2026-01-08")
+    _run("--since", "2026-01-05", "--until", "2026-01-08", "--config", ready, "replay")
     out = capsys.readouterr().out
     assert "4 night(s)" in out
     assert "given on the command line" in out
@@ -174,7 +174,7 @@ def test_replay_narrows_to_the_dates_given(ready, capsys):
 
 
 def test_replay_refuses_a_malformed_date(ready, capsys):
-    assert _run("--config", ready, "replay", "--since", "the fall tour") != EXIT_OK
+    assert _run("--since", "the fall tour", "--config", ready, "replay") != EXIT_OK
     assert "--since" in capsys.readouterr().err
 
 
@@ -199,14 +199,14 @@ def test_a_shrink_can_be_forced(ready, tmp_path):
 def test_dump_picks_shows_the_ledger_and_nothing_else(ready, capsys):
     _run("--config", ready, "replay")
     capsys.readouterr()
-    assert _run("--config", ready, "dump", "picks") == EXIT_OK
+    assert _run("--config", ready, "show", "picks") == EXIT_OK
     out = capsys.readouterr().out
     assert "## picks" in out and "## pick_iterations" in out and "## pick_outcomes" in out
     assert "## shows" not in out and "## show_entries" not in out
 
 
 def test_dump_all_still_shows_the_corpus(ready, capsys):
-    _run("--config", ready, "dump")
+    _run("--config", ready, "show", "corpus")
     out = capsys.readouterr().out
     assert "## shows" in out
     assert "## picks" in out
@@ -215,7 +215,7 @@ def test_dump_all_still_shows_the_corpus(ready, capsys):
 def test_dump_picks_narrows_on_the_night(ready, capsys):
     _run("--config", ready, "replay")
     capsys.readouterr()
-    _run("--config", ready, "dump", "picks", "--since", "2026-01-11")
+    _run("--since", "2026-01-11", "--config", ready, "show", "picks")
     out = capsys.readouterr().out
     assert "2026-01-11" in out
     assert "2026-01-05" not in out

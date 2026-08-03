@@ -180,7 +180,7 @@ def song_vocabulary(normalizer: Normalizer, shows: Iterable[Mapping] = (),
 
     WHY THERE IS A FLOOR AT ALL, since the obvious reading is to take every song the corpus
     holds. The corpus is parser OUTPUT, not a curated list, and the titles it holds that no human
-    has triaged are exactly the ones ``slkit pack lint`` reports as unknown. Feeding all of them
+    has triaged are exactly the ones ``slkit pack check`` reports as unknown. Feeding all of them
     back in makes the vocabulary a laundering channel: ``(moe.)``, ``Set List`` and one taper's
     ``= with Suke Cerulo on guitar`` are all stored as songs, so a band-name line, a section
     header and a footnote each become "a line naming a song" and get counted as tracks.

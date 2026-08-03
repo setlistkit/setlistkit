@@ -56,7 +56,7 @@ def test_dump_after_init(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     main(["--config", cfg, "store", "init"])
     capsys.readouterr()
-    assert main(["--config", cfg, "dump"]) == EXIT_OK
+    assert main(["--config", cfg, "show", "corpus"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "setlistkit.sqlite — contents" in out
     assert "setlistkit_version" in out
@@ -75,7 +75,7 @@ def test_dump_narrows_to_a_date_range(tmp_path, capsys):
                                   "length_raw": "100.0", "seconds": 100.0}]}
             for ident, date in (("old", "2023-06-01"), ("new", "2025-06-01"))])
     capsys.readouterr()
-    assert main(["--config", cfg, "dump", "--since", "2025-01-01"]) == EXIT_OK
+    assert main(["--since", "2025-01-01", "--config", cfg, "show", "corpus"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "new.flac" in out and "old.flac" not in out
     assert "## recordings (1 of 2 rows, from 2025-01-01)" in out
@@ -87,7 +87,7 @@ def test_dump_refuses_a_date_that_is_not_a_date(tmp_path, capsys):
     cfg = _cfg(tmp_path)
     main(["--config", cfg, "store", "init"])
     capsys.readouterr()
-    assert main(["--config", cfg, "dump", "--until", "2023"]) == EXIT_DIAGNOSTIC
+    assert main(["--until", "2023", "--config", cfg, "show", "corpus"]) == EXIT_DIAGNOSTIC
     err = capsys.readouterr().err
     assert "--until wants a YYYY-MM-DD date" in err
     assert "would print an empty range" in err

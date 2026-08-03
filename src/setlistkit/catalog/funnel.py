@@ -3,7 +3,7 @@
 """How many items took each branch: one counter per EDGE of the ingest funnel.
 
 Not :class:`~setlistkit.catalog.parse.Census`, and deliberately beside it rather than inside it.
-The census counts TOKENS so ``slkit pack lint`` can rank which title to fix first; this counts
+The census counts TOKENS so ``slkit pack check`` can rank which title to fix first; this counts
 DECISIONS so a person can see which rule the corpus actually runs into. A census keyed by token
 cannot answer "how many items did the band filter refuse", and a funnel keyed by edge cannot
 answer "which spelling should we add" -- two questions, two shapes, and collapsing them would
@@ -16,7 +16,7 @@ sides read, and a test asserts the counter and the renderer agree about it.
 
 Always collected, never behind a flag, for the reason the census gives in its own docstring: a
 count gathered only in profiling mode is a count that is empty exactly when someone forgot to ask
-for it. The flag on ``slkit ingest`` decides whether the numbers are WRITTEN, not whether they are
+for it. The flag on ``slkit build`` decides whether the numbers are WRITTEN, not whether they are
 taken.
 """
 

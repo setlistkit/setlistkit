@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""Tests that `slkit pack suggest-vocab` finds its own inputs, and can diff instead of write.
+"""Tests that `slkit pack draft` finds its own inputs, and can diff instead of write.
 
 The command once demanded a path for each input. ``bootstrap`` could read the configured sources
 and this could not, so the hand work fell on the case that repeats and the automation on the case
 that runs one time. A band whose pack is under revision is the one that redrafts.
 
 ``--diff`` answers the question that follows a later pull: which published songs does the pack
-still not name? ``pack lint`` cannot answer it. Lint reads the corpus and reports titles the
+still not name? ``pack check`` cannot answer it. Lint reads the corpus and reports titles the
 parser KEPT, so a song on no tape at all never reaches it.
 """
 
@@ -68,7 +68,7 @@ def test_suggest_vocab_reads_the_configured_sources_when_from_is_omitted(
     out_dir = tmp_path / "draft"
     cfg = _cfg(tmp_path, tmp_path / "pack")
 
-    assert main(["--config", cfg, "pack", "suggest-vocab", "--out", str(out_dir)]) == EXIT_OK
+    assert main(["--config", cfg, "pack", "draft", "--out", str(out_dir)]) == EXIT_OK
 
     vocab = json.loads((out_dir / "vocabulary.json").read_text())
     assert {"Aurora", "Bridgeless"} <= set(vocab)
@@ -83,7 +83,7 @@ def test_suggest_vocab_diff_reports_what_the_pack_lacks_and_writes_nothing(
     cfg = _cfg(tmp_path, pack_dir)
     before = (pack_dir / "vocabulary.json").read_text()
 
-    assert main(["--config", cfg, "pack", "suggest-vocab", "--diff"]) == EXIT_OK
+    assert main(["--config", cfg, "pack", "missing"]) == EXIT_OK
 
     out = capsys.readouterr().out
     assert "Bridgeless" in out          # published, and absent from the pack
@@ -98,7 +98,7 @@ def test_suggest_vocab_diff_is_quiet_when_the_pack_already_names_everything(
     """A pack that knows every candidate gets a plain statement, not an empty list."""
     cfg = _cfg(tmp_path, _pack(tmp_path / "pack", ["Aurora", "Bridgeless"]))
 
-    assert main(["--config", cfg, "pack", "suggest-vocab", "--diff"]) == EXIT_OK
+    assert main(["--config", cfg, "pack", "missing"]) == EXIT_OK
     assert "already names every candidate" in capsys.readouterr().out
 
 
@@ -107,15 +107,16 @@ def test_suggest_vocab_matches_a_pack_that_spells_a_song_its_own_way(
     """Comparison is by normalized key. A different spelling of a known song is not missing."""
     cfg = _cfg(tmp_path, _pack(tmp_path / "pack", ["aurora", "BRIDGELESS"]))
 
-    assert main(["--config", cfg, "pack", "suggest-vocab", "--diff"]) == EXIT_OK
+    assert main(["--config", cfg, "pack", "missing"]) == EXIT_OK
     assert "already names every candidate" in capsys.readouterr().out
 
 
-def test_suggest_vocab_without_out_or_diff_says_which_to_pass(tmp_path, paper_fm):
-    """--out is required for a write. The refusal names the two ways forward."""
+def test_draft_without_out_is_refused(tmp_path, paper_fm):
+    """`pack draft` always writes, so --out is required and argparse says so."""
     cfg = _cfg(tmp_path, tmp_path / "pack")
 
-    assert main(["--config", cfg, "pack", "suggest-vocab"]) != EXIT_OK
+    with pytest.raises(SystemExit):
+        main(["--config", cfg, "pack", "draft"])
 
 
 def test_suggest_vocab_still_takes_explicit_paths(tmp_path, paper_fm):
@@ -125,7 +126,7 @@ def test_suggest_vocab_still_takes_explicit_paths(tmp_path, paper_fm):
     out_dir = tmp_path / "draft"
     cfg = _cfg(tmp_path, tmp_path / "pack")
 
-    assert main(["--config", cfg, "pack", "suggest-vocab",
+    assert main(["--config", cfg, "pack", "draft",
                  "--from", str(titles), "--out", str(out_dir)]) == EXIT_OK
 
     vocab = json.loads((out_dir / "vocabulary.json").read_text())

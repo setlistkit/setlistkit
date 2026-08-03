@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
 """The starter files that make an empty directory a valid pack.
 
-``slkit pack init`` drops these in so ``slkit pack lint`` has something to validate. Only
+``slkit pack init`` drops these in so ``slkit pack check`` has something to validate. Only
 ``pack.json`` and ``vocabulary.json`` are strictly required (see :func:`load_pack`); the rest are
 optional policy files scaffolded EMPTY, so a fresh pack lints clean and the author fills them in as
 the band earns them.
@@ -29,14 +29,14 @@ _README = """\
 # {name} pack
 
 A pack teaches setlistkit about one band without touching its code. This directory was
-scaffolded by `slkit pack init`; fill it in and run `slkit pack lint`.
+scaffolded by `slkit pack init`; fill it in and run `slkit pack check`.
 
 ## The files
 
 - **pack.json** — identity. `name` and `version` are required. Add `band_name` (what the band
   calls *itself*, e.g. "moe.") so archive.org band-filtering can tell its tapes from a side
   project's. Leaving it out runs no band filter, which is the safe default.
-- **vocabulary.json** — the canonical song list, your dictionary. `slkit pack suggest-vocab` can
+- **vocabulary.json** — the canonical song list, your dictionary. `slkit pack draft` can
   draft this from a raw archive.org pull.
 - **aliases.json** — normalized spelling -> canonical name, for folds fuzzy matching can't reach.
 - **protected.json** — titles a generic shape rule would wrongly delete (real songs that look
@@ -52,7 +52,7 @@ def starter_pack(name: str) -> dict[str, str]:
 
     Every value is a complete file body. The caller decides which to write -- :func:`init` never
     clobbers a file that already exists, so this can safely offer the full set alongside a
-    vocabulary a suggest-vocab run already wrote.
+    vocabulary a draft run already wrote.
     """
     pack_json = json.dumps(
         {

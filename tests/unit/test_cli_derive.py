@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""Tests for `slkit derive durations`, driven end to end from the cache through to statistics.
+"""Tests for `slkit build --stage=durations`, driven end to end from the cache through to statistics.
 
 Nothing here mocks the reconciliation. A cache is populated with the payload shapes archive.org
-returns, ``slkit ingest`` publishes the corpus and the mirror from it, and then derive reads the
+returns, ``slkit build`` publishes the corpus and the mirror from it, and then derive reads the
 STORE -- never the cache -- and the assertions are on what lands in SQLite.
 
 The two-command shape IS the test. Every fixture below is ingested first and derived second, in
@@ -87,8 +87,8 @@ def _run(tmp_path, tapes, *derive_args):
     """Ingest, then derive, as two separate commands sharing only the database."""
     _cache(tmp_path, tapes)
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
-    return main(["--config", config, "derive", "durations", *derive_args])
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
+    return main(["--config", config, "build", "--stage", "durations", *derive_args])
 
 
 def _stored(tmp_path):
@@ -146,9 +146,9 @@ def test_derive_reads_the_store_even_with_the_raw_cache_deleted(tmp_path):
     """
     _cache(tmp_path, [_tape("example2025-07-04", "2025-07-04")])
     config = _cfg(tmp_path)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
     shutil.rmtree(tmp_path / "state" / "raw")
-    assert main(["--config", config, "derive", "durations"]) == EXIT_OK
+    assert main(["--config", config, "build", "--stage", "durations"]) == EXIT_OK
     performances, _ = _stored(tmp_path)
     assert [row["song"] for row in performances] == list(SONGS)
 
@@ -210,7 +210,7 @@ def test_deriving_twice_replaces_rather_than_doubles(tmp_path):
     so a run recomputes the lot. Appending would leave last week's answer beside this week's with
     nothing saying which is current."""
     assert _run(tmp_path, [_tape("example2025-07-04", "2025-07-04")]) == EXIT_OK
-    assert main(["--config", _cfg(tmp_path), "derive", "durations"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "durations"]) == EXIT_OK
     performances, stats = _stored(tmp_path)
     assert len(performances) == 5 and len(stats) == 5
 
@@ -221,7 +221,7 @@ def test_deriving_with_nothing_ingested_says_so_rather_than_publishing_an_empty_
     Publishing the second would replace a good set of statistics with none, and report success.
     """
     assert main(["--config", _cfg(tmp_path), "store", "init"]) == EXIT_OK
-    assert main(["--config", _cfg(tmp_path), "derive", "durations"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "durations"]) == EXIT_OK
     assert _stored(tmp_path) == ([], [])
 
 
@@ -277,7 +277,7 @@ def test_ingest_stores_the_written_tracklist_so_derive_never_opens_the_cache(tmp
     """Ingest is the one command allowed to read a description, because it is the only moment the
     raw payload is open. Everything after it reads this table."""
     _cache(tmp_path, [_tape("example2025-07-04", "2025-07-04", songs=ANONYMOUS)])
-    assert main(["--config", _cfg(tmp_path), "ingest"]) == EXIT_OK
+    assert main(["--config", _cfg(tmp_path), "build", "--stage", "ingest"]) == EXIT_OK
     with Store(tmp_path / "state") as store:
         listings = store.tapes.listings()
         assert [entry["song"] for entry in listings["example2025-07-04"]] == list(SONGS)
@@ -302,8 +302,8 @@ def _pack_with_override(tmp_path, identifier, tracks, *, extra=None):
 
 def _derive_with(tmp_path, tapes_, config):
     _cache(tmp_path, tapes_)
-    assert main(["--config", config, "ingest"]) == EXIT_OK
-    return main(["--config", config, "derive", "durations"])
+    assert main(["--config", config, "build", "--stage", "ingest"]) == EXIT_OK
+    return main(["--config", config, "build", "--stage", "durations"])
 
 
 def test_a_hand_written_tracklist_overrules_the_taper(tmp_path):

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""``slkit derive``: turn what was ingested into what was concluded.
+"""``slkit build``: turn what was ingested into what was concluded.
 
 The first and so far only derivation is ``durations`` -- how long each song ran, from the tapes.
 Where ``ingest`` projects raw payloads into tables without judging them, this DECIDES: which tape's
@@ -68,7 +68,7 @@ class _Timed:
 
 
 def derive(config, args) -> int:
-    """`slkit derive [durations]`, defaulting to durations.
+    """`slkit build --stage=durations`, defaulting to durations.
 
     Defaulting rather than requiring the noun, the way ``config`` defaults to show and ``store``
     to init. There is one derivation today; when there are three, the default stops being obvious
@@ -205,7 +205,7 @@ def _durations(config, args) -> int:
         shows = {show["date"]: show for show in store.corpus.shows()}
         recordings = store.tapes.recordings()
         if not recordings:
-            print("nothing to derive: no tapes are stored. Run `slkit ingest` first.")
+            print("nothing to derive: no tapes are stored. Run `slkit build` first.")
             return EXIT_OK
         listings = _corrected(recordings, shows, store.tapes.listings(), pack.normalizer)
         timed = _read_tapes(recordings, _Reader(
@@ -221,7 +221,7 @@ def _durations(config, args) -> int:
         _report_rejected_overrides(timed.rejected_overrides)
         _report_unmatched_exclusions(
             lengths.unmatched_exclusions(performances, pack.corpus.duration_exclusions))
-        # getattr, because `slkit derive` with no noun at all reaches here through the default
+        # getattr, because `slkit build --stage=durations` with no noun at all reaches here through the default
         # above and argparse never set the flags belonging to the subcommand nobody named.
         if getattr(args, "dry_run", False):
             print("dry run: nothing written")

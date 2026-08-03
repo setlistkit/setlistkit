@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Tim Case <tim@lnx.cx>
-"""Tests for `slkit pack suggest-vocab` -- the pack-bootstrap worklist.
+"""Tests for `slkit pack draft` -- the pack-bootstrap worklist.
 
 These lock the properties the objective turns on: nothing is silently dropped (banter is segregated,
 never deleted), and the aggressive number-stripping that FEEDS the clustering never reaches the
@@ -137,7 +137,7 @@ def _titles_file(tmp_path, titles):
 def test_cli_writes_three_artifacts(tmp_path, capsys):
     src = _titles_file(tmp_path, ["01 1348", "1348", "Belive The Lie", "Believe The Lie", "(Outro)"])
     out = tmp_path / "pack"
-    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(out)]) == EXIT_OK
+    assert main(["pack", "draft", "--from", str(src), "--out", str(out)]) == EXIT_OK
     assert (out / "vocabulary.json").is_file()
     assert (out / "aliases.json").is_file()
     assert (out / "SUGGESTIONS.md").is_file()
@@ -151,7 +151,7 @@ def test_cli_refuses_to_clobber_without_force(tmp_path, capsys):
     out = tmp_path / "pack"
     out.mkdir()
     (out / "vocabulary.json").write_text('["Hand Made Real Song"]', encoding="utf-8")
-    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(out)]) == EXIT_DIAGNOSTIC
+    assert main(["pack", "draft", "--from", str(src), "--out", str(out)]) == EXIT_DIAGNOSTIC
     assert "refusing to overwrite" in capsys.readouterr().err
     # the human's file is untouched
     assert "Hand Made Real Song" in (out / "vocabulary.json").read_text()
@@ -163,7 +163,7 @@ def test_cli_force_overwrites(tmp_path):
     out.mkdir()
     (out / "vocabulary.json").write_text('["Stale"]', encoding="utf-8")
     assert main(
-        ["pack", "suggest-vocab", "--from", str(src), "--out", str(out), "--force"]) == EXIT_OK
+        ["pack", "draft", "--from", str(src), "--out", str(out), "--force"]) == EXIT_OK
     assert json.loads((out / "vocabulary.json").read_text()) == ["Ophelia"]
 
 
@@ -174,28 +174,28 @@ def test_cli_empty_placeholder_files_do_not_need_force(tmp_path):
     out.mkdir()
     (out / "vocabulary.json").write_text("[]", encoding="utf-8")
     (out / "aliases.json").write_text("{}", encoding="utf-8")
-    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(out)]) == EXIT_OK
+    assert main(["pack", "draft", "--from", str(src), "--out", str(out)]) == EXIT_OK
 
 
 def test_cli_bad_input_is_a_diagnostic(tmp_path, capsys):
     bad = tmp_path / "titles.json"
     bad.write_text('{"not": "an array"}', encoding="utf-8")
     out = tmp_path / "pack"
-    assert main(["pack", "suggest-vocab", "--from", str(bad), "--out", str(out)]) == EXIT_DIAGNOSTIC
+    assert main(["pack", "draft", "--from", str(bad), "--out", str(out)]) == EXIT_DIAGNOSTIC
     assert "not a JSON array of strings" in capsys.readouterr().err
 
 
 def test_cli_missing_input_is_a_diagnostic(tmp_path, capsys):
     out = tmp_path / "pack"
     ghost = tmp_path / "ghost.json"
-    assert main(["pack", "suggest-vocab", "--from", str(ghost), "--out", str(out)]) == EXIT_DIAGNOSTIC
+    assert main(["pack", "draft", "--from", str(ghost), "--out", str(out)]) == EXIT_DIAGNOSTIC
     assert "could not read titles" in capsys.readouterr().err
 
 
 def test_cli_pack_lint_still_defaults(tmp_path):
     """The pack dispatcher must not have broken the bare `pack lint` path: an empty directory is
     not a valid pack, so lint routes through and reports a diagnostic rather than crashing."""
-    assert main(["pack", "lint", "--pack", str(tmp_path)]) == EXIT_DIAGNOSTIC
+    assert main(["--pack", str(tmp_path), "pack", "check"]) == EXIT_DIAGNOSTIC
 
 
 # --- a curated source names the cluster ------------------------------------------------------
@@ -293,7 +293,7 @@ def test_cli_reads_a_curated_file(tmp_path, capsys):
     curated = tmp_path / "curated.json"
     curated.write_text(json.dumps(["JaJunk"]), encoding="utf-8")
     out = tmp_path / "pack"
-    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(out),
+    assert main(["pack", "draft", "--from", str(src), "--out", str(out),
                  "--curated", str(curated)]) == EXIT_OK
     assert json.loads((out / "vocabulary.json").read_text()) == ["JaJunk"]
     assert "named by a setlist source" in capsys.readouterr().out
@@ -303,6 +303,6 @@ def test_cli_bad_curated_file_is_a_diagnostic(tmp_path, capsys):
     src = _titles_file(tmp_path, ["Ophelia"])
     curated = tmp_path / "curated.json"
     curated.write_text(json.dumps({"not": "an array"}), encoding="utf-8")
-    assert main(["pack", "suggest-vocab", "--from", str(src), "--out", str(tmp_path / "pack"),
+    assert main(["pack", "draft", "--from", str(src), "--out", str(tmp_path / "pack"),
                  "--curated", str(curated)]) == EXIT_DIAGNOSTIC
     assert "not a JSON array of strings" in capsys.readouterr().err

@@ -75,7 +75,7 @@ def replace_shows(conn: sqlite3.Connection, records: Iterable[Mapping]) -> int:
     One transaction, and the delete is part of it: a crash between the delete and the inserts
     would otherwise leave an empty corpus where a good one had been. Callers that want to refuse
     a suspiciously small replacement do that BEFORE calling here -- see the no-shrink guard in
-    ``slkit ingest`` -- because by this point the decision to publish has been made.
+    ``slkit build`` -- because by this point the decision to publish has been made.
     """
     rows = list(records)
     with transaction(conn):

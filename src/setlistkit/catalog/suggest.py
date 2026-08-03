@@ -371,7 +371,7 @@ def render_markdown(suggestion: Suggestion) -> str:
         f"non-songs, distilled from {suggestion.raw_count} raw titles.",
         "",
         "This is a worklist, not a finished pack. Delete junk, split any cluster that merged two "
-        "real songs, fix the canonical spelling, then run `slkit pack lint`.",
+        "real songs, fix the canonical spelling, then run `slkit pack check`.",
         "",
         "## Song candidates",
         "",
