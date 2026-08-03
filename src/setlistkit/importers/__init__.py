@@ -57,4 +57,35 @@ def tape_sources() -> list[Importer]:
     return [imp for imp in IMPORTERS.values() if not imp.feeds_mirror and imp.tapes]
 
 
-__all__ = ["Importer", "IMPORTERS", "secondary", "tape_sources"]
+def configured(config) -> list[Importer]:
+    """The registered importers this deployment actually has, in registry order.
+
+    A ``[sources.<id>]`` table IS the opt-in, and its presence is the whole test. Registering an
+    importer says the code knows how to talk to that source; writing the table says this operator
+    has it. Nothing here reads what is INSIDE the table -- a source that needs a key it was not
+    given raises its own diagnostic naming the key, which is a better message than any check here
+    could compose, and one that stays right when a future source needs settings this function has
+    never heard of.
+
+    That last point is the reason this is a registry query rather than a list: a source added
+    after today must work by being registered and configured, without a second place to update.
+    """
+    return [imp for imp in IMPORTERS.values() if config.section("sources", imp.id)]
+
+
+def mirror(config) -> Importer | None:
+    """The configured mirror source, or ``None`` when this deployment has no audio anywhere.
+
+    ``None`` is an ordinary answer, not a failure. Phish is the worked example: archive.org
+    carries no Phish tapes, so a Phish config declares two setlist APIs and no mirror at all, and
+    everything the mirror would hold -- tapes, durations, show types -- simply does not exist for
+    that band. Callers must PRINT the absence rather than pass over it silently; a band nobody
+    taped and an archive.org table with a typo in it produce the same empty result here.
+    """
+    for importer in configured(config):
+        if importer.feeds_mirror:
+            return importer
+    return None
+
+
+__all__ = ["Importer", "IMPORTERS", "configured", "mirror", "secondary", "tape_sources"]

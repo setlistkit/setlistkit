@@ -23,7 +23,7 @@ from ..catalog.scaffold import starter_pack
 from ..catalog.suggest import render_markdown, suggest, titles_from_cache
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
-from ..importers import IMPORTERS, secondary
+from ..importers import IMPORTERS, configured, mirror, secondary
 from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
@@ -353,7 +353,10 @@ def _add_pack(sub) -> None:
 
 
 def _add_bootstrap(sub) -> None:
-    """The ``slkit bootstrap`` parser: the six-step pipeline behind one verb."""
+    """The ``slkit bootstrap`` parser: the whole pipeline behind one verb.
+
+    The command takes no source argument. The config decides which sources take part.
+    """
     boot = sub.add_parser(
         "bootstrap",
         help="carry an empty deployment to a reviewable pack and a published corpus in one run",
@@ -851,46 +854,54 @@ _BOOTSTRAP_STEPS = 7
 
 
 def _step(number: int, title: str) -> None:
-    """One pipeline-step banner, so a bootstrap run reads as six marked phases, not one wall."""
+    """Print one banner for one bootstrap step.
+
+    The banners divide a run into marked phases. Without them the output is one wall of text.
+    """
     print(f"\n=== step {number}/{_BOOTSTRAP_STEPS}: {title} ===", flush=True)
 
 
 def _bootstrap_titles(config) -> list[str]:
-    """Every distinct track title in the cache, under the configured collection and min_year.
+    """Return each distinct track title the mirror source holds in the cache.
 
-    The programmatic replacement for the hand-run ``dirty-stripper`` jq: it reads the same cache
-    ``ingest`` reads and projects titles through the same parser, so bootstrap needs no external
-    tool between the pull and the draft.
+    This function reads the cache that ``ingest`` reads. It sends the titles through the same
+    parser. Bootstrap thus needs no external tool between the pull and the draft.
+
+    Return an empty list when the config declares no mirror source. Tape titles are one input to
+    the draft, and a deployment with no tapes has none of them. The caller reports the absence.
     """
-    importer = IMPORTERS["archive_org"]
+    importer = mirror(config)
+    if importer is None:
+        return []
     client = importer.make_client(config, RawCache(config.data_root))
     cached = client.cached_items(importer.identity(config),
-                                 min_year=min_year(config, "archive_org", None))
+                                 min_year=min_year(config, importer.id, None))
     return titles_from_cache(cached.items)
 
 
 def _curated_titles(config) -> list[str]:
-    """Every distinct song name the configured SETLIST sources name as a performance.
+    """Return each distinct song name that the configured setlist sources report as played.
 
-    The draft used to read the mirror and nothing else, so the dictionary every later stage is
-    judged against was built from taper prose while the source that publishes actual song titles
-    sat pulled, cached and unread. That is what this fixes; :func:`suggest` explains what changes
-    once the names are in its hands.
+    The draft once read the mirror alone. The dictionary that judges every later stage thus came
+    from taper prose, while the source that publishes real song titles sat pulled and unread.
+    This function corrects that. See :func:`suggest` for what the names change.
 
-    Read through each importer's own ``candidates`` rather than off the raw blobs, which buys two
-    things for free. A source that is not configured returns nothing and says nothing -- the same
-    quiet absence ``ingest`` already relies on -- so this needs no "is it set up" test of its own.
-    And ``non_song`` entries are already flagged by the parsers, which is how setlist.fm's ``tape``
-    marker (a song played over the PA, never performed) is kept out without a rule here that would
-    have to know what a tape marker is.
+    Read each source through its own ``candidates`` function, not off the raw blobs. The parsers
+    already flag ``non_song`` entries. setlist.fm's ``tape`` marker names a song played over the
+    PA, and the flag keeps it out. No rule here must know what a tape marker is.
 
-    The normalizer is empty on purpose. There is no pack yet at draft time -- that is what is being
-    drafted -- so names arrive as the source spells them and the clustering does the rest.
+    The loop covers the configured sources only. A registered source that this operator does not
+    have contributes nothing and reports nothing.
+
+    The normalizer is empty on purpose. No pack exists yet at draft time, because the pack is
+    what this drafts. Names thus arrive as each source spells them, and the clustering does the
+    rest.
     """
     cache = RawCache(config.data_root)
     empty = Normalizer(vocabulary=[])
     names: set[str] = set()
-    for importer in secondary():
+    have = {importer.id for importer in configured(config)}
+    for importer in (imp for imp in secondary() if imp.id in have):
         for record in importer.candidates(config, cache, normalizer=empty,
                                           min_year=min_year(config, importer.id, None)) or ():
             for entries in list(record.get("sets") or ()) + [record.get("encore") or ()]:
@@ -901,15 +912,22 @@ def _curated_titles(config) -> list[str]:
 
 
 def _cmd_bootstrap(config, args) -> int:
-    """Six commands behind one verb: store init -> pull -> suggest -> init -> lint -> ingest.
+    """Run the whole pipeline behind one verb: store, pull, draft, scaffold, lint, ingest, derive.
 
-    The self-initializing pipeline. Every parameter comes from the resolved config (collection,
-    min_year, data_root, pack directory), so a fresh deployment goes from an empty directory to a
-    reviewable draft pack and a published corpus in a single run. Steps that already ran are
-    cheap to repeat: store init and pack init are idempotent, a pull re-reads its cache for free,
-    and suggest refuses to clobber a vocabulary a human has started editing.
+    The pipeline initializes itself. Every parameter comes from the resolved config. A new
+    deployment thus goes from an empty directory to a draft pack and a published corpus in one
+    run.
+
+    The config decides which sources take part. A ``[sources.<id>]`` table is the opt-in, and the
+    operator writes one table for each source they have. This command names no source itself. A
+    source added to the registry later works here when the operator configures it.
+
+    Each step is cheap to repeat. Store init and pack init make the same result every time. A
+    pull reads its own cache for free. The draft step refuses to overwrite a vocabulary that a
+    person started to edit.
     """
     pack_dir = resolve_pack_dir(getattr(args, "pack", None), args.config)
+    sources = configured(config)
 
     _step(1, "store init — create data_root and apply the schema")
     _cmd_store_init(config)
@@ -917,10 +935,12 @@ def _cmd_bootstrap(config, args) -> int:
     if args.skip_pull:
         _step(2, "pull — SKIPPED (--skip-pull); drafting from the existing cache")
     else:
-        _step(2, "pull archive_org — fetch raw metadata into the cache")
-        _cmd_pull(config, argparse.Namespace(
-            source="archive_org", min_year=None,
-            force_rescan=args.force_rescan, dry_run=args.dry_run))
+        _step(2, "pull — fetch raw data into the cache, one configured source at a time")
+        for importer in sources:
+            print(f"\n-- {importer.display_name} --", flush=True)
+            _cmd_pull(config, argparse.Namespace(
+                source=importer.id, min_year=None,
+                force_rescan=args.force_rescan, dry_run=args.dry_run))
 
     if args.dry_run:
         print("\ndry run: stopping before draft, scaffold and ingest. "
@@ -928,15 +948,24 @@ def _cmd_bootstrap(config, args) -> int:
         return EXIT_OK
 
     _step(3, f"suggest-vocab — draft a vocabulary into {pack_dir}")
+    # Two inputs, and a deployment can have either one alone. Tape titles come from the mirror
+    # source. Published song names come from the setlist sources. A band that nobody taped has
+    # only the names, and those are the better input: a person typed them on purpose.
     titles = _bootstrap_titles(config)
-    if not titles:
+    curated = _curated_titles(config)
+    print(f"  {len(titles)} cached tape title(s); {len(curated)} published song name(s)")
+    if not mirror(config):
+        print("  no mirror source is configured, so this draft reads no tape titles")
+    if not titles and not curated:
         raise DiagnosticError(Diagnostic(
             severity=ERROR,
-            summary="the cache holds no track titles to draft a vocabulary from",
-            detail="Nothing is cached for this collection and min_year. Run `slkit pull "
-                   "archive_org` first (or re-run bootstrap without --skip-pull), then retry.",
+            summary="the cache holds nothing to draft a vocabulary from",
+            detail="Each configured source cached no usable data under this config. Check that\n"
+                   "your config declares a [sources.<id>] table for each source you have. Then\n"
+                   "run `slkit pull` (or re-run bootstrap without --skip-pull) and retry.\n\n"
+                   f"Sources configured now: {', '.join(imp.id for imp in sources) or '(none)'}",
         ))
-    _write_suggestion(suggest(titles, cutoff=args.cutoff, curated=_curated_titles(config)),
+    _write_suggestion(suggest(titles, cutoff=args.cutoff, curated=curated),
                       pack_dir, force=args.force)
 
     _step(4, "pack init — scaffold the remaining pack files, clobbering none")
@@ -949,8 +978,10 @@ def _cmd_bootstrap(config, args) -> int:
               "not a failure)")
 
     _step(6, "ingest — parse the cache and publish the merged corpus")
+    # No source is named here. Ingest reads the mirror the config declares, and it folds each
+    # configured setlist source on top of it.
     ingest(config, argparse.Namespace(
-        source="archive_org", pack=str(pack_dir), min_year=None,
+        source=None, pack=str(pack_dir), min_year=None,
         dry_run=False, force=False, profile=None, config=args.config))
 
     _step(7, "derive durations — reconcile each song's length across every tape of a night")

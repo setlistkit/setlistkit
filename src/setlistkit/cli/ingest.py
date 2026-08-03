@@ -51,6 +51,9 @@ from ..catalog.showtypes import show_types
 from ..catalog.tracklists import read_tracklist, song_vocabulary
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError
 from ..importers import IMPORTERS, secondary, tape_sources
+# Aliased because this module already uses `mirror` for the mirror OBJECT a parse produced. The
+# import names the function that finds the mirror SOURCE. Two different things, so two names.
+from ..importers import mirror as mirror_source
 from ..sources.archive_org import ArchiveOrgClient, CachedItems
 from ..store import Store
 from ..store.raw_cache import RawCache
@@ -161,25 +164,24 @@ def _fold_in_tapes(mirror: _Mirror, config, cache, args) -> None:
 
 
 def _mirror_source(config, args) -> str | None:
-    """The mirror source this deployment actually has, or ``None`` if it has none.
+    """Return the id of the mirror source this deployment has, or ``None`` for no mirror.
 
-    A band whose only sources are structured setlist APIs has no audio anywhere -- Phish is the
-    worked example: archive.org carries zero Phish shows (the 153 items matching the search are
-    tribute bands), and both phish.net and phish.in are setlist sources. Everything the mirror
-    holds -- tapes, durations, show types -- comes from items that do not exist for that band.
+    A band can have setlist APIs and no audio anywhere. Phish is the worked example. archive.org
+    carries no Phish shows, and both phish.net and phish.in are setlist sources. The mirror holds
+    tapes, durations and show types. For that band those come from items that do not exist.
 
-    ``args.source`` defaults to the first registered source rather than to something the operator
-    chose, so its mere presence proves nothing. What decides is whether a mirror source has a
-    config table at all. A table that exists but is incomplete still reaches ``required_setting``
-    below and still fails there, loudly, which is the behavior a half-configured archive.org wants.
+    ``args.source`` can hold a default that the operator did not choose. Its presence thus proves
+    nothing on its own. The config decides: see :func:`setlistkit.importers.mirror`. This function
+    obeys ``args.source`` only when that source is a configured mirror.
+
+    An incomplete config table still reaches ``required_setting`` below. It fails there, and it
+    fails loudly. That is the correct behavior for a half-configured archive.org.
     """
     chosen = IMPORTERS.get(getattr(args, "source", "") or "")
     if chosen is not None and chosen.feeds_mirror and config.section("sources", chosen.id):
         return chosen.id
-    for importer in IMPORTERS.values():
-        if importer.feeds_mirror and config.section("sources", importer.id):
-            return importer.id
-    return None
+    found = mirror_source(config)
+    return found.id if found else None
 
 
 def _read_mirror(config, args, cache, pack):
