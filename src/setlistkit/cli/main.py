@@ -12,28 +12,26 @@ which is enough to exercise config resolution and the diagnostic renderer end to
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from .. import __version__
-from ..catalog.lint import lint
-from ..catalog.normalizer import Normalizer
-from ..catalog.scaffold import starter_pack
-from ..catalog.suggest import render_markdown, suggest, titles_from_cache
+from ..catalog.suggest import suggest
 from ..config import load_config, require_network_identity
 from ..diagnostics import ERROR, Diagnostic, DiagnosticError, render
-from ..importers import IMPORTERS, configured, mirror, secondary
+from ..importers import IMPORTERS, configured
 from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
 from ..store.raw_cache import RawCache
-from .common import min_year, required_setting, resolve_pack_dir
+from .common import min_year, resolve_pack_dir
 from .derive import derive
 from .export import export
 from .ingest import ingest
 from ..picks.drops import DEFAULT_DEPTH
+from .pack import pack_cmd, pack_init, pack_lint, write_suggestion
 from .predict import drops_cmd, predict, replay
+from .sources import curated_names, flatten, mirror_titles, report_inputs
 
 EXIT_OK = 0
 EXIT_DIAGNOSTIC = 2
@@ -299,8 +297,8 @@ def _add_export(sub) -> None:
 
 def _add_pack(sub) -> None:
     """The ``slkit pack`` parser."""
-    pack_cmd = sub.add_parser("pack", help="work with band packs")
-    pack_sub = pack_cmd.add_subparsers(dest="pack_action")
+    parser = sub.add_parser("pack", help="work with band packs")
+    pack_sub = parser.add_subparsers(dest="pack_action")
     init_cmd = pack_sub.add_parser(
         "init", help="scaffold the starter files a valid pack needs, without clobbering any")
     init_cmd.add_argument(
@@ -328,18 +326,29 @@ def _add_pack(sub) -> None:
         help="draft a pack's vocabulary/aliases from a bag of raw archive.org titles",
     )
     suggest_cmd.add_argument(
-        "--from", dest="source", metavar="PATH", required=True,
-        help="a JSON array of raw title strings (e.g. raw/archive_org/titles.json)",
+        "--from", dest="source", metavar="PATH",
+        help="a JSON array of raw title strings (e.g. raw/archive_org/titles.json). Omit it to "
+             "read the mirror source's cache, which is where `slkit bootstrap` reads",
     )
     suggest_cmd.add_argument(
         "--curated", metavar="PATH",
         help="a JSON array of song names from a source that PUBLISHES titles (setlist.fm), "
-             "which are clustered with --from but win the canonical spelling. `slkit bootstrap` "
-             "reads these from the configured setlist sources automatically",
+             "which are clustered with --from but win the canonical spelling. Read from the "
+             "configured setlist sources when --from is omitted",
     )
     suggest_cmd.add_argument(
-        "--out", metavar="DIR", required=True,
-        help="directory to write vocabulary.json, aliases.json and SUGGESTIONS.md into",
+        "--diff", action="store_true",
+        help="list the candidates the pack does not already name, and write nothing. This is the "
+             "question to ask after a later pull: which published songs is the pack still "
+             "missing, including songs on no tape at all",
+    )
+    suggest_cmd.add_argument(
+        "--pack", metavar="PATH",
+        help="pack directory to compare against under --diff (overrides [catalog] pack)")
+    suggest_cmd.add_argument(
+        "--out", metavar="DIR",
+        help="directory to write vocabulary.json, aliases.json and SUGGESTIONS.md into "
+             "(required unless --diff)",
     )
     suggest_cmd.add_argument(
         "--cutoff", type=float, default=0.88, metavar="RATIO",
@@ -451,8 +460,37 @@ def _cmd_config_show(config) -> int:
 
 
 def _cmd_config_check(config) -> int:
+    """Check the config, then ask each configured source whether it can identify its band.
+
+    A source needs one setting to name what it fetches: a collection, a MusicBrainz id. Each
+    importer resolves that itself and raises its own diagnostic when the setting is absent. This
+    command calls each one and reports every failure it collects.
+
+    The check earns its place because the failure it catches is silent. A configured source that
+    cannot name its band contributes nothing to a merge, and the run still exits 0. Measured on
+    one real config: a placeholder MusicBrainz id cost 265 songs and 346 shows, and no command
+    said a word. Ask the question here, where the answer is cheap and the message is exact.
+
+    Every configured source is asked, and one failure does not hide the next.
+    """
     require_network_identity(config)
+    broken = []
+    for importer in configured(config):
+        try:
+            importer.identity(config)
+        except DiagnosticError as err:
+            broken.append((importer, err))
+    for importer, err in broken:
+        print(f"\n{importer.display_name} is configured but cannot name its band:", file=sys.stderr)
+        print(render(err.diagnostic), file=sys.stderr)
+    if broken:
+        names = ", ".join(importer.id for importer, _ in broken)
+        print(f"\n{config.source_path}: {names} cannot run. Each one would contribute nothing\n"
+              "to a merge, and every command would still exit 0.", file=sys.stderr)
+        return EXIT_DIAGNOSTIC
+    checked = ", ".join(importer.id for importer in configured(config)) or "(no sources)"
     print(f"ok: {config.source_path} is valid and identifies itself to the network")
+    print(f"    sources that can name their band: {checked}")
     return EXIT_OK
 
 
@@ -651,205 +689,6 @@ def _cmd_pull(config, args) -> int:
     return EXIT_OK
 
 
-def _lint_corpus(args) -> list:
-    """The cached source items to lint against, or empty when there is no usable cache.
-
-    Best-effort by design. ``pack lint --pack PATH`` has always worked with no config at all, and
-    a pack author checking their own file should not be made to configure a data_root first. When
-    there is no corpus the checks that need one report themselves skipped, which is the honest
-    outcome and not a failure.
-    """
-    if getattr(args, "no_corpus", False):
-        return []
-    # Absence is fine; malformed is not, and only the first is swallowed. No config file at all,
-    # or a config with no source configured, are both ordinary states -- `pack lint --pack PATH`
-    # has always worked with neither, and a pack author checking their own file should not have
-    # to set up a data_root first. A config that EXISTS and is wrong is a different thing: a
-    # quoted min_year or unreadable TOML is a fault `slkit ingest` treats as fatal, and
-    # swallowing it here told the user to run a pull they had already run while hiding the
-    # reason it did not take.
-    try:
-        config = load_config(args.config)
-    except DiagnosticError:
-        return []
-    if not str(config.section("sources", "archive_org").get("collection") or "").strip():
-        return []
-    collection = required_setting(config, ("sources", "archive_org"), "collection", "")
-    client = IMPORTERS["archive_org"].make_client(config, RawCache(config.data_root))
-    cached = client.cached_items(collection, min_year=min_year(config, "archive_org", None))
-    if cached.truncated or cached.absent:
-        # The same facts `slkit ingest` refuses to publish over. A lint run against a fragment of
-        # the corpus reports most of a pack dead and ranks its unknown titles against a fraction
-        # of the real play counts -- and every one of those findings recommends deletion.
-        print(f"warning: the cached corpus is incomplete ({len(cached.absent)} listed item(s) "
-              f"unreadable"
-              f"{', listing truncated' if cached.truncated else ''}).\n"
-              "  Corpus-aware findings below are measured against what is cached, not against "
-              "the collection.\n  Finish `slkit pull archive_org` before deleting anything on "
-              "their say-so.", file=sys.stderr)
-    return cached.items
-
-
-def _cmd_pack_lint(args) -> int:
-    """Lint the resolved pack, reporting findings as human text or JSON with an honest code."""
-    pack_dir = resolve_pack_dir(getattr(args, "pack", None), args.config)
-    try:
-        diagnostics = lint(pack_dir, _lint_corpus(args))
-    except DiagnosticError as exc:
-        diagnostics = [exc.diagnostic]     # a structural failure is itself the one finding
-
-    if getattr(args, "format", "human") == "json":
-        print(json.dumps([diag.to_dict() for diag in diagnostics], indent=2))
-    else:
-        for diag in diagnostics:
-            print(render(diag))
-            print()
-        errors = sum(1 for diag in diagnostics if diag.is_error)
-        print(f"{pack_dir}: {errors} error(s), {len(diagnostics) - errors} other finding(s)")
-
-    return EXIT_DIAGNOSTIC if any(diag.is_error for diag in diagnostics) else EXIT_OK
-
-
-def _cmd_pack(args) -> int:
-    """`slkit pack [init|lint|suggest-vocab]`, defaulting to lint (the original behavior)."""
-    action = getattr(args, "pack_action", None)
-    if action == "init":
-        return _cmd_pack_init(args)
-    if action == "suggest-vocab":
-        return _cmd_pack_suggest(args)
-    return _cmd_pack_lint(args)
-
-
-def _cmd_pack_init(args) -> int:
-    """Drop the starter files a valid pack needs into --pack, never clobbering existing ones.
-
-    Writes only files that are absent, so it composes with suggest-vocab in either order: run it
-    first for an empty skeleton suggest-vocab then fills, or run it after to add the pack.json and
-    policy files a suggest-vocab run leaves out -- and in that second case it leaves the
-    already-written vocabulary.json and aliases.json exactly as they are. ``--force`` overwrites.
-    """
-    pack_dir = Path(args.pack).expanduser()
-    files = starter_pack(pack_dir.resolve().name or "pack")
-    pack_dir.mkdir(parents=True, exist_ok=True)
-
-    created, skipped = [], []
-    for name, content in files.items():
-        path = pack_dir / name
-        if path.exists() and not args.force:
-            skipped.append(name)
-            continue
-        path.write_text(content, encoding="utf-8")
-        created.append(name)
-
-    if created:
-        print(f"scaffolded {pack_dir}:")
-        for name in created:
-            print(f"  wrote {name}")
-    if skipped:
-        print(f"left {len(skipped)} existing file(s) untouched: {', '.join(skipped)}")
-        print("(pass --force to overwrite them)")
-    if not created:
-        print(f"{pack_dir} already has every starter file; nothing to do")
-    else:
-        print("\nEdit pack.json (add a band_name), fill vocabulary.json, then `slkit pack lint`.")
-    return EXIT_OK
-
-
-def _nonempty_pack_file(path: Path) -> bool:
-    """True when ``path`` holds a pack file with real content already -- the thing --force guards.
-
-    An empty ``[]`` / ``{}`` is treated as absent: a fresh pack directory that was `git init`ed with
-    placeholder files should not need --force to fill in. Anything unparseable is treated as real,
-    because refusing to clobber something we cannot read is the safe direction."""
-    if not path.is_file():
-        return False
-    try:
-        return bool(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        return True
-
-
-def _read_titles(source: Path) -> list[str]:
-    """A JSON array of title strings from ``source``, or a diagnostic naming what was wrong.
-
-    Shared by ``--from`` and ``--curated`` so the two read the same shape and fail the same way.
-    """
-    try:
-        titles = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary=f"could not read titles from {source}",
-            detail=f"{exc}\n\nExpected a JSON array of title strings, such as the "
-                   f"titles.json produced by the dirty-stripper jq filter.",
-        )) from exc
-    if not isinstance(titles, list) or not all(isinstance(t, str) for t in titles):
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary=f"{source} is not a JSON array of strings",
-            detail="This command reads a flat list of raw title strings and clusters them.",
-        ))
-    return titles
-
-
-def _cmd_pack_suggest(args) -> int:
-    """Draft vocabulary.json, aliases.json and SUGGESTIONS.md from a bag of raw titles."""
-    titles = _read_titles(Path(args.source).expanduser())
-    curated = _read_titles(Path(args.curated).expanduser()) if args.curated else []
-    suggestion = suggest(titles, cutoff=args.cutoff, curated=curated)
-    out_dir = Path(args.out).expanduser()
-    _write_suggestion(suggestion, out_dir, force=args.force)
-    if (out_dir / "pack.json").is_file():
-        print("\nReview SUGGESTIONS.md, trim by hand, then `slkit pack lint`.")
-    else:
-        print(f"\nReview SUGGESTIONS.md and trim by hand. This is not a complete pack yet: run\n"
-              f"  slkit pack init --pack {out_dir}\nto add pack.json and the policy files, "
-              f"then `slkit pack lint`.")
-    return EXIT_OK
-
-
-def _write_suggestion(suggestion, out_dir: Path, *, force: bool) -> None:
-    """Write vocabulary.json, aliases.json and SUGGESTIONS.md into ``out_dir``.
-
-    Shared by ``pack suggest-vocab`` and ``bootstrap`` so the refuse-to-clobber rule and the
-    summary line are defined once. A non-empty vocabulary/aliases already present is refused
-    unless ``force``; SUGGESTIONS.md is always safe to rewrite (it is only ever read by a human).
-    """
-    vocab_path = out_dir / "vocabulary.json"
-    aliases_path = out_dir / "aliases.json"
-    sugg_path = out_dir / "SUGGESTIONS.md"
-
-    if not force:
-        clashing = [p for p in (vocab_path, aliases_path) if _nonempty_pack_file(p)]
-        if clashing:
-            names = ", ".join(str(p) for p in clashing)
-            raise DiagnosticError(Diagnostic(
-                severity=ERROR,
-                summary="refusing to overwrite existing pack files",
-                detail=f"Already present and non-empty:\n    {names}\n\n"
-                       f"Pass --force to overwrite, or point the output at an empty directory. "
-                       f"(SUGGESTIONS.md is always rewritten.)",
-            ))
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    vocab_path.write_text(
-        json.dumps(suggestion.vocabulary(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    aliases_path.write_text(
-        json.dumps(suggestion.aliases(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    sugg_path.write_text(render_markdown(suggestion), encoding="utf-8")
-
-    folded = sum(c.size for c in suggestion.songs) - len(suggestion.songs)
-    print(f"{suggestion.raw_count} raw titles -> {len(suggestion.songs)} song candidates "
-          f"({folded} variants folded in), {len(suggestion.non_songs)} probable non-songs")
-    # Reported separately because the two numbers answer different questions: how many names a
-    # setlist source got to SPELL, and how many songs would not be in the draft at all without it.
-    if suggestion.curated:
-        print(f"  {len(suggestion.curated)} named by a setlist source "
-              f"({len(suggestion.backfilled)} of them on no tape at all)")
-    for path in (vocab_path, aliases_path, sugg_path):
-        print(f"  wrote {path}")
-
-
 _BOOTSTRAP_STEPS = 7
 
 
@@ -859,56 +698,6 @@ def _step(number: int, title: str) -> None:
     The banners divide a run into marked phases. Without them the output is one wall of text.
     """
     print(f"\n=== step {number}/{_BOOTSTRAP_STEPS}: {title} ===", flush=True)
-
-
-def _bootstrap_titles(config) -> list[str]:
-    """Return each distinct track title the mirror source holds in the cache.
-
-    This function reads the cache that ``ingest`` reads. It sends the titles through the same
-    parser. Bootstrap thus needs no external tool between the pull and the draft.
-
-    Return an empty list when the config declares no mirror source. Tape titles are one input to
-    the draft, and a deployment with no tapes has none of them. The caller reports the absence.
-    """
-    importer = mirror(config)
-    if importer is None:
-        return []
-    client = importer.make_client(config, RawCache(config.data_root))
-    cached = client.cached_items(importer.identity(config),
-                                 min_year=min_year(config, importer.id, None))
-    return titles_from_cache(cached.items)
-
-
-def _curated_titles(config) -> list[str]:
-    """Return each distinct song name that the configured setlist sources report as played.
-
-    The draft once read the mirror alone. The dictionary that judges every later stage thus came
-    from taper prose, while the source that publishes real song titles sat pulled and unread.
-    This function corrects that. See :func:`suggest` for what the names change.
-
-    Read each source through its own ``candidates`` function, not off the raw blobs. The parsers
-    already flag ``non_song`` entries. setlist.fm's ``tape`` marker names a song played over the
-    PA, and the flag keeps it out. No rule here must know what a tape marker is.
-
-    The loop covers the configured sources only. A registered source that this operator does not
-    have contributes nothing and reports nothing.
-
-    The normalizer is empty on purpose. No pack exists yet at draft time, because the pack is
-    what this drafts. Names thus arrive as each source spells them, and the clustering does the
-    rest.
-    """
-    cache = RawCache(config.data_root)
-    empty = Normalizer(vocabulary=[])
-    names: set[str] = set()
-    have = {importer.id for importer in configured(config)}
-    for importer in (imp for imp in secondary() if imp.id in have):
-        for record in importer.candidates(config, cache, normalizer=empty,
-                                          min_year=min_year(config, importer.id, None)) or ():
-            for entries in list(record.get("sets") or ()) + [record.get("encore") or ()]:
-                for entry in entries:
-                    if not entry.get("non_song") and entry.get("song"):
-                        names.add(str(entry["song"]).strip())
-    return sorted(names, key=str.casefold)
 
 
 def _cmd_bootstrap(config, args) -> int:
@@ -951,11 +740,10 @@ def _cmd_bootstrap(config, args) -> int:
     # Two inputs, and a deployment can have either one alone. Tape titles come from the mirror
     # source. Published song names come from the setlist sources. A band that nobody taped has
     # only the names, and those are the better input: a person typed them on purpose.
-    titles = _bootstrap_titles(config)
-    curated = _curated_titles(config)
-    print(f"  {len(titles)} cached tape title(s); {len(curated)} published song name(s)")
-    if not mirror(config):
-        print("  no mirror source is configured, so this draft reads no tape titles")
+    titles = mirror_titles(config)
+    by_source = curated_names(config)
+    curated = flatten(by_source)
+    report_inputs(titles, by_source, config)
     if not titles and not curated:
         raise DiagnosticError(Diagnostic(
             severity=ERROR,
@@ -965,14 +753,14 @@ def _cmd_bootstrap(config, args) -> int:
                    "run `slkit pull` (or re-run bootstrap without --skip-pull) and retry.\n\n"
                    f"Sources configured now: {', '.join(imp.id for imp in sources) or '(none)'}",
         ))
-    _write_suggestion(suggest(titles, cutoff=args.cutoff, curated=curated),
-                      pack_dir, force=args.force)
+    write_suggestion(suggest(titles, cutoff=args.cutoff, curated=curated),
+                     pack_dir, force=args.force)
 
     _step(4, "pack init — scaffold the remaining pack files, clobbering none")
-    _cmd_pack_init(argparse.Namespace(pack=str(pack_dir), force=False, config=args.config))
+    pack_init(argparse.Namespace(pack=str(pack_dir), force=False, config=args.config))
 
     _step(5, "pack lint — validate the drafted pack")
-    if _cmd_pack_lint(argparse.Namespace(
+    if pack_lint(argparse.Namespace(
             pack=str(pack_dir), format="human", no_corpus=False, config=args.config)) != EXIT_OK:
         print("  (lint reported findings — expected for a fresh draft; they are a worklist, "
               "not a failure)")
@@ -1015,7 +803,7 @@ _COMMANDS = {
 def _run(args) -> int:
     """Dispatch a parsed command. Assumes a command argparse already accepted."""
     if args.command == "pack":
-        return _cmd_pack(args)               # resolves config lazily, only if --pack is absent
+        return pack_cmd(args)               # resolves config lazily, only if --pack is absent
     return _COMMANDS[args.command](load_config(args.config), args)
 
 
