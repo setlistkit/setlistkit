@@ -984,13 +984,38 @@ _COMMANDS = {
 }
 
 
+def _for_completion(parser: argparse.ArgumentParser, shtab) -> None:
+    """Prepare a throwaway parser for shtab, so ``--help`` keeps what it prints.
+
+    Two edits. Each command takes the one line its parent lists it under, because a completion
+    menu gives one row per command, and shtab reads ``description`` and never ``help``: a
+    paragraph arrives there unwrapped and cut mid-word.
+
+    An argument that takes a path also says so. Without that, the shell offers a command name
+    where a filename belongs. The metavar carries the answer this project already writes.
+    """
+    for action in parser._actions:  # pylint: disable=protected-access
+        if isinstance(action, argparse._SubParsersAction):  # pylint: disable=protected-access
+            # pylint: disable-next=protected-access
+            summaries = {pseudo.dest: pseudo.help for pseudo in action._choices_actions}
+            for name, child in action.choices.items():
+                child.description = summaries.get(name) or child.description
+                _for_completion(child, shtab)
+        elif action.metavar == "PATH":
+            action.complete = shtab.FILE
+        elif action.metavar == "DIR":
+            action.complete = shtab.DIRECTORY
+
+
 def _cmd_compgen(args) -> int:
     """Write a completion script for the parser this program builds."""
     # Imported here so the other commands do not pay for it.
     import shtab  # pylint: disable=import-outside-toplevel
 
+    parser = _build_parser()
+    _for_completion(parser, shtab)
     try:
-        script = shtab.complete(_build_parser(), shell=args.shell)
+        script = shtab.complete(parser, shell=args.shell)
     except NotImplementedError as err:
         raise DiagnosticError(Diagnostic(
             severity=ERROR,
