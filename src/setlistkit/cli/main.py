@@ -13,6 +13,7 @@ no config resolves it later, and ``_run`` names those.
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import shutil
 import sys
@@ -26,14 +27,15 @@ from ..importers import IMPORTERS, configured
 from ..picks.ledger import LEDGER_TABLES
 from ..sources.client import SourceError
 from ..store import Store
-from ..store.raw_cache import RawCache
-from .common import min_year, resolve_pack_dir
+
+from .common import resolve_pack_dir
 from .derive import derive
 from .export import export
 from .ingest import ingest
 from ..picks.drops import DEFAULT_DEPTH
 from .pack import pack_cmd, pack_init, pack_lint, write_suggestion
 from .predict import drops_cmd, predict, replay
+from .pull import pull_cmd, source_list
 from .sources import curated_names, flatten, mirror_titles, report_inputs
 
 EXIT_OK = 0
@@ -216,27 +218,27 @@ def _add_store(sub) -> None:
 
 def _add_pull(sub) -> None:
     """The ``slkit pull`` parser."""
-    pull_cmd = sub.add_parser(
+    parser = sub.add_parser(
         "pull", help="fetch raw source data into the cache",
         description="Fetch raw data from one source into the on-disk cache under data_root. "
                     "Nothing is parsed and nothing reaches the corpus here; run `slkit build` "
                     "next. Each request is rate-limited, and carries the user_agent the config "
                     "names. A cached item is re-asked conditionally, so an unchanged item moves "
                     "no bytes.")
-    pull_cmd.add_argument(
-        "--source", metavar="a,b", type=_source_list,
+    parser.add_argument(
+        "--source", metavar="a,b", type=source_list,
         help="comma-separated sources to fetch (default: every source the config declares)")
-    pull_cmd.add_argument(
+    parser.add_argument(
         "--force-rescan", action="store_true",
         help="re-ask for data already cached (still rate-limited, and conditional: an "
              "unchanged item answers 304 and no bytes move)",
     )
-    pull_cmd.add_argument(
+    parser.add_argument(
         "--min-year", type=int, metavar="YEAR",
         help="ignore shows played before YEAR (overrides min_year in config)",
     )
-    _add_dry_run(pull_cmd, "list the collection and report what a real run would fetch, "
-                           "without fetching any of it")
+    _add_dry_run(parser, "list the collection and report what a real run would fetch, "
+                         "without fetching any of it")
 
 
 def _add_build(sub) -> None:
@@ -613,21 +615,48 @@ def _cmd_config_show(config) -> int:
     return EXIT_OK
 
 
+def _unknown_sources(config) -> list[str]:
+    """Report every ``[sources.*]`` table that matches no importer, and return their names.
+
+    A table name IS the opt-in, so a name nothing matches opts nothing in. Nothing else can see
+    this: the table is not a source that failed, it is a source that never existed, so no
+    importer is ever asked about it and every command exits 0.
+
+    Measured on one real config: ``[sources.setlistfm]`` against an importer id of
+    ``setlist_fm``. That deployment ran for months on one source and read as if it had two.
+    """
+    # Read live rather than from _SOURCES, which argparse froze at import. A source registered
+    # after that is still a source, and naming it unknown here would be this bug's own shape.
+    known = tuple(IMPORTERS)
+    unknown = [name for name in config.section("sources") if name not in IMPORTERS]
+    for name in unknown:
+        near = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
+        suggestion = f" Did you mean [sources.{near[0]}]?" if near else ""
+        print(f"\n[sources.{name}] matches no source this build knows, so nothing reads it."
+              f"{suggestion}", file=sys.stderr)
+        print(f"  Known sources: {', '.join(known)}", file=sys.stderr)
+    return unknown
+
+
 def _cmd_config_check(config) -> int:
     """Check the config, then ask each configured source whether it can identify its band.
 
-    A source needs one setting to name what it fetches: a collection, a MusicBrainz id. Each
-    importer resolves that itself and raises its own diagnostic when the setting is absent. This
-    command calls each one and reports every failure it collects.
+    Two silences end here, and they look identical afterwards.
 
-    The check earns its place because the failure it catches is silent. A configured source that
-    cannot name its band contributes nothing to a merge, and the run still exits 0. Measured on
-    one real config: a placeholder MusicBrainz id cost 265 songs and 346 shows, and no command
-    said a word. Ask the question here, where the answer is cheap and the message is exact.
+    A table nothing matches opts nothing in, so the source it names never runs. A table that DOES
+    match can still fail to name its band, because a source needs one setting to say what it
+    fetches: a collection, a MusicBrainz id. Each importer resolves that itself and raises its own
+    diagnostic when the setting is absent.
 
-    Every configured source is asked, and one failure does not hide the next.
+    Both failures leave a full run, a clean exit and a smaller corpus. Measured on two real
+    configs: a placeholder MusicBrainz id cost 265 songs and 346 shows, and a misspelled table
+    name cost a whole source for months. Ask here, where the answer is cheap and the message
+    names the exact line to change.
+
+    Every source is asked, and one failure does not hide the next.
     """
     require_network_identity(config)
+    unknown = _unknown_sources(config)
     broken = []
     for importer in configured(config):
         try:
@@ -637,10 +666,11 @@ def _cmd_config_check(config) -> int:
     for importer, err in broken:
         print(f"\n{importer.display_name} is configured but cannot name its band:", file=sys.stderr)
         print(render(err.diagnostic), file=sys.stderr)
-    if broken:
-        names = ", ".join(importer.id for importer, _ in broken)
-        print(f"\n{config.source_path}: {names} cannot run. Each one would contribute nothing\n"
-              "to a merge, and every command would still exit 0.", file=sys.stderr)
+    if broken or unknown:
+        if broken:
+            names = ", ".join(importer.id for importer, _ in broken)
+            print(f"\n{config.source_path}: {names} cannot run. Each one would contribute nothing\n"
+                  "to a merge, and every command would still exit 0.", file=sys.stderr)
         return EXIT_DIAGNOSTIC
     checked = ", ".join(importer.id for importer in configured(config)) or "(no sources)"
     print(f"ok: {config.source_path} is valid and identifies itself to the network")
@@ -759,116 +789,6 @@ def _cmd_export(config, args) -> int:
         raise _malformed_date(exc, "write") from exc
 
 
-def _source_list(value: str):
-    """Parse ``--source=a,b`` into importer ids, refusing a name the registry does not hold."""
-    names = [name.strip() for name in value.split(",") if name.strip()]
-    unknown = [name for name in names if name not in IMPORTERS]
-    if unknown:
-        raise argparse.ArgumentTypeError(
-            f"unknown source(s): {', '.join(unknown)}. Known: {', '.join(_SOURCES)}")
-    return names
-
-
-def _cmd_pull(config, args) -> int:
-    """Fetch each named source into the raw cache. Writes nothing to the database.
-
-    A source named but not configured is skipped and said aloud, because a silent skip and a
-    source that returned nothing look the same afterwards.
-    """
-    require_network_identity(config)
-    # A source named by hand is run whatever the config holds, so the importer's own diagnostic
-    # gets to name the exact setting that is missing. Only the default list is filtered, because
-    # there "every source" can only mean the ones this deployment opted into.
-    if args.source is None:
-        running = configured(config)
-    else:
-        running = [IMPORTERS[name] for name in args.source]
-    if not running:
-        raise DiagnosticError(Diagnostic(
-            severity=ERROR,
-            summary="no configured source to pull",
-            detail="A [sources.<id>] table in the config is what opts a source in. Add one,\n"
-                   "or name a source you have configured.",
-        ))
-    for importer in running:
-        if len(running) > 1:
-            print(f"\n-- {importer.display_name} --", flush=True)
-        _pull_one(config, args, importer)
-    return EXIT_OK
-
-
-def _pull_one(config, args, importer) -> int:
-    """Fetch one source. Every setting is read under that source's own id, never a fixed name."""
-    cache = RawCache(config.data_root)
-
-    # flush=True on both, because a pull of a whole collection runs for hours and Python buffers
-    # stdout whenever it is not a terminal. Redirected to a file or a log, an unflushed progress
-    # line arrives after the job it was reporting on has finished, which is not progress.
-    def progress(done: int, total: int) -> None:
-        if done % _PROGRESS_EVERY == 0 or done == total:
-            print(f"  {done}/{total}", flush=True)
-
-    def announce(batch_id: str) -> None:
-        # Printed so this run is greppable in OUR logs by the same id the source sees in theirs.
-        # A batch id only one side of the conversation knows is half a tracking id.
-        print(f"batch {batch_id} (sent in the User-Agent of every request this run)", flush=True)
-
-    # One path for every source: the importer names its client and what the pull is keyed on (an
-    # archive collection, a MusicBrainz id). Both clients' pull() take the same keyword shape.
-    result = importer.make_client(config, cache).pull(
-        importer.identity(config), min_year=min_year(config, importer.id, args.min_year),
-        force_rescan=args.force_rescan, dry_run=args.dry_run,
-        progress=progress, announce=announce)
-    if args.dry_run:
-        # `planned` counts records; the wall clock is set by REQUESTS. They match for archive.org
-        # (one request per item, planned_requests left None) and diverge for a paged source like
-        # setlist.fm, which reports the smaller request count the estimate must be built from.
-        requests = result.planned if result.planned_requests is None else result.planned_requests
-        minutes = requests * _SECONDS_PER_REQUEST / 60
-        across = "" if result.planned_requests is None else f" across {requests} requests"
-        print(f"pull {importer.display_name} (dry run): {result.listed} listed, "
-              f"{result.cached} already cached, {result.planned} would be fetched"
-              f"{across} (about {minutes:.0f} min)")
-        # What the dry run itself just spent. Sources that report it get an exact number; the rest
-        # keep the older prose. This used to be inferred from `planned_requests`, which meant every
-        # paged source was described as having fetched "the first page" -- false for a source that
-        # sizes the job from config and makes no request at all.
-        if result.probe_requests is not None:
-            spent = result.probe_requests
-            print(f"  This estimate cost {spent} request(s)." if spent else
-                  "  This estimate cost no requests at all: the job's size is known without asking.")
-        elif result.planned_requests is None:
-            print("  No item metadata was requested. The listing itself was, because that is how\n"
-                  "  this learns what is new; it is a few requests against thousands.")
-        else:
-            # A paged source has no separate cheap listing: the first page IS data, and fetching it
-            # is how the run learns the total. So the honest disclosure names that one request.
-            print("  Only the first page was requested, because that is how this learns the total.\n"
-                  "  It is one request against thousands of setlists; the rest is what a real pull costs.")
-    else:
-        print(f"pull {importer.display_name}: {result.listed} listed, {result.fetched} fetched, "
-              f"{result.cached} already cached")
-    if result.missing:
-        print(f"  {len(result.missing)} listed item(s) the metadata API does not have; "
-              f"they are retried on the next pull:")
-        for identifier in result.missing:
-            print(f"    {identifier}")
-    if result.failed:
-        print(f"  {len(result.failed)} item(s) the source could not serve, even after retries. "
-              "Nothing was cached\n  for them, so the next pull tries them again:")
-        for identifier in result.failed:
-            print(f"    {identifier}")
-    if result.unidentified:
-        # Counted rather than swallowed. An item in none of the counters is an item nobody
-        # misses, and "listed" not adding up is the only signal anything went past unfetched.
-        print(f"  {result.unidentified} listed item(s) carried no identifier and could not be "
-              "fetched")
-    if result.truncated:
-        print("  warning: hit the paging backstop, so this listing is a PREFIX of the "
-              "collection.\n  Ingest will look complete and will not be. Raise _MAX_PAGES.")
-    return EXIT_OK
-
-
 _BOOTSTRAP_STEPS = 7
 
 
@@ -905,7 +825,7 @@ def _cmd_bootstrap(config, args) -> int:
         _step(2, "pull — SKIPPED (--skip-pull); drafting from the existing cache")
     else:
         _step(2, "pull — fetch raw data into the cache, one configured source at a time")
-        _cmd_pull(config, argparse.Namespace(
+        pull_cmd(config, argparse.Namespace(
             source=[importer.id for importer in sources], min_year=None,
             force_rescan=args.force_rescan, dry_run=args.dry_run))
 
@@ -983,7 +903,7 @@ _COMMANDS = {
     "check": lambda config, args: _cmd_config_check(config),
     "show": _cmd_show,
     "store": _cmd_store,
-    "pull": _cmd_pull,
+    "pull": pull_cmd,
     "build": _cmd_build,
     "predict": _cmd_predict,
     "replay": _cmd_replay,

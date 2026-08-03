@@ -115,6 +115,40 @@ def test_config_check_passes_and_names_the_sources_it_asked(tmp_path, loud_fm, c
     assert "loud_fm" in capsys.readouterr().out
 
 
+def test_check_fails_on_a_source_table_that_matches_no_importer(tmp_path, loud_fm, capsys):
+    """A misspelled table opts nothing in, and nothing else in the program can see it.
+
+    Measured on the real moe. config: `[sources.setlistfm]` against an importer id of
+    `setlist_fm`. No importer was ever asked about it, so every command exited 0 on one source.
+    """
+    cfg = _cfg(tmp_path, tmp_path / "pack", sources="[sources.loudfm]\nkey = 1\n")
+
+    assert main(["--config", cfg, "check"]) != EXIT_OK
+    err = capsys.readouterr().err
+    assert "[sources.loudfm] matches no source" in err
+    # A typo is the likely cause, so the refusal names the table it probably meant.
+    assert "Did you mean [sources.loud_fm]?" in err
+
+
+def test_check_lists_the_known_sources_when_it_cannot_guess(tmp_path, loud_fm, capsys):
+    """A table close to nothing still gets the list, so the fix needs no second command."""
+    cfg = _cfg(tmp_path, tmp_path / "pack",
+               sources="[sources.loud_fm]\nkey = 1\n[sources.wxyz]\nkey = 1\n")
+
+    assert main(["--config", cfg, "check"]) != EXIT_OK
+    err = capsys.readouterr().err
+    assert "Did you mean" not in err
+    assert "loud_fm" in err
+
+
+def test_check_passes_when_every_source_table_is_known(tmp_path, loud_fm, capsys):
+    """The new check stays quiet on a config that names only real sources."""
+    cfg = _cfg(tmp_path, tmp_path / "pack", sources="[sources.loud_fm]\nkey = 1\n")
+
+    assert main(["--config", cfg, "check"]) == EXIT_OK
+    assert "matches no source" not in capsys.readouterr().err
+
+
 def test_bootstrap_names_a_configured_source_that_gave_nothing(
         tmp_path, mute_fm, loud_fm, capsys):
     """The draft step reports each source's contribution, so a zero cannot pass unseen.
