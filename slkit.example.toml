@@ -58,6 +58,18 @@ mbid = "..."
 # is a hard failure. Never inline the key here, and never put it in an env var.
 api_key_file = "~/.config/setlistkit/setlist_fm.api_key"
 
+# Announced shows, read by `scripts/tour_dates.py` and by nothing else. Only a scorecard's
+# forecast strip needs this: a night that has not happened is the one fact the corpus cannot
+# supply. Leave the table out and the board reports on scored nights alone, which is a correct
+# page.
+[tour]
+# Which upstream holds the listing. Each one keys on its own id, which is what artist_id carries.
+provider = "seated"
+# The artist's id at that provider. For seated, the data-artist-id on the band's own tour page.
+artist_id = "..."
+# Where the reviewed listing lives. Relative paths anchor at THIS file's directory.
+file = "tour.json"
+
 [model]
 # Prediction knobs. Every value here is a CONSTRUCTION choice — how a night is drawn and how much
 # of the result gets recorded. The scoring constants (recency halflife, cooldown, era weight) are
