@@ -15,10 +15,14 @@ and both absences have to survive into the result rather than being filled in wi
 plausible.
 """
 
+import json
+from pathlib import Path
+
 from setlistkit.model.scores import ScoreConfig
 from setlistkit.model.setlists import PredictConfig
 from setlistkit.picks.replay import ReplaySpec
-from setlistkit.picks.upcoming import (TourDate, after, forecast, parse_tour)
+from setlistkit.picks.upcoming import (TourDate, after, forecast, parse_json_tour,
+                                       parse_tour, read_schedule, schedule_path)
 
 LOOSE = ScoreConfig(min_show_songs=1, cooldown=())
 QUICK = PredictConfig(rollouts=25, top_n=10, set_len=7)
@@ -145,3 +149,71 @@ def test_no_cutoff_is_ever_dated_on_or_after_the_night_it_predicts():
 
 def test_a_corpus_with_nothing_gradeable_forecasts_nothing_rather_than_guessing():
     assert forecast([], SPEC, parse_tour(LISTING).by_artist("Phish")) == ()
+
+
+# The JSON form, written by scripts/tour_dates.py. The failure this guards is the opposite of the
+# four-line file's: nothing here can slide out of step, so what matters is that an entry missing a
+# field is REPORTED rather than filled in with a plausible blank.
+
+JSON_LISTING = json.dumps({
+    "dates": [
+        {"artist": "moe.", "date": "2026-09-04", "venue": "Ravinia", "city": "Highland Park, IL",
+         "id": "a", "review": "listing runs through 2026-09-06"},
+        {"artist": "moe.", "date": "2026-09-05", "venue": "The Wilbur", "city": "Boston, MA",
+         "id": "b"},
+    ],
+    "seen": ["a", "b"],
+})
+
+
+def test_the_json_form_reads_the_four_fields_and_ignores_the_rest():
+    """`id` and `review` belong to the review loop, not to a prediction."""
+    schedule = parse_json_tour(JSON_LISTING)
+    assert schedule.problems == ()
+    assert schedule.dates == (
+        TourDate("2026-09-04", "moe.", "Ravinia", "Highland Park, IL"),
+        TourDate("2026-09-05", "moe.", "The Wilbur", "Boston, MA"),
+    )
+
+
+def test_an_entry_missing_a_field_is_reported_and_the_rest_still_read():
+    """Keep and flag: one bad entry must not take the whole schedule down with it."""
+    schedule = parse_json_tour(json.dumps({"dates": [
+        {"artist": "moe.", "date": "2026-09-04", "venue": "", "city": "Boston, MA"},
+        {"artist": "moe.", "date": "2026-09-05", "venue": "The Wilbur", "city": "Boston, MA"},
+    ]}))
+    assert [row.date for row in schedule.dates] == ["2026-09-05"]
+    assert "venue" in schedule.problems[0]
+
+
+def test_a_date_that_is_not_iso_is_refused_rather_than_sorted_as_text():
+    """`after` compares dates as strings, so a non-ISO date would cut against the wrong boundary."""
+    schedule = parse_json_tour(json.dumps({"dates": [
+        {"artist": "moe.", "date": "09/04/2026", "venue": "v", "city": "c"},
+    ]}))
+    assert schedule.dates == ()
+    assert "ISO" in schedule.problems[0]
+
+
+def test_a_file_with_no_dates_list_says_so_instead_of_reading_as_empty():
+    """An empty schedule and an unreadable one look identical downstream. They are not."""
+    assert parse_json_tour(json.dumps({"seen": []})).problems == ("no 'dates' list in this file",)
+
+
+def test_the_schedule_lives_at_a_reserved_name_in_the_pack():
+    """Not configurable: the writer and every reader derive one path from the pack."""
+    assert schedule_path("/packs/moe") == Path("/packs/moe/tour.json")
+
+
+def test_read_schedule_picks_its_parser_by_suffix(tmp_path):
+    """Both formats stay readable: one band's schedule is still gathered by hand."""
+    as_json = tmp_path / "tour.json"
+    as_json.write_text(JSON_LISTING, encoding="utf-8")
+    dates, problems = read_schedule(str(as_json), "moe.", "2026-09-04")
+    assert problems == ()
+    assert [row.date for row in dates] == ["2026-09-05"]
+
+    pasted = tmp_path / "phish-next-tour.txt"
+    pasted.write_text(LISTING, encoding="utf-8")
+    dates, _ = read_schedule(str(pasted), "Phish", "1990-01-01")
+    assert dates, "a pasted phish.net listing must still read"

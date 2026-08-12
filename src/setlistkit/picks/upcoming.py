@@ -40,9 +40,11 @@ a different shape.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..model.backtest import gradeable
 from .drops import DEFAULT_DEPTH, NightDrops, predict_drop
@@ -56,6 +58,11 @@ _RECORD_LINES = 4
 # "Saturday, 07/25/2026". The weekday is carried in the source and deliberately not trusted: it is
 # redundant with the date, and a copy-paste that disagrees with itself should not get a vote.
 _DATED = re.compile(r"^[A-Za-z]+,\s*(\d{2})/(\d{2})/(\d{4})$")
+
+# The JSON form: what a TourDate needs, and the reserved name the file carries inside a pack.
+_JSON_FIELDS = ("artist", "date", "venue", "city")
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SCHEDULE_NAME = "tour.json"
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,41 @@ def parse_tour(text: str) -> TourSchedule:
     return TourSchedule(dates=tuple(dates), problems=tuple(problems))
 
 
+def parse_json_tour(text: str) -> TourSchedule:
+    """Read the file ``scripts/tour_dates.py`` writes: ``{"dates": [{artist, date, venue, city}]}``.
+
+    An entry missing any of the four is reported rather than filled in. The extra keys that file
+    carries -- the provider's id, and the note a reviewer reads -- are ignored here.
+    """
+    payload = json.loads(text)
+    rows = payload.get("dates") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return TourSchedule(dates=(), problems=("no 'dates' list in this file",))
+    dates: list[TourDate] = []
+    problems: list[str] = []
+    for index, row in enumerate(rows):
+        fields = {key: str(row.get(key) or "").strip() for key in _JSON_FIELDS} \
+            if isinstance(row, Mapping) else {}
+        missing = [key for key in _JSON_FIELDS if not fields.get(key)]
+        if missing:
+            problems.append(f"entry {index} is missing {', '.join(missing)}")
+            continue
+        if not _ISO_DATE.match(fields["date"]):
+            problems.append(f"entry {index} has no ISO date: {fields['date']!r}")
+            continue
+        dates.append(TourDate(**fields))
+    return TourSchedule(dates=tuple(dates), problems=tuple(problems))
+
+
+def schedule_path(pack_dir) -> Path:
+    """Where the announced-shows file lives. A reserved name in the pack, not a setting.
+
+    The file is reviewed band data and belongs beside the vocabulary, so the writer and every
+    reader derive one path from the pack rather than agreeing on a configured one.
+    """
+    return Path(pack_dir) / SCHEDULE_NAME
+
+
 def after(dates: Sequence[TourDate], last_show: str) -> tuple[TourDate, ...]:
     """Only the shows still ahead of the corpus, oldest first.
 
@@ -164,9 +206,15 @@ def read_schedule(path: str, artist: str, last_show: str) -> tuple[tuple[TourDat
 
     The three filters in the order that makes each one cheap to explain: read the file, keep the
     act, drop what already happened.
+
+    Two formats, told apart by suffix. ``.json`` is what ``scripts/tour_dates.py`` writes; anything
+    else is a pasted phish.net listing, which stays readable because that is how one band's
+    schedule is still gathered.
     """
     with open(path, encoding="utf-8") as handle:
-        schedule = parse_tour(handle.read())
+        text = handle.read()
+    read = parse_json_tour if str(path).endswith(".json") else parse_tour
+    schedule = read(text)
     return after(schedule.by_artist(artist), last_show), schedule.problems
 
 

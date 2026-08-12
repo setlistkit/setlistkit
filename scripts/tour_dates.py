@@ -26,8 +26,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # pylint: disable=wrong-import-position
+from setlistkit.cli.common import resolve_pack_dir                    # noqa: E402
 from setlistkit.config import load_config, require_network_identity   # noqa: E402
 from setlistkit.diagnostics import DiagnosticError                    # noqa: E402
+from setlistkit.picks.upcoming import schedule_path                   # noqa: E402
 from setlistkit.sources.client import TransportError, urllib_transport  # noqa: E402
 
 SEATED_API = "https://cdn.seated.com/api/tour"
@@ -96,13 +98,6 @@ def _load_file(path: Path) -> dict:
     return data
 
 
-def _resolve_target(config, section: dict) -> Path:
-    """Where the file lives. A relative path is anchored at the config, never the cwd."""
-    name = str(section.get("file") or "tour.json")
-    path = Path(name).expanduser()
-    return path if path.is_absolute() else (config.source_path.parent / path).resolve()
-
-
 def _settings(config) -> tuple[str, str]:
     """The provider and artist id from ``[tour]``, or an error naming which one is missing."""
     section = config.section("tour")
@@ -140,7 +135,7 @@ def main(argv=None) -> int:
         print(f"{provider}: {err}", file=sys.stderr)
         return 1
 
-    target = _resolve_target(config, config.section("tour"))
+    target = schedule_path(resolve_pack_dir(None, args.config))
     data = _load_file(target)
     seen = set(data["seen"])
     fresh = [row for row in offered if row["id"] not in seen]

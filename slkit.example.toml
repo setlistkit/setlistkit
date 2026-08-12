@@ -67,8 +67,8 @@ api_key_file = "~/.config/setlistkit/setlist_fm.api_key"
 provider = "seated"
 # The artist's id at that provider. For seated, the data-artist-id on the band's own tour page.
 artist_id = "..."
-# Where the reviewed listing lives. Relative paths anchor at THIS file's directory.
-file = "tour.json"
+# The listing itself is not configurable: it is tour.json in the pack, beside the vocabulary it
+# belongs to, written by scripts/tour_dates.py and reviewed by hand.
 
 [model]
 # Prediction knobs. Every value here is a CONSTRUCTION choice — how a night is drawn and how much
