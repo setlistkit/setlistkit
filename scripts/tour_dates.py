@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # pylint: disable=wrong-import-position
 from setlistkit.cli.common import resolve_pack_dir                    # noqa: E402
 from setlistkit.config import load_config, require_network_identity   # noqa: E402
-from setlistkit.diagnostics import DiagnosticError                    # noqa: E402
+from setlistkit.diagnostics import ERROR, Diagnostic, DiagnosticError, render  # noqa: E402
 from setlistkit.picks.upcoming import schedule_path                   # noqa: E402
 from setlistkit.sources.client import TransportError, urllib_transport  # noqa: E402
 
@@ -88,28 +88,61 @@ PROVIDERS = {"seated": _seated}
 
 
 def _load_file(path: Path) -> dict:
-    """The existing file, or an empty one. A file that is not an object is an error, not a start."""
+    """The existing file, or an empty one.
+
+    This file is edited by hand, so a syntax error in it is the expected failure rather than the
+    exotic one. It gets a code frame at the offending character instead of a traceback.
+    """
     if not path.exists():
         return {"dates": [], "seen": []}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as err:
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=f"{path.name} is not valid JSON",
+            path=str(path), line=err.lineno, col=err.colno, source=text,
+            caret_caption=err.msg,
+            detail="A review edit left this file unparseable. Fix the character above.\n"
+                   "Deleting a whole { ... } block is safe; deleting the comma that\n"
+                   "followed it is what usually breaks the file.",
+        )) from err
     if not isinstance(data, dict) or not isinstance(data.get("dates"), list):
-        raise SystemExit(f"{path}: expected an object with a 'dates' list")
+        raise DiagnosticError(Diagnostic(
+            severity=ERROR,
+            summary=f"{path.name} has no 'dates' list",
+            path=str(path),
+            detail="Expected an object holding a 'dates' list and a 'seen' list.",
+        ))
     data.setdefault("seen", [])
     return data
 
 
+def _fault(config, summary: str, detail: str) -> DiagnosticError:
+    """A config complaint anchored at the config, rendered like every other one."""
+    return DiagnosticError(Diagnostic(severity=ERROR, summary=summary,
+                                      path=str(config.source_path), detail=detail))
+
+
 def _settings(config) -> tuple[str, str]:
     """The provider and artist id from ``[tour]``, or an error naming which one is missing."""
+    known = ", ".join(sorted(PROVIDERS))
+    example = "\n\n    [tour]\n    provider = \"seated\"\n    artist_id = \"...\""
     section = config.section("tour")
     if not section:
-        raise SystemExit("no [tour] table in this config; see slkit.example.toml")
+        raise _fault(config, "no [tour] table in this config",
+                     f"Announced shows are read from a [tour] table:{example}\n\n"
+                     f"Known providers: {known}. Without one, a scorecard reports on\n"
+                     "nights the corpus already holds and forecasts nothing.")
     artist_id = str(section.get("artist_id") or "").strip()
     if not artist_id:
-        raise SystemExit("[tour] has no artist_id, so there is nothing to ask for")
+        raise _fault(config, "[tour] has no artist_id, so there is nothing to ask for",
+                     f"Set the id this band carries at its provider:{example}")
     provider = str(section.get("provider") or "").strip()
     if provider not in PROVIDERS:
-        known = ", ".join(sorted(PROVIDERS))
-        raise SystemExit(f"[tour] provider {provider!r} is not one this build knows: {known}")
+        raise _fault(config, f"[tour] provider {provider!r} is not one this build knows",
+                     f"Known providers: {known}.")
     return provider, artist_id
 
 
@@ -124,19 +157,21 @@ def main(argv=None) -> int:
     try:
         config = load_config(args.config)
         require_network_identity(config)
+        provider, artist_id = _settings(config)
+        # Read the file before the fetch: a hand-edit that broke it is worth saying before
+        # spending somebody else's bandwidth on a run that cannot be written anyway.
+        target = schedule_path(resolve_pack_dir(None, args.config))
+        data = _load_file(target)
     except DiagnosticError as err:
-        print(err, file=sys.stderr)
+        print(render(err.diagnostic), file=sys.stderr)
         return 1
 
-    provider, artist_id = _settings(config)
     try:
         artist, offered = PROVIDERS[provider](artist_id, config.user_agent)
     except TransportError as err:
         print(f"{provider}: {err}", file=sys.stderr)
         return 1
 
-    target = schedule_path(resolve_pack_dir(None, args.config))
-    data = _load_file(target)
     seen = set(data["seen"])
     fresh = [row for row in offered if row["id"] not in seen]
     fresh.sort(key=lambda row: row["date"])
